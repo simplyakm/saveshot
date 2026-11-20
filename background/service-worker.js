@@ -218,6 +218,29 @@ async function uploadCapturedBlob({ pngBlob, tab, mode, interactiveAuth = false 
   };
 }
 
+async function resolveDriveFolderLink() {
+  const settings = await getSettings();
+  const folderName = settings.folderName || 'Chrome_SaveShot_ScreenShots';
+
+  return withAuthToken(
+    async (token, accountEmail) => {
+      const accountCache = getAccountFolderCache(settings, accountEmail);
+      if (accountCache.folderId && accountCache.folderWebViewLink) {
+        return accountCache.folderWebViewLink;
+      }
+
+      const folder = await ensureDriveFolder(token, folderName, accountCache.folderId);
+      await saveAccountFolderCache(accountEmail, {
+        folderName: folder.name,
+        folderId: folder.id,
+        folderWebViewLink: folder.webViewLink,
+      });
+      return folder.webViewLink;
+    },
+    { interactive: false }
+  );
+}
+
 async function captureVisibleTabFlow({ tab, tabId, showPageToast = false, interactiveAuth = false }) {
   const targetTab = tab || (await resolveTargetTab(tabId));
   const check = await checkTabCapturable(targetTab);
@@ -409,7 +432,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'SIGN_IN': {
           const { profile } = await signIn();
           lastErrorCode = '';
+          // Best-effort pre-warm destination folder link so "Open screenshots folder" works immediately
+          resolveDriveFolderLink().catch(() => {});
           sendResponse({ ok: true, profile });
+          return;
+        }
+
+        case 'OPEN_DRIVE_FOLDER': {
+          const url = await resolveDriveFolderLink();
+          sendResponse({ ok: true, url });
           return;
         }
 

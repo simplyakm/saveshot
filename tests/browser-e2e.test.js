@@ -248,19 +248,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       return r.result.value;
     };
 
-    // Verify Popup UI Boot & Unconfigured OAuth Setup Banner
+    // Verify Popup UI Boot & OAuth Setup Banner state
+    const prodManifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'));
+    const expectedNeedsSetup = prodManifest.oauth2.client_id.includes('YOUR_CHROME_OAUTH');
     const popupCheck = await evalIn(
       extPageSession,
       `(() => ({
         signedOutVisible: !document.getElementById('signed-out-view').hidden,
         setupBannerVisible: !document.getElementById('setup-banner').hidden,
         hasHelpBtn: Boolean(document.getElementById('help-btn')),
+        hasOpenDriveBtn: Boolean(document.getElementById('open-drive-btn')),
         hasBugFooterBtn: Boolean(document.getElementById('footer-bug-btn')),
       }))()`
     );
     assert.equal(popupCheck.signedOutVisible, true);
-    assert.equal(popupCheck.setupBannerVisible, true);
+    assert.equal(popupCheck.setupBannerVisible, expectedNeedsSetup);
     assert.equal(popupCheck.hasHelpBtn, true);
+    assert.equal(popupCheck.hasOpenDriveBtn, true);
     assert.equal(popupCheck.hasBugFooterBtn, true);
 
     // Verify Welcome / Help page opened automatically on extension install and renders feedback form

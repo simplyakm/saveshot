@@ -30,6 +30,16 @@
           <div class="header-actions" id="header-actions" hidden>
             <button
               class="icon-btn"
+              id="open-drive-btn"
+              title="Open screenshots folder in Google Drive"
+              aria-label="Open Google Drive folder"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </button>
+            <button
+              class="icon-btn"
               id="settings-toggle-btn"
               title="Folder and upload settings"
               aria-label="Settings"
@@ -58,7 +68,7 @@
       <!-- Loading State -->
       <section class="panel center-panel" id="loading-view">
         <div class="spinner"></div>
-        <p class="muted">Checking Chrome Google account...</p>
+        <p class="muted">Checking Google Drive connection...</p>
       </section>
 
       <!-- Signed Out / Setup State -->
@@ -107,12 +117,18 @@
             href="https://drive.google.com/drive/my-drive"
             target="_blank"
             rel="noopener noreferrer"
-            title="Open destination folder in Google Drive"
+            title="Open screenshots folder in Google Drive"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
-            <span id="folder-chip-name">Chrome_SaveShot_ScreenShots</span>
+            <span class="folder-prefix">Folder:</span>
+            <span id="folder-chip-name" class="folder-name">Chrome_SaveShot_ScreenShots</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-arrow">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
           </a>
         </div>
 

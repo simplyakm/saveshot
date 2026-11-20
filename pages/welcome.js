@@ -145,6 +145,24 @@ els.signInBtn.addEventListener('click', async () => {
   }
 });
 
+els.openDriveBtn.addEventListener('click', async (event) => {
+  const currentHref = els.openDriveBtn.href || '';
+  if (currentHref.includes('/drive/folders/')) return;
+  event.preventDefault();
+  const originalText = els.openDriveBtn.textContent;
+  els.openDriveBtn.textContent = 'Opening folder...';
+  try {
+    const res = await sendMessage({ type: 'OPEN_DRIVE_FOLDER' });
+    const url = (res.ok && res.url) || 'https://drive.google.com/drive/my-drive';
+    els.openDriveBtn.href = url;
+    chrome.tabs.create({ url });
+  } catch {
+    chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
+  } finally {
+    els.openDriveBtn.textContent = originalText;
+  }
+});
+
 els.editShortcutsBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });

@@ -1,6 +1,7 @@
 const els = {
   helpBtn: document.getElementById('help-btn'),
   headerActions: document.getElementById('header-actions'),
+  openDriveBtn: document.getElementById('open-drive-btn'),
   settingsToggleBtn: document.getElementById('settings-toggle-btn'),
   signOutBtn: document.getElementById('sign-out-btn'),
   loadingView: document.getElementById('loading-view'),
@@ -545,6 +546,36 @@ els.captureRegionBtn.addEventListener('click', async () => {
     updateCaptureAvailability();
     showStatus('error', err.message || 'Could not start region selection.');
   }
+});
+
+async function openDestinationDriveFolder() {
+  const cached = currentState.settings?.folderWebViewLink || '';
+  if (cached.includes('/drive/folders/')) {
+    chrome.tabs.create({ url: cached });
+    return;
+  }
+  try {
+    const res = await sendMessage({ type: 'OPEN_DRIVE_FOLDER' });
+    const url = (res.ok && res.url) || 'https://drive.google.com/drive/my-drive';
+    if (currentState.settings && url.includes('/drive/folders/')) {
+      currentState.settings.folderWebViewLink = url;
+      els.folderChip.href = url;
+    }
+    chrome.tabs.create({ url });
+  } catch {
+    chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
+  }
+}
+
+els.openDriveBtn.addEventListener('click', () => {
+  openDestinationDriveFolder();
+});
+
+els.folderChip.addEventListener('click', (event) => {
+  const currentHref = els.folderChip.href || '';
+  if (currentHref.includes('/drive/folders/')) return;
+  event.preventDefault();
+  openDestinationDriveFolder();
 });
 
 els.clearHistoryBtn.addEventListener('click', async () => {
