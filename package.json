@@ -1,6 +1,6 @@
 {
   "name": "saveshot",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive.",
   "private": true,
   "type": "module",
