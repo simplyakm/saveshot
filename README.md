@@ -26,7 +26,7 @@ Chrome's `chrome.identity` API ties Google sign-in to your extension ID. Set up 
    - Application type: **Chrome Extension**
    - Item ID: paste the extension ID from step 1.
 5. Copy the generated Client ID into `oauth2.client_id` inside `manifest.json` (and update `homepage_url` with your GitHub repo URL if needed).
-6. Reload SaveShot in `chrome://extensions` and click **Sign in with Google** in the popup.
+6. Reload SaveShot in `chrome://extensions` and click **Connect Google Drive** in the popup.
 
 ## Notes and limitations
 
