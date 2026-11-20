@@ -1,6 +1,6 @@
 # SaveShot
 
-SaveShot is a small Chrome extension (Manifest V3) for taking screenshots and saving them straight to your Google Drive. It signs in with the Google account you already use in Chrome, with no external dependencies or build step.
+SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive. It signs in with the Google account you already use in Chrome, with no external dependencies or build step.
 
 ## What it does
 
