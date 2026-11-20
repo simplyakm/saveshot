@@ -364,10 +364,12 @@
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setTimeout(() => {
-            chrome.runtime.sendMessage({
-              type: 'REGION_SELECTED',
-              selection: selectionPayload,
-            });
+            chrome.runtime
+              .sendMessage({
+                type: 'REGION_SELECTED',
+                selection: selectionPayload,
+              })
+              .catch(() => {});
           }, 35);
         });
       });
@@ -705,7 +707,7 @@
         saveBtn.addEventListener('click', () => {
           saveBtn.disabled = true;
           chrome.runtime.sendMessage({ type: 'GET_FALLBACK_PNG' }, (res) => {
-            if (res?.ok && res.dataUrl) {
+            if (!chrome.runtime.lastError && res?.ok && res.dataUrl) {
               const a = document.createElement('a');
               a.href = res.dataUrl;
               a.download = res.filename || fallbackFilename;
@@ -760,6 +762,28 @@
       const res = startRegionSelection();
       sendResponse(res);
       return;
+    }
+
+    if (message.type === 'HIDE_UI_FOR_CAPTURE') {
+      const hadUi =
+        Boolean(document.getElementById(OVERLAY_HOST_ID)) ||
+        Boolean(document.getElementById(TOAST_HOST_ID));
+      if (!hadUi) {
+        sendResponse({ ok: true, removed: false });
+        return;
+      }
+      if (toastDismissTimer) {
+        clearTimeout(toastDismissTimer);
+        toastDismissTimer = null;
+      }
+      clearActiveOverlay();
+      removeHostElement(TOAST_HOST_ID);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setTimeout(() => sendResponse({ ok: true, removed: true }), 20);
+        });
+      });
+      return true;
     }
 
     if (message.type === 'SHOW_TOAST') {

@@ -47,6 +47,7 @@ function storeFallbackCapture(blob, filename) {
   clearFallbackCapture();
   lastFailedCapture = { blob, filename };
   fallbackExpiryTimer = setTimeout(clearFallbackCapture, 2 * 60 * 1000);
+  fallbackExpiryTimer?.unref?.();
 }
 
 function setBadge(text, color, autoClearMs = 0) {
@@ -61,6 +62,7 @@ function setBadge(text, color, autoClearMs = 0) {
       chrome.action.setBadgeText({ text: '' });
       badgeClearTimer = null;
     }, autoClearMs);
+    badgeClearTimer?.unref?.();
   }
 }
 
@@ -130,11 +132,28 @@ async function ensureContentScript(tabId) {
   }
 }
 
+async function sendMessageToContentScript(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    await ensureContentScript(tabId);
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function hidePageUiBeforeCapture(tabId) {
+  if (!tabId) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'HIDE_UI_FOR_CAPTURE' });
+  } catch {
+    // Content script not injected on this tab yet; nothing to hide
+  }
+}
+
 async function sendTabToast(tabId, payload) {
   if (!tabId) return;
   try {
-    await ensureContentScript(tabId);
-    await chrome.tabs.sendMessage(tabId, { type: 'SHOW_TOAST', payload });
+    await sendMessageToContentScript(tabId, { type: 'SHOW_TOAST', payload });
   } catch {
     // Ignore if tab navigated or closed
   }
@@ -148,6 +167,7 @@ async function uploadCapturedBlob({ pngBlob, tab, mode, interactiveAuth = false 
 
   let uploadResult;
   let thumbnailDataUrl = '';
+  let latestSettings = settings;
 
   try {
     [thumbnailDataUrl, uploadResult] = await Promise.all([
@@ -163,9 +183,11 @@ async function uploadCapturedBlob({ pngBlob, tab, mode, interactiveAuth = false 
 
           if (
             folder.id !== accountCache.folderId ||
-            folder.webViewLink !== accountCache.folderWebViewLink
+            folder.webViewLink !== accountCache.folderWebViewLink ||
+            folder.id !== settings.folderId ||
+            folder.webViewLink !== settings.folderWebViewLink
           ) {
-            await saveAccountFolderCache(email, {
+            latestSettings = await saveAccountFolderCache(email, {
               folderName: settings.folderName,
               folderId: folder.id,
               folderWebViewLink: folder.webViewLink,
@@ -211,25 +233,28 @@ async function uploadCapturedBlob({ pngBlob, tab, mode, interactiveAuth = false 
     await addRecentUpload(record);
   }
 
-  const updatedSettings = await getSettings();
   return {
     upload: { ...record, previewThumbnail: thumbnailDataUrl },
-    settings: updatedSettings,
+    settings: latestSettings,
   };
 }
 
-async function resolveDriveFolderLink() {
+async function resolveDriveFolderLink({ prewarmOnly = false } = {}) {
   const settings = await getSettings();
   const folderName = settings.folderName || 'Chrome_SaveShot_ScreenShots';
 
   return withAuthToken(
     async (token, accountEmail) => {
       const accountCache = getAccountFolderCache(settings, accountEmail);
-      if (accountCache.folderId && accountCache.folderWebViewLink) {
+      if (prewarmOnly && accountCache.folderId && accountCache.folderWebViewLink) {
         return accountCache.folderWebViewLink;
       }
 
-      const folder = await ensureDriveFolder(token, folderName, accountCache.folderId);
+      const folder = await ensureDriveFolder(token, {
+        folderName,
+        cachedFolderId: accountCache.folderId,
+        accountKey: accountEmail,
+      });
       await saveAccountFolderCache(accountEmail, {
         folderName: folder.name,
         folderId: folder.id,
@@ -253,6 +278,7 @@ async function captureVisibleTabFlow({ tab, tabId, showPageToast = false, intera
 
   setBadge('...', '#1a73e8');
   try {
+    await hidePageUiBeforeCapture(targetTab.id);
     const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
 
     if (showPageToast) {
@@ -324,13 +350,12 @@ async function startRegionCaptureFlow({ tab, tabId } = {}) {
   if (!session.signedIn) {
     throw new SaveShotError({
       code: 'AUTH_REQUIRED',
-      userMessage: 'Please sign in with your Google account first.',
+      userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
       requiresReauth: true,
     });
   }
 
-  await ensureContentScript(targetTab.id);
-  const response = await chrome.tabs.sendMessage(targetTab.id, {
+  const response = await sendMessageToContentScript(targetTab.id, {
     type: 'START_REGION_SELECT',
   });
 
@@ -396,159 +421,169 @@ async function handleRegionSelected(selection, senderTab) {
   }
 }
 
-chrome.runtime.onInstalled.addListener(async (details) => {
-  await pruneStorage().catch(() => {});
-  if (details.reason === 'install') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
+export function registerServiceWorkerListeners() {
+  if (chrome?.runtime?.onInstalled) {
+    chrome.runtime.onInstalled.addListener(async (details) => {
+      await pruneStorage().catch(() => {});
+      if (details.reason === 'install') {
+        chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
+      }
+    });
   }
-});
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || !message.type) return false;
+  if (chrome?.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!message || !message.type) return false;
 
-  (async () => {
-    try {
-      switch (message.type) {
-        case 'GET_STATE': {
-          const activeTab = await resolveTargetTab(message.tabId);
-          const [session, settings, recentUploads, capturable] = await Promise.all([
-            getSilentAuthSession(),
-            getSettings(),
-            getRecentUploads(),
-            checkTabCapturable(activeTab),
-          ]);
+      (async () => {
+        try {
+          switch (message.type) {
+            case 'GET_STATE': {
+              const activeTab = await resolveTargetTab(message.tabId);
+              const [session, settings, recentUploads, capturable] = await Promise.all([
+                getSilentAuthSession(),
+                getSettings(),
+                getRecentUploads(),
+                checkTabCapturable(activeTab),
+              ]);
+              sendResponse({
+                ok: true,
+                session,
+                settings,
+                recentUploads,
+                capturable,
+                incognito: Boolean(activeTab?.incognito),
+                lastErrorCode,
+              });
+              return;
+            }
+
+            case 'SIGN_IN': {
+              const { profile } = await signIn();
+              lastErrorCode = '';
+              // Best-effort pre-warm destination folder link so "Open screenshots folder" works immediately
+              resolveDriveFolderLink({ prewarmOnly: true }).catch(() => {});
+              sendResponse({ ok: true, profile });
+              return;
+            }
+
+            case 'OPEN_DRIVE_FOLDER': {
+              const url = await resolveDriveFolderLink();
+              sendResponse({ ok: true, url });
+              return;
+            }
+
+            case 'SIGN_OUT': {
+              await signOut();
+              sendResponse({ ok: true });
+              return;
+            }
+
+            case 'UPDATE_SETTINGS': {
+              const settings = await updateSettings(message.patch || {});
+              sendResponse({ ok: true, settings });
+              return;
+            }
+
+            case 'CLEAR_HISTORY': {
+              await clearRecentUploads();
+              sendResponse({ ok: true });
+              return;
+            }
+
+            case 'CAPTURE_VISIBLE': {
+              const result = await captureVisibleTabFlow({
+                tabId: message.tabId,
+                showPageToast: false,
+                interactiveAuth: false,
+              });
+              const recentUploads = await getRecentUploads();
+              sendResponse({
+                ok: true,
+                upload: result.upload,
+                settings: result.settings,
+                recentUploads,
+              });
+              return;
+            }
+
+            case 'START_REGION_CAPTURE': {
+              await startRegionCaptureFlow({ tabId: message.tabId });
+              sendResponse({ ok: true });
+              return;
+            }
+
+            case 'REGION_SELECTED': {
+              sendResponse({ ok: true });
+              await handleRegionSelected(message.selection, sender.tab);
+              return;
+            }
+
+            case 'GET_FALLBACK_PNG': {
+              if (!lastFailedCapture?.blob) {
+                sendResponse({ ok: false, error: 'Saved screenshot is no longer in memory.' });
+                return;
+              }
+              const dataUrl = await blobToDataUrl(lastFailedCapture.blob);
+              sendResponse({
+                ok: true,
+                dataUrl,
+                filename: lastFailedCapture.filename,
+              });
+              return;
+            }
+
+            default:
+              sendResponse({ ok: false, error: `Unknown message type: ${message.type}` });
+          }
+        } catch (err) {
+          const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+          lastErrorCode = normalized.code || 'ERROR';
           sendResponse({
-            ok: true,
-            session,
-            settings,
-            recentUploads,
-            capturable,
-            incognito: Boolean(activeTab?.incognito),
-            lastErrorCode,
+            ok: false,
+            code: normalized.code || 'ERROR',
+            error: normalized.userMessage || err?.message || 'Something went wrong.',
+            requiresReauth: Boolean(normalized.requiresReauth),
+            hasFallback: Boolean(normalized.hasFallback),
+            fallbackFilename: normalized.fallbackFilename || '',
           });
-          return;
         }
+      })();
 
-        case 'SIGN_IN': {
-          const { profile } = await signIn();
-          lastErrorCode = '';
-          // Best-effort pre-warm destination folder link so "Open screenshots folder" works immediately
-          resolveDriveFolderLink().catch(() => {});
-          sendResponse({ ok: true, profile });
-          return;
-        }
+      return true;
+    });
+  }
 
-        case 'OPEN_DRIVE_FOLDER': {
-          const url = await resolveDriveFolderLink();
-          sendResponse({ ok: true, url });
-          return;
-        }
+  if (chrome?.commands?.onCommand) {
+    chrome.commands.onCommand.addListener(async (command, tab) => {
+      const activeTab = tab || (await resolveTargetTab());
+      if (!activeTab) return;
 
-        case 'SIGN_OUT': {
-          await signOut();
-          sendResponse({ ok: true });
-          return;
-        }
-
-        case 'UPDATE_SETTINGS': {
-          const settings = await updateSettings(message.patch || {});
-          sendResponse({ ok: true, settings });
-          return;
-        }
-
-        case 'CLEAR_HISTORY': {
-          await clearRecentUploads();
-          sendResponse({ ok: true });
-          return;
-        }
-
-        case 'CAPTURE_VISIBLE': {
-          const result = await captureVisibleTabFlow({
-            tabId: message.tabId,
-            showPageToast: false,
+      if (command === 'capture-visible') {
+        try {
+          await captureVisibleTabFlow({
+            tab: activeTab,
+            showPageToast: true,
             interactiveAuth: false,
           });
-          const recentUploads = await getRecentUploads();
-          sendResponse({
-            ok: true,
-            upload: result.upload,
-            settings: result.settings,
-            recentUploads,
+        } catch {
+          // Surfaced via toast and badge
+        }
+      } else if (command === 'capture-region') {
+        try {
+          await startRegionCaptureFlow({ tab: activeTab });
+        } catch (err) {
+          const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+          lastErrorCode = normalized.code || 'CAPTURE_ERROR';
+          await sendTabToast(activeTab.id, {
+            status: 'error',
+            title: 'Cannot start region capture',
+            message: normalized.userMessage,
           });
-          return;
         }
-
-        case 'START_REGION_CAPTURE': {
-          await startRegionCaptureFlow({ tabId: message.tabId });
-          sendResponse({ ok: true });
-          return;
-        }
-
-        case 'REGION_SELECTED': {
-          sendResponse({ ok: true });
-          await handleRegionSelected(message.selection, sender.tab);
-          return;
-        }
-
-        case 'GET_FALLBACK_PNG': {
-          if (!lastFailedCapture?.blob) {
-            sendResponse({ ok: false, error: 'Saved screenshot is no longer in memory.' });
-            return;
-          }
-          const dataUrl = await blobToDataUrl(lastFailedCapture.blob);
-          sendResponse({
-            ok: true,
-            dataUrl,
-            filename: lastFailedCapture.filename,
-          });
-          return;
-        }
-
-        default:
-          sendResponse({ ok: false, error: `Unknown message type: ${message.type}` });
       }
-    } catch (err) {
-      const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
-      lastErrorCode = normalized.code || 'ERROR';
-      sendResponse({
-        ok: false,
-        code: normalized.code || 'ERROR',
-        error: normalized.userMessage || err?.message || 'Something went wrong.',
-        requiresReauth: Boolean(normalized.requiresReauth),
-        hasFallback: Boolean(normalized.hasFallback),
-        fallbackFilename: normalized.fallbackFilename || '',
-      });
-    }
-  })();
-
-  return true;
-});
-
-chrome.commands.onCommand.addListener(async (command, tab) => {
-  const activeTab = tab || (await resolveTargetTab());
-  if (!activeTab) return;
-
-  if (command === 'capture-visible') {
-    try {
-      await captureVisibleTabFlow({
-        tab: activeTab,
-        showPageToast: true,
-        interactiveAuth: false,
-      });
-    } catch {
-      // Surfaced via toast and badge
-    }
-  } else if (command === 'capture-region') {
-    try {
-      await startRegionCaptureFlow({ tab: activeTab });
-    } catch (err) {
-      const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
-      lastErrorCode = normalized.code || 'CAPTURE_ERROR';
-      await sendTabToast(activeTab.id, {
-        status: 'error',
-        title: 'Cannot start region capture',
-        message: normalized.userMessage,
-      });
-    }
+    });
   }
-});
+}
+
+registerServiceWorkerListeners();

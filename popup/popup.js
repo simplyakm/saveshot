@@ -83,7 +83,9 @@ function sendMessage(payload) {
 
 function formatRelativeTime(isoString) {
   if (!isoString) return '';
-  const diffSec = Math.max(0, Math.floor((Date.now() - Date.parse(isoString)) / 1000));
+  const ts = Date.parse(isoString);
+  if (Number.isNaN(ts)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (diffSec < 45) return 'Just now';
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
@@ -152,12 +154,16 @@ function showStatus(type, content) {
     if (details.requiresReauth) {
       const reconnectBtn = document.createElement('button');
       reconnectBtn.className = 'small-btn';
-      reconnectBtn.textContent = 'Sign in again';
+      reconnectBtn.textContent = 'Reconnect Google Drive';
       reconnectBtn.addEventListener('click', async () => {
         reconnectBtn.disabled = true;
         try {
           const res = await sendMessage({ type: 'SIGN_IN' });
-          if (res.ok) await loadState();
+          if (res.ok) {
+            await loadState();
+          } else if (res.error) {
+            msg.textContent = res.error;
+          }
         } finally {
           reconnectBtn.disabled = false;
         }
@@ -548,12 +554,23 @@ els.captureRegionBtn.addEventListener('click', async () => {
   }
 });
 
+els.folderNameInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    els.saveFolderBtn.click();
+  }
+});
+
+let openingFolder = false;
+
 async function openDestinationDriveFolder() {
+  if (openingFolder) return;
   const cached = currentState.settings?.folderWebViewLink || '';
   if (cached.includes('/drive/folders/')) {
     chrome.tabs.create({ url: cached });
     return;
   }
+  openingFolder = true;
   try {
     const res = await sendMessage({ type: 'OPEN_DRIVE_FOLDER' });
     const url = (res.ok && res.url) || 'https://drive.google.com/drive/my-drive';
@@ -564,6 +581,8 @@ async function openDestinationDriveFolder() {
     chrome.tabs.create({ url });
   } catch {
     chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
+  } finally {
+    openingFolder = false;
   }
 }
 

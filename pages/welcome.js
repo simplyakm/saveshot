@@ -145,10 +145,14 @@ els.signInBtn.addEventListener('click', async () => {
   }
 });
 
+let openingWelcomeFolder = false;
+
 els.openDriveBtn.addEventListener('click', async (event) => {
   const currentHref = els.openDriveBtn.href || '';
   if (currentHref.includes('/drive/folders/')) return;
   event.preventDefault();
+  if (openingWelcomeFolder) return;
+  openingWelcomeFolder = true;
   const originalText = els.openDriveBtn.textContent;
   els.openDriveBtn.textContent = 'Opening folder...';
   try {
@@ -160,6 +164,7 @@ els.openDriveBtn.addEventListener('click', async (event) => {
     chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
   } finally {
     els.openDriveBtn.textContent = originalText;
+    openingWelcomeFolder = false;
   }
 });
 

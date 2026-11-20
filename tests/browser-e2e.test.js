@@ -596,6 +596,25 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(cspToast.downloadAttr, 'Screenshot_fallback.png');
     assert.equal(cspToast.buttonText, 'Save PNG locally');
 
+    // Verify HIDE_UI_FOR_CAPTURE strips lingering toast before back-to-back captures
+    const hideFirst = await evalIn(
+      swSession,
+      `chrome.tabs.sendMessage(${testTabInfo.tabId}, { type: 'HIDE_UI_FOR_CAPTURE' })`
+    );
+    assert.equal(hideFirst.ok, true);
+    assert.equal(hideFirst.removed, true);
+    const toastStillMounted = await evalIn(
+      pageSession,
+      `Boolean(document.getElementById('__saveshot-toast-host'))`
+    );
+    assert.equal(toastStillMounted, false);
+
+    const hideSecond = await evalIn(
+      swSession,
+      `chrome.tabs.sendMessage(${testTabInfo.tabId}, { type: 'HIDE_UI_FOR_CAPTURE' })`
+    );
+    assert.equal(hideSecond.removed, false);
+
     // -------------------------------------------------------------------------
     // 4. Standalone SVG Document Graceful Fallback
     // -------------------------------------------------------------------------

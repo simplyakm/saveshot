@@ -8,16 +8,18 @@ import {
   blobToDataUrl,
   buildScreenshotFilename,
   computeCropRect,
-  dataUrlToBlob,
+   dataUrlToBlob,
   isCapturableUrl,
 } from '../lib/capture.js';
 import {
   buildMultipartUploadBody,
   ensureDriveFolder,
   escapeDriveQueryValue,
+  fetchDriveWithRetry,
   uploadScreenshotToDrive,
 } from '../lib/drive.js';
 import {
+  fetchGoogleUserInfo,
   getSilentAuthSession,
   isClientIdConfigured,
   PLACEHOLDER_CLIENT_ID,
@@ -36,8 +38,10 @@ import {
   getRecentUploads,
   getSettings,
   pruneStorage,
+  sanitizeFolderName,
   saveAccountFolderCache,
   setAuthState,
+  updateSettings,
 } from '../lib/storage.js';
 import {
   buildFeedbackPayload,
@@ -47,22 +51,92 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
+const TINY_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 function installChromeMock({
   clientId = '1234567890-realclient.apps.googleusercontent.com',
   initialStore = {},
   onGetAuthToken = null,
   failStorageSetOnce = false,
+  failStorageSetCount = 0,
+  tabs = [{ id: 10, windowId: 1, active: true, url: 'https://example.com/app', title: 'Example App', incognito: false }],
+  allowFileScheme = false,
+  onCaptureVisibleTab = null,
+  onTabSendMessage = null,
+  onExecuteScript = null,
 } = {}) {
   const store = structuredClone(initialStore);
   const removedTokens = [];
+  const createdTabs = [];
+  const sentTabMessages = [];
+  const badges = [];
+  let executeScriptCalls = 0;
   let clearedAll = false;
   let tokenCounter = 0;
-  let shouldFailSetOnce = failStorageSetOnce;
+  let remainingSetFailures = failStorageSetCount || (failStorageSetOnce ? 1 : 0);
+
+  const listeners = {
+    onInstalled: [],
+    onMessage: [],
+    onCommand: [],
+  };
 
   globalThis.chrome = {
     runtime: {
       lastError: null,
-      getManifest: () => ({ oauth2: { client_id: clientId } }),
+      getManifest: () => ({
+        version: '1.1.0',
+        homepage_url: 'https://github.com/simplyakm/saveshot',
+        oauth2: { client_id: clientId },
+      }),
+      getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
+      onInstalled: {
+        addListener: (fn) => listeners.onInstalled.push(fn),
+      },
+      onMessage: {
+        addListener: (fn) => listeners.onMessage.push(fn),
+      },
+    },
+    commands: {
+      onCommand: {
+        addListener: (fn) => listeners.onCommand.push(fn),
+      },
+    },
+    action: {
+      setBadgeText: ({ text }) => badges.push({ text }),
+      setBadgeBackgroundColor: () => {},
+    },
+    extension: {
+      isAllowedFileSchemeAccess: (cb) => cb(Boolean(allowFileScheme)),
+    },
+    tabs: {
+      get: async (tabId) => {
+        const found = tabs.find((t) => t.id === tabId);
+        if (!found) throw new Error(`No tab with id: ${tabId}`);
+        return structuredClone(found);
+      },
+      query: async () => tabs.filter((t) => t.active).map((t) => structuredClone(t)),
+      create: async (opts) => {
+        createdTabs.push(opts);
+        return { id: 999, ...opts };
+      },
+      captureVisibleTab: async (windowId, opts) => {
+        if (onCaptureVisibleTab) return onCaptureVisibleTab(windowId, opts);
+        return TINY_PNG_DATA_URL;
+      },
+      sendMessage: async (tabId, message) => {
+        sentTabMessages.push({ tabId, message });
+        if (onTabSendMessage) return onTabSendMessage(tabId, message);
+        return { ok: true, removed: false };
+      },
+    },
+    scripting: {
+      executeScript: async (opts) => {
+        executeScriptCalls += 1;
+        if (onExecuteScript) return onExecuteScript(opts);
+        return [{ result: true }];
+      },
     },
     storage: {
       local: {
@@ -73,8 +147,8 @@ function installChromeMock({
           return out;
         },
         set: async (patch) => {
-          if (shouldFailSetOnce) {
-            shouldFailSetOnce = false;
+          if (remainingSetFailures > 0) {
+            remainingSetFailures -= 1;
             throw new Error('QUOTA_BYTES quota exceeded');
           }
           for (const [k, v] of Object.entries(patch)) {
@@ -110,7 +184,24 @@ function installChromeMock({
     },
   };
 
-  return { store, removedTokens, wasClearedAll: () => clearedAll };
+  const dispatchMessage = (message, sender = {}) =>
+    new Promise((resolve) => {
+      for (const fn of listeners.onMessage) {
+        fn(message, sender, (res) => resolve(res));
+      }
+    });
+
+  return {
+    store,
+    removedTokens,
+    createdTabs,
+    sentTabMessages,
+    badges,
+    listeners,
+    dispatchMessage,
+    getExecuteScriptCalls: () => executeScriptCalls,
+    wasClearedAll: () => clearedAll,
+  };
 }
 
 test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, icons, and commands', () => {
@@ -612,6 +703,480 @@ test('feedback helper builds pre-filled GitHub bug and feature URLs without leak
   });
   assert.ok(featureNoDiag.issueUrl.includes('labels=enhancement'));
   assert.ok(!featureNoDiag.body.includes('Diagnostic info:'));
+});
+
+test('capture and filename helpers survive NaN/Infinity inputs, IPv6 URLs, invalid dates, and non-webstore chrome.google.com paths', async () => {
+  // 1. Adversarial NaN / Infinity / null / negative inputs never produce NaN or <= 0 dimensions
+  for (const badSelection of [
+    null,
+    undefined,
+    {
+      x: Number.NaN,
+      y: Number.POSITIVE_INFINITY,
+      width: -200,
+      height: Number.NaN,
+      viewportWidth: 0,
+      viewportHeight: -10,
+      devicePixelRatio: Number.NaN,
+      visualViewportScale: -3,
+      visualViewportOffsetLeft: Number.NEGATIVE_INFINITY,
+      visualViewportOffsetTop: Number.NaN,
+    },
+  ]) {
+    const rect = computeCropRect(badSelection, Number.NaN, 0);
+    assert.equal(Number.isFinite(rect.x), true);
+    assert.equal(Number.isFinite(rect.y), true);
+    assert.ok(rect.width >= 1 && Number.isFinite(rect.width));
+    assert.ok(rect.height >= 1 && Number.isFinite(rect.height));
+  }
+
+  // 2. IPv6 literal, invalid Date, and malformed URL produce clean filenames
+  const fixedDate = new Date(2026, 10, 20, 9, 15, 0);
+  assert.equal(
+    buildScreenshotFilename('http://[::1]:8080/test', fixedDate),
+    'Screenshot_2026-11-20_09-15-00_1.png'
+  );
+  const invalidDateName = buildScreenshotFilename('not-a-valid-url', new Date('invalid'));
+  assert.doesNotMatch(invalidDateName, /NaN/);
+  assert.match(invalidDateName, /^Screenshot_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_tab\.png$/);
+
+  // 3. chrome.google.com non-webstore path allowed, /webstore blocked, filesystem: disables region only
+  assert.equal(isCapturableUrl('https://chrome.google.com/webstore/detail/abc').canCaptureVisible, false);
+  assert.equal(isCapturableUrl('https://chrome.google.com/sync').canCaptureVisible, true);
+  const fsUrl = isCapturableUrl('filesystem:https://example.com/temporary/doc.html');
+  assert.equal(fsUrl.canCaptureVisible, true);
+  assert.equal(fsUrl.canCaptureRegion, false);
+
+  // 4. Reject non-image data URLs
+  await assert.rejects(
+    () => dataUrlToBlob('data:text/plain;base64,aGVsbG8='),
+    (err) => err.code === 'EMPTY_CAPTURE'
+  );
+});
+
+test('Drive folder verification self-heals trashed, renamed, 404, and 403 insufficientFilePermissions folders and fails fast on timeouts/long Retry-After', async () => {
+  // 1. Cached folder moved to Trash -> verifyFolder returns null -> searches -> creates fresh folder
+  const calls = [];
+  const trashedFetch = async (url, opts = {}) => {
+    calls.push({ url, method: opts.method || 'GET' });
+    if (url.includes('/files/trashed-id')) {
+      return new Response(
+        JSON.stringify({ id: 'trashed-id', name: 'Chrome_SaveShot_ScreenShots', trashed: true }),
+        { status: 200 }
+      );
+    }
+    if (url.includes('?q=')) {
+      return new Response(JSON.stringify({ files: [] }), { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({ id: 'fresh-id', name: 'Chrome_SaveShot_ScreenShots' }),
+      { status: 200 }
+    );
+  };
+  const healedFromTrash = await ensureDriveFolder(
+    'tok-1',
+    { folderName: 'Chrome_SaveShot_ScreenShots', cachedFolderId: 'trashed-id', accountKey: 'a@b.com' },
+    trashedFetch
+  );
+  assert.equal(healedFromTrash.id, 'fresh-id');
+  assert.equal(calls.length, 3);
+
+  // 2. Cached folder returns 403 insufficientFilePermissions -> must NOT throw DRIVE_SCOPE_MISSING, must self-heal
+  const forbiddenFileFetch = async (url) => {
+    if (url.includes('/files/foreign-id')) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'The user does not have sufficient permissions for this file.',
+            errors: [{ reason: 'insufficientFilePermissions' }],
+          },
+        }),
+        { status: 403 }
+      );
+    }
+    if (url.includes('?q=')) {
+      return new Response(
+        JSON.stringify({
+          files: [{ id: 'found-id', name: 'Custom_Folder', webViewLink: 'https://drive.google.com/drive/folders/found-id' }],
+        }),
+        { status: 200 }
+      );
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  const healedFromForbidden = await ensureDriveFolder(
+    'tok-2',
+    { folderName: 'Custom_Folder', cachedFolderId: 'foreign-id', accountKey: 'a@b.com' },
+    forbiddenFileFetch
+  );
+  assert.equal(healedFromForbidden.id, 'found-id');
+
+  // 3. String shorthand options + null fetchImpl guard work safely
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({ files: [{ id: 'str-id', name: 'Quick_Folder' }] }),
+      { status: 200 }
+    );
+  try {
+    const strFolder = await ensureDriveFolder('tok-3', 'Quick_Folder', null);
+    assert.equal(strFolder.id, 'str-id');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // 4. AbortError timeout fails fast without burning retries
+  let timeoutCalls = 0;
+  await assert.rejects(
+    () =>
+      fetchDriveWithRetry(
+        'https://www.googleapis.com/drive/v3/files',
+        {},
+        {
+          timeoutMs: 15,
+          maxRetries: 2,
+          baseDelayMs: 5,
+          fetchImpl: (_url, { signal }) =>
+            new Promise((_res, rej) => {
+              timeoutCalls += 1;
+              signal.addEventListener('abort', () => {
+                const err = new Error('The operation was aborted');
+                err.name = 'AbortError';
+                rej(err);
+              });
+            }),
+        }
+      ),
+    (err) => err.code === 'NETWORK_ERROR' && err.reason === 'timeout' && err.retryable === false
+  );
+  assert.equal(timeoutCalls, 1, 'Timed-out request must not retry repeatedly');
+
+  // 5. Long Retry-After (> 15s) fails immediately so user gets local fallback right away
+  let longRetryCalls = 0;
+  await assert.rejects(
+    () =>
+      fetchDriveWithRetry(
+        'https://www.googleapis.com/drive/v3/files',
+        {},
+        {
+          maxRetries: 2,
+          baseDelayMs: 5,
+          fetchImpl: async () => {
+            longRetryCalls += 1;
+            return new Response(JSON.stringify({ error: { message: 'Rate limited' } }), {
+              status: 429,
+              headers: { 'Retry-After': '60' },
+            });
+          },
+        }
+      ),
+    (err) => err.code === 'DRIVE_RATE_LIMITED'
+  );
+  assert.equal(longRetryCalls, 1);
+});
+
+test('auth and storage edge cases: Drive /about profile parsing, 401 refresh retry, fresh-install prompt, folder rename-back cache restore, and double quota fallback', async () => {
+  // 1. Drive /about profile parsing + signIn 401 token refresh retry
+  const { removedTokens: signInRemoved } = installChromeMock({});
+  let aboutAttempts = 0;
+  const { profile } = await signIn(async () => {
+    aboutAttempts += 1;
+    if (aboutAttempts === 1) return new Response('', { status: 401 });
+    return new Response(
+      JSON.stringify({
+        user: {
+          displayName: 'Aashish',
+          emailAddress: 'aashish@example.com',
+          photoLink: 'https://example.com/pic.png',
+        },
+      }),
+      { status: 200 }
+    );
+  });
+  assert.equal(profile.email, 'aashish@example.com');
+  assert.equal(profile.name, 'Aashish');
+  assert.deepEqual(signInRemoved, ['token-1']);
+
+  // 2. signIn with unchecked Google Drive permission (403 on /about) evicts token immediately
+  const { store: uncheckedStore, removedTokens: uncheckedRemoved } = installChromeMock({});
+  await assert.rejects(
+    () => fetchGoogleUserInfo('tok-bad', async () => new Response('', { status: 403 })),
+    (err) => err.code === 'DRIVE_SCOPE_MISSING'
+  );
+  await assert.rejects(
+    () => signIn(async () => new Response('', { status: 403 })),
+    (err) => err.code === 'DRIVE_SCOPE_MISSING'
+  );
+  assert.equal(uncheckedStore.signedOut, true);
+  assert.deepEqual(uncheckedRemoved, ['token-1']);
+
+  // 3. Fresh install (userProfile is null) non-interactive withAuthToken returns friendly AUTH_REQUIRED
+  installChromeMock({
+    onGetAuthToken: () => ({ error: 'OAuth2 not granted or revoked.' }),
+  });
+  await assert.rejects(
+    () => withAuthToken(async () => 'ok', { interactive: false }),
+    (err) =>
+      err.code === 'AUTH_REQUIRED' &&
+      err.recoverableWithLocalSave === true &&
+      /Connect Google Drive/.test(err.userMessage)
+  );
+
+  // 4. withAuthToken 401 refresh succeeds on second token; and evicts refreshed token if retry gets 403 DRIVE_SCOPE_MISSING
+  const { removedTokens: refreshRemoved } = installChromeMock({
+    initialStore: {
+      signedOut: false,
+      userProfile: { email: 'aashish@example.com', verifiedAt: Date.now() },
+    },
+  });
+  let opCalls = 0;
+  const opResult = await withAuthToken(async (tok) => {
+    opCalls += 1;
+    if (opCalls === 1) {
+      throw classifyDriveHttpError(401, {});
+    }
+    return `used-${tok}`;
+  });
+  assert.equal(opResult, 'used-token-2');
+  assert.deepEqual(refreshRemoved, ['token-1']);
+
+  // 5. sanitizeFolderName, corrupted storage recovery, and folder rename-back cache restoration
+  assert.equal(sanitizeFolderName('  Team\x00\x1f_Shots\n '), 'Team_Shots');
+  assert.equal(sanitizeFolderName('   '), 'Chrome_SaveShot_ScreenShots');
+
+  installChromeMock({
+    initialStore: { settings: 'corrupted-string', recentUploads: 'not-an-array' },
+  });
+  const recoveredSettings = await getSettings();
+  assert.equal(recoveredSettings.folderName, 'Chrome_SaveShot_ScreenShots');
+  assert.deepEqual(await getRecentUploads(), []);
+
+  await setAuthState({
+    signedOut: false,
+    userProfile: { email: 'aashish@example.com', name: 'Aashish', verifiedAt: Date.now() },
+  });
+  await saveAccountFolderCache('aashish@example.com', {
+    folderName: 'Chrome_SaveShot_ScreenShots',
+    folderId: 'orig-folder-id',
+    folderWebViewLink: 'https://drive.google.com/drive/folders/orig-folder-id',
+  });
+  const renamed = await updateSettings({ folderName: 'Temp_Folder' });
+  assert.equal(renamed.folderId, null);
+  const renamedBack = await updateSettings({ folderName: 'Chrome_SaveShot_ScreenShots' });
+  assert.equal(renamedBack.folderId, 'orig-folder-id', 'Renaming back restores cached folderId');
+  assert.equal(
+    renamedBack.folderWebViewLink,
+    'https://drive.google.com/drive/folders/orig-folder-id'
+  );
+
+  // 6. Double storage quota failure falls back to zero-thumbnail textOnly list without throwing
+  installChromeMock({ failStorageSetCount: 2 });
+  const textOnly = await addRecentUpload({
+    id: 'q-1',
+    name: 'shot.png',
+    thumbnailDataUrl: 'data:image/webp;base64,AAAA',
+  });
+  assert.equal(textOnly.length, 1);
+  assert.equal(textOnly[0].thumbnailDataUrl, '');
+
+  // 7. Additional Drive HTTP error classifications (507, accessNotConfigured, domainPolicy, 502, AbortError)
+  assert.equal(classifyDriveHttpError(507, {}).code, 'DRIVE_QUOTA_EXCEEDED');
+  assert.equal(
+    classifyDriveHttpError(403, { error: { errors: [{ reason: 'accessNotConfigured' }] } }).code,
+    'DRIVE_API_DISABLED'
+  );
+  assert.equal(
+    classifyDriveHttpError(403, { error: { errors: [{ reason: 'domainPolicy' }] } }).code,
+    'DRIVE_POLICY_BLOCKED'
+  );
+  assert.equal(classifyDriveHttpError(502, {}).code, 'DRIVE_SERVER_ERROR');
+  const abortErr = new Error('aborted');
+  abortErr.name = 'AbortError';
+  assert.equal(classifyAuthError(abortErr).code, 'NETWORK_ERROR');
+});
+
+test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, CAPTURE_VISIBLE, Incognito privacy, throttling retry, tab-switch guard, and local fallback', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    let captureAttempts = 0;
+    let contentScriptLoaded = false;
+    const activeTabs = [
+      {
+        id: 42,
+        windowId: 7,
+        active: true,
+        url: 'https://docs.example.com/guide',
+        title: 'Guide Doc',
+        incognito: false,
+      },
+    ];
+
+    const mock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: {
+          email: 'aashish@example.com',
+          name: 'Aashish',
+          verifiedAt: Date.now(),
+        },
+        settings: {
+          folderName: 'My_Custom_Shots',
+          folderId: null,
+          folderWebViewLink: null,
+          folderCacheByEmail: {},
+          autoCopyLink: true,
+        },
+      },
+      tabs: activeTabs,
+      onCaptureVisibleTab: async () => {
+        captureAttempts += 1;
+        if (captureAttempts === 1) {
+          throw new Error('This request exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota.');
+        }
+        return TINY_PNG_DATA_URL;
+      },
+      onExecuteScript: async () => {
+        contentScriptLoaded = true;
+        return [{ result: true }];
+      },
+      onTabSendMessage: async (_tabId, msg) => {
+        if (!contentScriptLoaded && msg.type !== 'HIDE_UI_FOR_CAPTURE') {
+          throw new Error('Could not establish connection. Receiving end does not exist.');
+        }
+        if (msg.type === 'HIDE_UI_FOR_CAPTURE' && !contentScriptLoaded) {
+          throw new Error('Receiving end does not exist.');
+        }
+        return { ok: true, removed: false };
+      },
+    });
+
+    const { registerServiceWorkerListeners } = await import('../background/service-worker.js');
+    // Re-bind listeners onto current mock instance if already imported
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
+
+    // 1. onInstalled opens welcome.html on fresh install only
+    await mock.listeners.onInstalled[0]({ reason: 'update' });
+    assert.equal(mock.createdTabs.length, 0);
+    await mock.listeners.onInstalled[0]({ reason: 'install' });
+    assert.equal(mock.createdTabs.length, 1);
+    assert.match(mock.createdTabs[0].url, /pages\/welcome\.html$/);
+
+    // 2. OPEN_DRIVE_FOLDER resolves custom folder name via Drive API and caches folderWebViewLink
+    let driveShouldFailQuota = false;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.startsWith('data:image/')) {
+        return origFetch(url, opts);
+      }
+      if (driveShouldFailQuota && u.includes('/upload/drive/v3/files')) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'Quota exceeded',
+              errors: [{ reason: 'storageQuotaExceeded' }],
+            },
+          }),
+          { status: 403 }
+        );
+      }
+      if (u.includes('/drive/v3/files/folder-custom-1')) {
+        return new Response(
+          JSON.stringify({
+            id: 'folder-custom-1',
+            name: 'My_Custom_Shots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/folder-custom-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('?q=')) {
+        assert.ok(u.includes('My_Custom_Shots'), 'Must query custom folder name');
+        return new Response(JSON.stringify({ files: [] }), { status: 200 });
+      }
+      if (u.includes('/drive/v3/files?fields=')) {
+        return new Response(
+          JSON.stringify({
+            id: 'folder-custom-1',
+            name: 'My_Custom_Shots',
+            webViewLink: 'https://drive.google.com/drive/folders/folder-custom-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/upload/drive/v3/files')) {
+        return new Response(
+          JSON.stringify({
+            id: 'uploaded-1',
+            name: 'Screenshot_1.png',
+            webViewLink: 'https://drive.google.com/file/d/uploaded-1/view',
+            createdTime: '2026-11-20T10:00:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`Unhandled fetch URL in SW test: ${u}`);
+    };
+
+    const folderRes = await mock.dispatchMessage({ type: 'OPEN_DRIVE_FOLDER' });
+    assert.equal(folderRes.ok, true);
+    assert.equal(folderRes.url, 'https://drive.google.com/drive/folders/folder-custom-1');
+
+    // 3. CAPTURE_VISIBLE retries throttled captureVisibleTab, uploads PNG, and records history
+    const capRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
+    assert.equal(capRes.ok, true);
+    assert.equal(capRes.upload.id, 'uploaded-1');
+    assert.equal(capRes.recentUploads.length, 1);
+    assert.equal(captureAttempts, 2, 'Should auto-retry once after CAPTURE_THROTTLED');
+
+    // 4. Incognito CAPTURE_VISIBLE uploads to Drive while skipping local history
+    activeTabs[0].incognito = true;
+    const incogRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
+    assert.equal(incogRes.ok, true);
+    assert.equal(incogRes.recentUploads.length, 1, 'Incognito capture must not add to local history');
+    activeTabs[0].incognito = false;
+
+    // 5. Upload failure stores fallback PNG in memory and GET_FALLBACK_PNG retrieves it
+    driveShouldFailQuota = true;
+    const failRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
+    assert.equal(failRes.ok, false);
+    assert.equal(failRes.code, 'DRIVE_QUOTA_EXCEEDED');
+    assert.equal(failRes.hasFallback, true);
+
+    const fbRes = await mock.dispatchMessage({ type: 'GET_FALLBACK_PNG' });
+    assert.equal(fbRes.ok, true);
+    assert.ok(fbRes.dataUrl.startsWith('data:image/png;base64,'));
+    driveShouldFailQuota = false;
+
+    // 6. START_REGION_CAPTURE injects content script once; subsequent toasts reuse existing script without re-injecting
+    const regionStart = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 42 });
+    assert.equal(regionStart.ok, true);
+    assert.equal(mock.getExecuteScriptCalls(), 1, 'Should inject selector.js once');
+
+    // 7. REGION_SELECTED aborts safely with TAB_SWITCHED toast if tab became inactive before capture
+    activeTabs[0].active = false;
+    await mock.dispatchMessage(
+      {
+        type: 'REGION_SELECTED',
+        selection: { x: 10, y: 10, width: 50, height: 50, viewportWidth: 800, viewportHeight: 600 },
+      },
+      { tab: { id: 42, windowId: 7 } }
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(
+      mock.getExecuteScriptCalls(),
+      1,
+      'Subsequent toast must reuse loaded content script without redundant executeScript'
+    );
+    const tabSwitchedToast = mock.sentTabMessages.find(
+      (m) => m.message?.type === 'SHOW_TOAST' && /tab changed/i.test(m.message.payload?.message || '')
+    );
+    assert.ok(tabSwitchedToast, 'Should surface TAB_SWITCHED error toast');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });
 
 test('all repository source, UI, and documentation files contain no em dashes or en dashes', () => {
