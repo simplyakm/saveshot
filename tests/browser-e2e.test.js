@@ -714,6 +714,18 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               { status: 200 }
             );
           }
+          if (method === 'PATCH' && u.includes('/drive/v3/files/e2e_shot_01')) {
+            const parsed = JSON.parse(opts.body);
+            return new Response(
+              JSON.stringify({
+                id: 'e2e_shot_01',
+                name: parsed.name,
+                webViewLink: 'https://drive.google.com/file/d/e2e_shot_01/view',
+                modifiedTime: new Date().toISOString(),
+              }),
+              { status: 200 }
+            );
+          }
           return new Response(JSON.stringify({ id: 'folder_e2e_1', name: 'Chrome_SaveShot_ScreenShots' }), {
             status: 200,
           });
@@ -963,6 +975,38 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       'https://drive.google.com/file/d/e2e_shot_01/view'
     );
     assert.match(swVerifyAfterReplace.latestRecent.name, /Clean_Report\.png$/);
+
+    // Simulate Chrome's 30-second MV3 service worker idle sleep (wiping all module-scope SW RAM)
+    // while pages/editor.html remains open, then rename & save again!
+    await evalIn(swSession, `globalThis.__saveshotResetRamForTest()`);
+
+    const saveAfterSwIdleCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        const fnInput = document.getElementById('filename-input');
+        fnInput.value = 'Saved_After_Idle_Sleep';
+        fnInput.dispatchEvent(new Event('blur'));
+        document.getElementById('status-pill').hidden = true;
+
+        document.getElementById('save-drive-btn').click();
+        await new Promise((r) => setTimeout(r, 25));
+        document.getElementById('confirm-replace-btn').click();
+
+        for (let i = 0; i < 30; i += 1) {
+          const pill = document.getElementById('status-pill');
+          if (!pill.hidden && !pill.textContent.includes('Replacing')) {
+            return { ok: pill.textContent.includes('Replaced in Google Drive'), pillText: pill.textContent };
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return { ok: false, pillText: document.getElementById('status-pill').textContent };
+      })()`
+    );
+    assert.equal(
+      saveAfterSwIdleCheck.ok,
+      true,
+      `Editor save must survive MV3 service worker idle sleep (got: ${saveAfterSwIdleCheck.pillText})`
+    );
 
     // 5D. Verify real Chromium content-script MessageSender cannot invoke privileged SIGN_OUT,
     //     while webpage success toast renders opt-in Edit button cleanly

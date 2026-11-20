@@ -154,6 +154,7 @@ function installChromeMock({
     storage: {
       local: {
         get: async (keys) => {
+          if (keys === null || keys === undefined) return structuredClone(store);
           const list = Array.isArray(keys) ? keys : [keys];
           const out = {};
           for (const k of list) out[k] = structuredClone(store[k]);
@@ -169,6 +170,30 @@ function installChromeMock({
           }
         },
       },
+      session: (() => {
+        const sessionStore = {};
+        return {
+          get: async (keys) => {
+            if (keys === null || keys === undefined) return structuredClone(sessionStore);
+            const list = Array.isArray(keys) ? keys : [keys];
+            const out = {};
+            for (const k of list) out[k] = structuredClone(sessionStore[k]);
+            return out;
+          },
+          set: async (patch) => {
+            for (const [k, v] of Object.entries(patch)) {
+              sessionStore[k] = structuredClone(v);
+            }
+          },
+          remove: async (keys) => {
+            const list = Array.isArray(keys) ? keys : [keys];
+            for (const k of list) delete sessionStore[k];
+          },
+          clear: async () => {
+            for (const k of Object.keys(sessionStore)) delete sessionStore[k];
+          },
+        };
+      })(),
     },
     identity: {
       getAuthToken: (opts, cb) => {
@@ -1806,7 +1831,75 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     const unchangedRecent = await updateRecentUpload('nonexistent_id', { name: 'Nope.png' });
     assert.ok(unchangedRecent.every((x) => x.name !== 'Nope.png'));
 
-    // 10. SIGN_OUT wipes all editor sessions and cached captures from memory immediately
+    // 10. MV3 30-second service-worker idle termination simulation:
+    //     Wipe all module-scope SW RAM Maps while editor tabs & fallback captures are active,
+    //     and verify GET_EDITOR_SESSION, SAVE_EDITED_SCREENSHOT (L2 + L3), OPEN_LAST_CAPTURE_EDITOR,
+    //     and GET_FALLBACK_PNG all survive seamlessly!
+    const { resetInMemoryWorkerStateForTests } = await import('../background/service-worker.js');
+
+    const preRestartCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 77 });
+    assert.equal(preRestartCap.ok, true);
+    assert.equal(preRestartCap.openedEditor, true);
+
+    // Simulate Chrome terminating the idle MV3 service worker after 30 seconds
+    resetInMemoryWorkerStateForTests();
+
+    // Tab refresh on pre-upload session recovers from chrome.storage.session
+    const recoveredPreUpload = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: preRestartCap.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(recoveredPreUpload.ok, true);
+    assert.equal(recoveredPreUpload.session.mode, 'new');
+    assert.ok(recoveredPreUpload.dataUrl.startsWith('data:image/png;base64,'));
+
+    // Wipe SW RAM again right before user clicks Upload to Drive 2 minutes later
+    resetInMemoryWorkerStateForTests();
+    const saveAfterSwSleep = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preRestartCap.sessionId,
+        filename: 'Survived_SW_Sleep.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(saveAfterSwSleep.ok, true);
+    assert.equal(saveAfterSwSleep.action, 'created');
+    assert.equal(saveAfterSwSleep.upload.name, 'Survived_SW_Sleep.png');
+
+    // Even if BOTH SW RAM and chrome.storage.session were cleared (e.g. manual extension reload),
+    // open editor tab's sessionContext still completes Replace in Drive cleanly while signed in!
+    resetInMemoryWorkerStateForTests();
+    await globalThis.chrome.storage.session.clear();
+
+    const saveViaContextFallback = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preRestartCap.sessionId,
+        filename: 'Renamed_After_Reload',
+        dataUrl: '',
+        imageModified: false,
+        saveMode: 'replace',
+        sessionContext: {
+          mode: 'existing',
+          fileId: saveAfterSwSleep.upload.id,
+          filename: 'Survived_SW_Sleep.png',
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          webViewLink: saveAfterSwSleep.upload.webViewLink,
+          captureMode: 'visible',
+          incognito: false,
+        },
+      },
+      trustedEditorSender
+    );
+    assert.equal(saveViaContextFallback.ok, true);
+    assert.equal(saveViaContextFallback.action, 'replaced');
+    assert.equal(saveViaContextFallback.upload.name, 'Renamed_After_Reload.png');
+
+    // 11. SIGN_OUT wipes both RAM and chrome.storage.session and blocks context reconstruction
     await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedEditorSender);
     const afterSignOutSession = await mock.dispatchMessage(
       { type: 'GET_EDITOR_SESSION', sessionId: olderOpen.sessionId },
@@ -1814,6 +1907,25 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     );
     assert.equal(afterSignOutSession.ok, false);
     assert.equal(afterSignOutSession.code, 'EDITOR_SESSION_EXPIRED');
+
+    const blockedSaveAfterSignOut = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preRestartCap.sessionId,
+        filename: 'Should_Block.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+        sessionContext: {
+          mode: 'existing',
+          fileId: 'created_file_1',
+          filename: 'Billing.png',
+        },
+      },
+      trustedEditorSender
+    );
+    assert.equal(blockedSaveAfterSignOut.ok, false);
+    assert.equal(blockedSaveAfterSignOut.code, 'EDITOR_SESSION_EXPIRED');
   } finally {
     globalThis.fetch = origFetch;
   }

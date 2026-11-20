@@ -47,6 +47,10 @@ const state = {
   savedFilename: 'Screenshot.png',
   folderName: 'Chrome_SaveShot_ScreenShots',
   webViewLink: '',
+  captureMode: 'visible',
+  pageUrl: '',
+  pageTitle: '',
+  incognito: false,
   autoCopyLink: true,
   tool: 'arrow',
   color: '#ef4444',
@@ -628,6 +632,17 @@ async function performSave(saveMode) {
       dataUrl,
       imageModified: needImagePayload,
       saveMode,
+      sessionContext: {
+        mode: state.mode,
+        fileId: state.fileId,
+        filename: state.savedFilename,
+        folderName: state.folderName,
+        webViewLink: state.webViewLink,
+        captureMode: state.captureMode,
+        pageUrl: state.pageUrl,
+        pageTitle: state.pageTitle,
+        incognito: state.incognito,
+      },
     });
 
     if (!res.ok) {
@@ -783,6 +798,10 @@ async function initEditor() {
     );
     state.folderName = res.session.folderName || 'Chrome_SaveShot_ScreenShots';
     state.webViewLink = res.session.webViewLink || '';
+    state.captureMode = res.session.captureMode === 'region' ? 'region' : 'visible';
+    state.pageUrl = res.session.pageUrl || '';
+    state.pageTitle = res.session.pageTitle || '';
+    state.incognito = Boolean(res.session.incognito);
     state.autoCopyLink = Boolean(res.session.autoCopyLink);
 
     els.filenameInput.value = stripPngSuffix(state.savedFilename);

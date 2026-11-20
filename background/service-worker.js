@@ -25,6 +25,7 @@ import {
   addRecentUpload,
   clearRecentUploads,
   getAccountFolderCache,
+  getAuthState,
   getRecentUploads,
   getSettings,
   pruneStorage,
@@ -41,10 +42,16 @@ const CONTENT_SCRIPT_ALLOWED_TYPES = new Set([
 
 const MAX_CACHED_CAPTURES = 3;
 const RECENT_CAPTURE_TTL_MS = 5 * 60 * 1000;
-const MAX_EDITOR_SESSIONS = 4;
-const EDITOR_SESSION_TTL_MS = 15 * 60 * 1000;
+const MAX_RAM_EDITOR_SESSIONS = 6;
+const MAX_PERSISTED_EDITOR_SESSIONS = 12;
+const FALLBACK_SESSION_TTL_MS = 10 * 60 * 1000;
 const MAX_EDITED_DATA_URL_LENGTH = 48 * 1024 * 1024;
 const EDITOR_SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{8,64}$/;
+
+const SESSION_META_MAP_KEY = 'editorSessionsById';
+const PREUPLOAD_PNG_PREFIX = 'preUploadPng_';
+const LAST_UPLOADED_META_KEY = 'lastUploadedMeta';
+const FALLBACK_CAPTURE_KEY = 'lastFailedCaptureSession';
 
 let badgeClearTimer = null;
 let lastCaptureTimestamp = 0;
@@ -74,6 +81,51 @@ export function isTrustedExtensionSender(sender) {
   return true;
 }
 
+function getSessionStorageArea() {
+  return chrome?.storage?.session || null;
+}
+
+async function sessionStoreGet(keys) {
+  const area = getSessionStorageArea();
+  if (!area) return {};
+  try {
+    return (await area.get(keys)) || {};
+  } catch {
+    return {};
+  }
+}
+
+async function sessionStoreSet(items) {
+  const area = getSessionStorageArea();
+  if (!area) return false;
+  try {
+    await area.set(items);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sessionStoreRemove(keys) {
+  const area = getSessionStorageArea();
+  if (!area) return;
+  try {
+    await area.remove(keys);
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+async function clearSessionStorageArea() {
+  const area = getSessionStorageArea();
+  if (!area) return;
+  try {
+    await area.clear();
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -84,13 +136,30 @@ function clearFallbackCapture() {
     fallbackExpiryTimer = null;
   }
   lastFailedCapture = null;
+  sessionStoreRemove(FALLBACK_CAPTURE_KEY);
 }
 
 function storeFallbackCapture(blob, filename) {
-  clearFallbackCapture();
+  if (fallbackExpiryTimer) {
+    clearTimeout(fallbackExpiryTimer);
+    fallbackExpiryTimer = null;
+  }
   lastFailedCapture = { blob, filename };
   fallbackExpiryTimer = setTimeout(clearFallbackCapture, 2 * 60 * 1000);
   fallbackExpiryTimer?.unref?.();
+
+  // Also persist in chrome.storage.session so Save PNG locally survives MV3 30s SW idle sleep
+  blobToDataUrl(blob)
+    .then((dataUrl) =>
+      sessionStoreSet({
+        [FALLBACK_CAPTURE_KEY]: {
+          dataUrl,
+          filename,
+          expiresAt: Date.now() + FALLBACK_SESSION_TTL_MS,
+        },
+      })
+    )
+    .catch(() => {});
 }
 
 function deleteRecentCaptureEntry(fileId) {
@@ -130,36 +199,97 @@ function cacheUploadedCapture(entry) {
 
   recentUploadedCaptures.set(entry.fileId, { ...entry, timer });
   lastUploadedFileId = entry.fileId;
+
+  sessionStoreSet({
+    [LAST_UPLOADED_META_KEY]: {
+      fileId: entry.fileId,
+      filename: entry.filename,
+      webViewLink: entry.webViewLink || '',
+      folderName: entry.folderName || '',
+      pageUrl: entry.pageUrl || '',
+      pageTitle: entry.pageTitle || '',
+      mode: entry.mode === 'region' ? 'region' : 'visible',
+      incognito: Boolean(entry.incognito),
+    },
+  });
 }
 
-function deleteEditorSession(sessionId) {
-  const existing = editorSessions.get(sessionId);
-  if (existing?.timer) {
-    clearTimeout(existing.timer);
+function serializeSessionMeta(session) {
+  return {
+    sessionId: session.sessionId,
+    mode: session.mode === 'new' ? 'new' : 'existing',
+    fileId: session.fileId || null,
+    filename: sanitizeScreenshotFilename(session.filename || 'Screenshot.png'),
+    folderName: session.folderName || 'Chrome_SaveShot_ScreenShots',
+    webViewLink: session.webViewLink || '',
+    pageUrl: session.pageUrl || '',
+    pageTitle: session.pageTitle || '',
+    captureMode: session.captureMode === 'region' ? 'region' : 'visible',
+    incognito: Boolean(session.incognito),
+    updatedAt: Date.now(),
+  };
+}
+
+function putRamEditorSession(session) {
+  editorSessions.delete(session.sessionId);
+  while (editorSessions.size >= MAX_RAM_EDITOR_SESSIONS) {
+    const oldestId = editorSessions.keys().next().value;
+    if (!oldestId) break;
+    editorSessions.delete(oldestId);
   }
-  editorSessions.delete(sessionId);
+  editorSessions.set(session.sessionId, session);
 }
 
 function clearAllEditorSessions() {
-  for (const [, entry] of editorSessions) {
-    if (entry?.timer) clearTimeout(entry.timer);
-  }
   editorSessions.clear();
 }
 
-function createEditorSession(data) {
-  while (editorSessions.size >= MAX_EDITOR_SESSIONS) {
-    const oldestId = editorSessions.keys().next().value;
-    if (!oldestId) break;
-    deleteEditorSession(oldestId);
+async function persistEditorSessionMeta(session, { storePreUploadBlob = false } = {}) {
+  const data = await sessionStoreGet(SESSION_META_MAP_KEY);
+  const existingMap =
+    data?.[SESSION_META_MAP_KEY] && typeof data[SESSION_META_MAP_KEY] === 'object'
+      ? { ...data[SESSION_META_MAP_KEY] }
+      : {};
+
+  delete existingMap[session.sessionId];
+  existingMap[session.sessionId] = serializeSessionMeta(session);
+
+  const ids = Object.keys(existingMap);
+  const evictedPngKeys = [];
+  while (ids.length > MAX_PERSISTED_EDITOR_SESSIONS) {
+    const evictedId = ids.shift();
+    delete existingMap[evictedId];
+    evictedPngKeys.push(`${PREUPLOAD_PNG_PREFIX}${evictedId}`);
   }
 
-  const sessionId = crypto.randomUUID();
-  const timer = setTimeout(() => {
-    deleteEditorSession(sessionId);
-  }, EDITOR_SESSION_TTL_MS);
-  timer?.unref?.();
+  if (evictedPngKeys.length > 0) {
+    await sessionStoreRemove(evictedPngKeys);
+  }
 
+  await sessionStoreSet({ [SESSION_META_MAP_KEY]: existingMap });
+
+  if (storePreUploadBlob && session.mode === 'new' && session.pngBlob) {
+    try {
+      // Keep at most 2 pre-upload PNGs in chrome.storage.session so 10MB quota is respected
+      const allSessionData = await sessionStoreGet(null);
+      const pngKeys = Object.keys(allSessionData).filter((k) =>
+        k.startsWith(PREUPLOAD_PNG_PREFIX)
+      );
+      if (pngKeys.length >= 2) {
+        await sessionStoreRemove(pngKeys.slice(0, pngKeys.length - 1));
+      }
+      const dataUrl = await blobToDataUrl(session.pngBlob);
+      await sessionStoreSet({
+        [`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`]: dataUrl,
+      });
+    } catch {
+      // Best-effort if image exceeds session quota; RAM and editor canvas still hold pixels
+    }
+  }
+}
+
+async function createEditorSession(data) {
+  const sessionId = crypto.randomUUID();
   const session = {
     sessionId,
     mode: data.mode === 'new' ? 'new' : 'existing',
@@ -172,14 +302,22 @@ function createEditorSession(data) {
     pageTitle: data.pageTitle || '',
     captureMode: data.captureMode === 'region' ? 'region' : 'visible',
     incognito: Boolean(data.incognito),
-    timer,
   };
 
-  editorSessions.set(sessionId, session);
+  putRamEditorSession(session);
+  await persistEditorSessionMeta(session, {
+    storePreUploadBlob: session.mode === 'new',
+  });
   return session;
 }
 
-function getValidEditorSession(sessionId) {
+/**
+ * Resolve an editor session across MV3 service-worker idle restarts:
+ * 1. Fast L1 in-memory Map (0ms when SW stayed awake)
+ * 2. L2 chrome.storage.session (survives 30-second MV3 SW idle termination)
+ * 3. L3 trusted editor page fallback context (survives even manual extension reloads while signed in)
+ */
+async function resolveEditorSession(sessionId, fallbackContext = null) {
   if (typeof sessionId !== 'string' || !EDITOR_SESSION_ID_PATTERN.test(sessionId)) {
     throw new SaveShotError({
       code: 'EDITOR_SESSION_EXPIRED',
@@ -187,16 +325,94 @@ function getValidEditorSession(sessionId) {
         'This editor session is invalid or expired. Capture a new screenshot or click Edit from the SaveShot popup.',
     });
   }
-  const session = editorSessions.get(sessionId);
-  if (!session) {
-    throw new SaveShotError({
-      code: 'EDITOR_SESSION_EXPIRED',
-      userMessage:
-        'This editor session has expired. Capture a new screenshot or click Edit from the SaveShot popup.',
-    });
+
+  const ramHit = editorSessions.get(sessionId);
+  if (ramHit) {
+    return ramHit;
   }
-  return session;
+
+  const preUploadKey = `${PREUPLOAD_PNG_PREFIX}${sessionId}`;
+  const stored = await sessionStoreGet([SESSION_META_MAP_KEY, preUploadKey]);
+  const storedMeta = stored?.[SESSION_META_MAP_KEY]?.[sessionId];
+
+  if (storedMeta && typeof storedMeta === 'object') {
+    let pngBlob = null;
+    if (typeof stored[preUploadKey] === 'string' && stored[preUploadKey].startsWith('data:image/')) {
+      try {
+        pngBlob = await dataUrlToBlob(stored[preUploadKey]);
+      } catch {
+        pngBlob = null;
+      }
+    }
+
+    const rehydrated = {
+      sessionId,
+      mode: storedMeta.mode === 'new' ? 'new' : 'existing',
+      fileId: storedMeta.fileId ? validateDriveFileId(storedMeta.fileId) : null,
+      filename: sanitizeScreenshotFilename(storedMeta.filename || 'Screenshot.png'),
+      folderName: storedMeta.folderName || 'Chrome_SaveShot_ScreenShots',
+      webViewLink: storedMeta.webViewLink || '',
+      pngBlob,
+      pageUrl: storedMeta.pageUrl || '',
+      pageTitle: storedMeta.pageTitle || '',
+      captureMode: storedMeta.captureMode === 'region' ? 'region' : 'visible',
+      incognito: Boolean(storedMeta.incognito),
+    };
+    putRamEditorSession(rehydrated);
+    return rehydrated;
+  }
+
+  if (fallbackContext && typeof fallbackContext === 'object') {
+    const auth = await getAuthState();
+    if (!auth.signedOut) {
+      const mode = fallbackContext.mode === 'new' ? 'new' : 'existing';
+      const fileId =
+        mode === 'existing' && fallbackContext.fileId
+          ? validateDriveFileId(fallbackContext.fileId)
+          : null;
+
+      if (mode === 'new' || fileId) {
+        const reconstructed = {
+          sessionId,
+          mode,
+          fileId,
+          filename: sanitizeScreenshotFilename(fallbackContext.filename || 'Screenshot.png'),
+          folderName: fallbackContext.folderName || 'Chrome_SaveShot_ScreenShots',
+          webViewLink: typeof fallbackContext.webViewLink === 'string' ? fallbackContext.webViewLink : '',
+          pngBlob: null,
+          pageUrl: typeof fallbackContext.pageUrl === 'string' ? fallbackContext.pageUrl : '',
+          pageTitle: typeof fallbackContext.pageTitle === 'string' ? fallbackContext.pageTitle : '',
+          captureMode: fallbackContext.captureMode === 'region' ? 'region' : 'visible',
+          incognito: Boolean(fallbackContext.incognito),
+        };
+        putRamEditorSession(reconstructed);
+        await persistEditorSessionMeta(reconstructed);
+        return reconstructed;
+      }
+    }
+  }
+
+  throw new SaveShotError({
+    code: 'EDITOR_SESSION_EXPIRED',
+    userMessage:
+      'This editor session has expired. Capture a new screenshot or click Edit from the SaveShot popup.',
+  });
 }
+
+/**
+ * Test helper to simulate Chrome terminating and cold-restarting the MV3 service worker
+ * (wiping all module-level RAM Maps while preserving chrome.storage.session and chrome.storage.local).
+ */
+export function resetInMemoryWorkerStateForTests() {
+  clearRecentCaptureCache();
+  clearAllEditorSessions();
+  if (fallbackExpiryTimer) {
+    clearTimeout(fallbackExpiryTimer);
+    fallbackExpiryTimer = null;
+  }
+  lastFailedCapture = null;
+}
+globalThis.__saveshotResetRamForTest = resetInMemoryWorkerStateForTests;
 
 async function openEditorTab(sessionId, windowId) {
   const url = chrome.runtime.getURL(
@@ -470,7 +686,7 @@ async function captureVisibleTabFlow({
       const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
         incognito,
       });
-      const session = createEditorSession({
+      const session = await createEditorSession({
         mode: 'new',
         fileId: null,
         filename,
@@ -597,7 +813,7 @@ async function handleRegionSelected(selection, senderTab) {
       const filename = buildScreenshotFilename(liveTab?.url || '', new Date(), {
         incognito,
       });
-      const session = createEditorSession({
+      const session = await createEditorSession({
         mode: 'new',
         fileId: null,
         filename,
@@ -666,7 +882,7 @@ async function parseEditedPngDataUrl(dataUrl) {
 }
 
 async function handleSaveEditedScreenshot(message) {
-  const session = getValidEditorSession(message.sessionId);
+  const session = await resolveEditorSession(message.sessionId, message.sessionContext);
   const settings = await getSettings();
   const saveMode = message.saveMode === 'new' ? 'new' : 'replace';
   const imageModified = Boolean(message.imageModified);
@@ -714,6 +930,7 @@ async function handleSaveEditedScreenshot(message) {
     if (pngBlob) {
       session.pngBlob = pngBlob;
     }
+    await persistEditorSessionMeta(session);
 
     if (session.pngBlob) {
       cacheUploadedCapture({
@@ -775,6 +992,8 @@ async function handleSaveEditedScreenshot(message) {
   session.webViewLink = result.upload.webViewLink;
   session.folderName = result.upload.folderName;
   session.pngBlob = uploadBlob;
+  await persistEditorSessionMeta(session);
+  await sessionStoreRemove(`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`);
 
   return {
     ok: true,
@@ -873,6 +1092,7 @@ export function registerServiceWorkerListeners() {
               clearFallbackCapture();
               clearRecentCaptureCache();
               clearAllEditorSessions();
+              await clearSessionStorageArea();
               await signOut();
               sendResponse({ ok: true });
               return;
@@ -935,7 +1155,7 @@ export function registerServiceWorkerListeners() {
 
               let session;
               if (cached) {
-                session = createEditorSession({
+                session = await createEditorSession({
                   mode: 'existing',
                   fileId: cached.fileId,
                   filename: cached.filename,
@@ -948,25 +1168,44 @@ export function registerServiceWorkerListeners() {
                   incognito: cached.incognito,
                 });
               } else {
-                const [latest] = await getRecentUploads();
-                if (!latest?.id) {
-                  throw new SaveShotError({
-                    code: 'NO_RECENT_CAPTURE',
-                    userMessage: 'No recent screenshot found to edit.',
+                const storedLast = (await sessionStoreGet(LAST_UPLOADED_META_KEY))?.[
+                  LAST_UPLOADED_META_KEY
+                ];
+                if (storedLast?.fileId) {
+                  const safeId = validateDriveFileId(storedLast.fileId);
+                  session = await createEditorSession({
+                    mode: 'existing',
+                    fileId: safeId,
+                    filename: storedLast.filename || 'Screenshot.png',
+                    folderName: storedLast.folderName || settings.folderName,
+                    webViewLink: storedLast.webViewLink || '',
+                    pngBlob: null,
+                    pageUrl: storedLast.pageUrl || '',
+                    pageTitle: storedLast.pageTitle || '',
+                    captureMode: storedLast.mode,
+                    incognito: Boolean(storedLast.incognito),
+                  });
+                } else {
+                  const [latest] = await getRecentUploads();
+                  if (!latest?.id) {
+                    throw new SaveShotError({
+                      code: 'NO_RECENT_CAPTURE',
+                      userMessage: 'No recent screenshot found to edit.',
+                    });
+                  }
+                  const safeId = validateDriveFileId(latest.id);
+                  session = await createEditorSession({
+                    mode: 'existing',
+                    fileId: safeId,
+                    filename: latest.name || 'Screenshot.png',
+                    folderName: settings.folderName,
+                    webViewLink: latest.webViewLink || '',
+                    pngBlob: null,
+                    pageTitle: latest.pageTitle || '',
+                    captureMode: latest.mode,
+                    incognito: false,
                   });
                 }
-                const safeId = validateDriveFileId(latest.id);
-                session = createEditorSession({
-                  mode: 'existing',
-                  fileId: safeId,
-                  filename: latest.name || 'Screenshot.png',
-                  folderName: settings.folderName,
-                  webViewLink: latest.webViewLink || '',
-                  pngBlob: null,
-                  pageTitle: latest.pageTitle || '',
-                  captureMode: latest.mode,
-                  incognito: false,
-                });
               }
 
               await openEditorTab(session.sessionId, sender?.tab?.windowId);
@@ -983,7 +1222,7 @@ export function registerServiceWorkerListeners() {
               const cached = recentUploadedCaptures.get(safeId);
               const recentItem = recentUploads.find((item) => item.id === safeId);
 
-              const session = createEditorSession({
+              const session = await createEditorSession({
                 mode: 'existing',
                 fileId: safeId,
                 filename:
@@ -1013,7 +1252,7 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_EDITOR_SESSION': {
-              const session = getValidEditorSession(message.sessionId);
+              const session = await resolveEditorSession(message.sessionId);
               const settings = await getSettings();
 
               if (!session.pngBlob) {
@@ -1039,6 +1278,9 @@ export function registerServiceWorkerListeners() {
                   filename: session.filename,
                   folderName: session.folderName || settings.folderName,
                   webViewLink: session.webViewLink || '',
+                  captureMode: session.captureMode || 'visible',
+                  pageUrl: session.pageUrl || '',
+                  pageTitle: session.pageTitle || '',
                   incognito: Boolean(session.incognito),
                   autoCopyLink: Boolean(settings.autoCopyLink),
                 },
@@ -1054,16 +1296,32 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_FALLBACK_PNG': {
-              if (!lastFailedCapture?.blob) {
-                sendResponse({ ok: false, error: 'Saved screenshot is no longer in memory.' });
+              if (lastFailedCapture?.blob) {
+                const dataUrl = await blobToDataUrl(lastFailedCapture.blob);
+                sendResponse({
+                  ok: true,
+                  dataUrl,
+                  filename: lastFailedCapture.filename,
+                });
                 return;
               }
-              const dataUrl = await blobToDataUrl(lastFailedCapture.blob);
-              sendResponse({
-                ok: true,
-                dataUrl,
-                filename: lastFailedCapture.filename,
-              });
+
+              const storedFallback = (await sessionStoreGet(FALLBACK_CAPTURE_KEY))?.[
+                FALLBACK_CAPTURE_KEY
+              ];
+              if (
+                storedFallback?.dataUrl &&
+                storedFallback.expiresAt > Date.now()
+              ) {
+                sendResponse({
+                  ok: true,
+                  dataUrl: storedFallback.dataUrl,
+                  filename: storedFallback.filename || 'Screenshot.png',
+                });
+                return;
+              }
+
+              sendResponse({ ok: false, error: 'Saved screenshot is no longer in memory.' });
               return;
             }
 
