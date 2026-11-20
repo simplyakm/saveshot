@@ -19,6 +19,7 @@ const els = {
   folderNameInput: document.getElementById('folder-name-input'),
   saveFolderBtn: document.getElementById('save-folder-btn'),
   autoCopyCheckbox: document.getElementById('auto-copy-checkbox'),
+  editBeforeUploadCheckbox: document.getElementById('edit-before-upload-checkbox'),
   incognitoNotice: document.getElementById('incognito-notice'),
   restrictedWarning: document.getElementById('restricted-warning'),
   captureVisibleBtn: document.getElementById('capture-visible-btn'),
@@ -46,6 +47,16 @@ let currentState = {
   },
   busy: false,
 };
+
+function safeHttpsUrl(url, fallback = '') {
+  if (typeof url !== 'string' || !url) return fallback;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' ? parsed.href : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function openHelpPage({ kind = '', errorCode = '', jumpToFeedback = false } = {}) {
   const params = new URLSearchParams();
@@ -192,15 +203,63 @@ function showStatus(type, content) {
     label.textContent = content.message;
     els.statusBanner.append(label);
 
-    if (content.webViewLink) {
-      const openLink = document.createElement('a');
-      openLink.className = 'small-btn';
-      openLink.href = content.webViewLink;
-      openLink.target = '_blank';
-      openLink.rel = 'noopener noreferrer';
-      openLink.textContent = 'Open';
-      els.statusBanner.append(openLink);
+    const safeLink = safeHttpsUrl(content.webViewLink);
+    if (content.fileId || safeLink) {
+      const inlineActions = document.createElement('div');
+      inlineActions.className = 'status-inline-actions';
+
+      if (content.fileId) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'small-btn';
+        editBtn.textContent = 'Edit';
+        editBtn.title = 'Annotate, redact, rotate, or rename screenshot';
+        editBtn.addEventListener('click', () => {
+          openEditorForUpload({
+            fileId: content.fileId,
+            filename: content.filename || 'Screenshot.png',
+            webViewLink: safeLink,
+            folderName: content.folderName || currentState.settings?.folderName,
+          });
+        });
+        inlineActions.append(editBtn);
+      }
+
+      if (safeLink) {
+        const openLink = document.createElement('a');
+        openLink.className = 'small-btn';
+        openLink.href = safeLink;
+        openLink.target = '_blank';
+        openLink.rel = 'noopener noreferrer';
+        openLink.textContent = 'Open';
+        inlineActions.append(openLink);
+      }
+
+      els.statusBanner.append(inlineActions);
     }
+  }
+}
+
+async function openEditorForUpload({ fileId, filename, webViewLink, folderName }) {
+  if (!fileId) return;
+  try {
+    const res = await sendMessage({
+      type: 'OPEN_EDITOR',
+      fileId,
+      filename,
+      webViewLink,
+      folderName,
+    });
+    if (res.ok) {
+      window.close();
+      return;
+    }
+    showStatus('error', {
+      message: res.error || 'Could not open screenshot editor.',
+      code: res.code,
+      requiresReauth: res.requiresReauth,
+    });
+  } catch (err) {
+    showStatus('error', err.message || 'Could not open screenshot editor.');
   }
 }
 
@@ -217,9 +276,10 @@ function renderProfile(profile) {
   els.userAvatar.innerHTML = '';
   const initial = (name || email || 'G').trim().charAt(0).toUpperCase();
 
-  if (profile?.picture) {
+  const safePic = safeHttpsUrl(profile?.picture);
+  if (safePic) {
     const img = document.createElement('img');
-    img.src = profile.picture;
+    img.src = safePic;
     img.alt = name;
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('error', () => {
@@ -235,10 +295,15 @@ function renderSettings(settings) {
   currentState.settings = settings;
   const folderName = settings?.folderName || 'Chrome_SaveShot_ScreenShots';
   els.folderChipName.textContent = folderName;
-  els.folderChip.href =
-    settings?.folderWebViewLink || 'https://drive.google.com/drive/my-drive';
+  els.folderChip.href = safeHttpsUrl(
+    settings?.folderWebViewLink,
+    'https://drive.google.com/drive/my-drive'
+  );
   els.folderNameInput.value = folderName;
   els.autoCopyCheckbox.checked = Boolean(settings?.autoCopyLink);
+  if (els.editBeforeUploadCheckbox) {
+    els.editBeforeUploadCheckbox.checked = Boolean(settings?.editBeforeUpload);
+  }
 }
 
 function renderRecentUploads(uploads) {
@@ -260,7 +325,10 @@ function renderRecentUploads(uploads) {
     const li = document.createElement('li');
     li.className = 'upload-item';
 
-    if (item.thumbnailDataUrl) {
+    if (
+      typeof item.thumbnailDataUrl === 'string' &&
+      item.thumbnailDataUrl.startsWith('data:image/')
+    ) {
       const thumb = document.createElement('img');
       thumb.className = 'upload-thumb';
       thumb.src = item.thumbnailDataUrl;
@@ -297,31 +365,52 @@ function renderRecentUploads(uploads) {
     const actions = document.createElement('div');
     actions.className = 'upload-actions';
 
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'small-btn';
-    copyBtn.textContent = 'Copy';
-    copyBtn.title = 'Copy Google Drive link';
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(item.webViewLink);
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => {
-          copyBtn.textContent = 'Copy';
-        }, 1600);
-      } catch {
-        copyBtn.textContent = 'Error';
-      }
-    });
+    const safeLink = safeHttpsUrl(item.webViewLink);
 
-    const openLink = document.createElement('a');
-    openLink.className = 'small-btn';
-    openLink.href = item.webViewLink;
-    openLink.target = '_blank';
-    openLink.rel = 'noopener noreferrer';
-    openLink.textContent = 'Open';
-    openLink.title = 'Open screenshot in Google Drive';
+    if (item.id) {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'small-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.title = 'Edit, redact, rotate, or rename in Google Drive';
+      editBtn.addEventListener('click', () => {
+        openEditorForUpload({
+          fileId: item.id,
+          filename: item.name || 'Screenshot.png',
+          webViewLink: safeLink,
+          folderName: currentState.settings?.folderName,
+        });
+      });
+      actions.append(editBtn);
+    }
 
-    actions.append(copyBtn, openLink);
+    if (safeLink) {
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'small-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy Google Drive link';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(safeLink);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => {
+            copyBtn.textContent = 'Copy';
+          }, 1600);
+        } catch {
+          copyBtn.textContent = 'Error';
+        }
+      });
+
+      const openLink = document.createElement('a');
+      openLink.className = 'small-btn';
+      openLink.href = safeLink;
+      openLink.target = '_blank';
+      openLink.rel = 'noopener noreferrer';
+      openLink.textContent = 'Open';
+      openLink.title = 'Open screenshot in Google Drive';
+
+      actions.append(copyBtn, openLink);
+    }
+
     li.append(meta, actions);
     els.uploadList.append(li);
   }
@@ -476,12 +565,24 @@ els.autoCopyCheckbox.addEventListener('change', async () => {
   if (res.ok) renderSettings(res.settings);
 });
 
+els.editBeforeUploadCheckbox?.addEventListener('change', async () => {
+  const res = await sendMessage({
+    type: 'UPDATE_SETTINGS',
+    patch: { editBeforeUpload: els.editBeforeUploadCheckbox.checked },
+  });
+  if (res.ok) renderSettings(res.settings);
+});
+
 els.captureVisibleBtn.addEventListener('click', async () => {
   if (currentState.busy) return;
   currentState.busy = true;
   updateCaptureAvailability();
   const folderName = currentState.settings?.folderName || 'Chrome_SaveShot_ScreenShots';
-  showStatus('loading', `Uploading to "${folderName}"...`);
+  const willOpenEditor = Boolean(currentState.settings?.editBeforeUpload);
+  showStatus(
+    'loading',
+    willOpenEditor ? 'Opening screenshot editor...' : `Uploading to "${folderName}"...`
+  );
 
   try {
     const res = await sendMessage({
@@ -499,13 +600,19 @@ els.captureVisibleBtn.addEventListener('click', async () => {
       return;
     }
 
+    if (res.openedEditor) {
+      window.close();
+      return;
+    }
+
     renderSettings(res.settings);
     renderRecentUploads(res.recentUploads);
 
     let copied = false;
-    if (res.settings?.autoCopyLink && res.upload?.webViewLink) {
+    const safeLink = safeHttpsUrl(res.upload?.webViewLink);
+    if (res.settings?.autoCopyLink && safeLink) {
       try {
-        await navigator.clipboard.writeText(res.upload.webViewLink);
+        await navigator.clipboard.writeText(safeLink);
         copied = true;
       } catch {
         // Ignore clipboard error when popup loses focus
@@ -516,7 +623,10 @@ els.captureVisibleBtn.addEventListener('click', async () => {
       message: copied
         ? `Saved to "${res.upload.folderName}" and link copied!`
         : `Saved to "${res.upload.folderName}"!`,
-      webViewLink: res.upload.webViewLink,
+      fileId: res.upload.id,
+      filename: res.upload.name,
+      folderName: res.upload.folderName,
+      webViewLink: safeLink,
     });
   } catch (err) {
     showStatus('error', err.message || 'Could not upload screenshot.');

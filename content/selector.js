@@ -449,10 +449,21 @@
       webViewLink = '',
       thumbnailDataUrl = '',
       autoCopyLink = false,
+      canEdit = false,
       hasFallback = false,
       fallbackDataUrl = '',
       fallbackFilename = 'Screenshot.png',
     } = payload || {};
+
+    const safeHttpsLink = (() => {
+      if (typeof webViewLink !== 'string' || !webViewLink) return '';
+      try {
+        const parsed = new URL(webViewLink);
+        return parsed.protocol === 'https:' ? parsed.href : '';
+      } catch {
+        return '';
+      }
+    })();
 
     const vv = window.visualViewport;
     const vvScale = vv?.scale || 1;
@@ -576,20 +587,21 @@
         .close:hover { opacity: 0.7; }
         .actions {
           display: flex;
-          gap: 8px;
+          gap: 6px;
         }
         .btn {
           flex: 1;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          padding: 6px 10px;
+          padding: 6px 8px;
           border-radius: 8px;
           font-size: 12px;
           font-weight: 600;
           cursor: pointer;
           text-decoration: none;
           border: 1px solid transparent;
+          white-space: nowrap;
           transition: background 120ms ease;
         }
         .btn-primary {
@@ -630,7 +642,7 @@
       return dot;
     };
 
-    if (thumbnailDataUrl) {
+    if (typeof thumbnailDataUrl === 'string' && thumbnailDataUrl.startsWith('data:image/')) {
       const img = document.createElement('img');
       img.className = 'thumb';
       img.src = thumbnailDataUrl;
@@ -651,21 +663,30 @@
     msgEl.textContent = message;
     if (!message) msgEl.style.display = 'none';
 
-    if (status === 'success' && webViewLink) {
+    const dismissToast = () => {
+      if (toastDismissTimer) {
+        clearTimeout(toastDismissTimer);
+        toastDismissTimer = null;
+      }
+      removeHostElement(TOAST_HOST_ID);
+    };
+
+    if (status === 'success' && safeHttpsLink) {
       actionsEl.style.display = 'flex';
+      const defaultCopyLabel = canEdit ? 'Copy link' : 'Copy Drive link';
 
       const copyBtn = document.createElement('button');
       copyBtn.className = 'btn btn-primary';
-      copyBtn.textContent = 'Copy Drive link';
+      copyBtn.textContent = defaultCopyLabel;
 
       // Best-effort auto-copy when page has focus and setting is enabled
       if (autoCopyLink && document.hasFocus() && navigator.clipboard?.writeText) {
         navigator.clipboard
-          .writeText(webViewLink)
+          .writeText(safeHttpsLink)
           .then(() => {
             copyBtn.textContent = 'Link copied!';
             setTimeout(() => {
-              copyBtn.textContent = 'Copy Drive link';
+              copyBtn.textContent = defaultCopyLabel;
             }, 2000);
           })
           .catch(() => {});
@@ -673,27 +694,46 @@
 
       copyBtn.addEventListener('click', async () => {
         try {
-          await navigator.clipboard.writeText(webViewLink);
+          await navigator.clipboard.writeText(safeHttpsLink);
           copyBtn.textContent = 'Copied!';
           setTimeout(() => {
-            copyBtn.textContent = 'Copy Drive link';
+            copyBtn.textContent = defaultCopyLabel;
           }, 1800);
         } catch {
           copyBtn.textContent = 'Copy failed';
         }
       });
 
+      actionsEl.append(copyBtn);
+
+      if (canEdit) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-secondary';
+        editBtn.style.flex = '0.72';
+        editBtn.textContent = 'Edit';
+        editBtn.title = 'Annotate, redact, rotate, or rename in Google Drive';
+        editBtn.addEventListener('click', () => {
+          editBtn.disabled = true;
+          chrome.runtime.sendMessage({ type: 'OPEN_LAST_CAPTURE_EDITOR' }, () => {
+            void chrome.runtime.lastError;
+            dismissToast();
+          });
+        });
+        actionsEl.append(editBtn);
+      }
+
       const openLink = document.createElement('a');
       openLink.className = 'btn btn-secondary';
-      openLink.href = webViewLink;
+      if (canEdit) openLink.style.flex = '0.78';
+      openLink.href = safeHttpsLink;
       openLink.target = '_blank';
       openLink.rel = 'noopener noreferrer';
-      openLink.textContent = 'Open in Drive';
+      openLink.textContent = canEdit ? 'Open' : 'Open in Drive';
 
-      actionsEl.append(copyBtn, openLink);
+      actionsEl.append(openLink);
     } else if (status === 'error' && (hasFallback || fallbackDataUrl)) {
       actionsEl.style.display = 'flex';
-      if (fallbackDataUrl) {
+      if (typeof fallbackDataUrl === 'string' && fallbackDataUrl.startsWith('data:image/')) {
         const saveLocalLink = document.createElement('a');
         saveLocalLink.className = 'btn btn-primary';
         saveLocalLink.href = fallbackDataUrl;

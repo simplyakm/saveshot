@@ -8,15 +8,19 @@ import {
   blobToDataUrl,
   buildScreenshotFilename,
   computeCropRect,
-   dataUrlToBlob,
+  dataUrlToBlob,
   isCapturableUrl,
+  sanitizeScreenshotFilename,
 } from '../lib/capture.js';
 import {
   buildMultipartUploadBody,
+  downloadScreenshotFromDrive,
   ensureDriveFolder,
   escapeDriveQueryValue,
   fetchDriveWithRetry,
+  updateScreenshotInDrive,
   uploadScreenshotToDrive,
+  validateDriveFileId,
 } from '../lib/drive.js';
 import {
   fetchGoogleUserInfo,
@@ -41,12 +45,21 @@ import {
   sanitizeFolderName,
   saveAccountFolderCache,
   setAuthState,
+  updateRecentUpload,
   updateSettings,
 } from '../lib/storage.js';
 import {
   buildFeedbackPayload,
   getEnvironmentSummary,
 } from '../lib/feedback.js';
+import {
+  clampPoint,
+  computeArrowGeometry,
+  normalizeRect,
+  renderAnnotation,
+  sanitizeHexColor,
+  transformSourceToCanvas,
+} from '../lib/editor-core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -1194,6 +1207,613 @@ test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, C
       (m) => m.message?.type === 'SHOW_TOAST' && /tab changed/i.test(m.message.payload?.message || '')
     );
     assert.ok(tabSwitchedToast, 'Should surface TAB_SWITCHED error toast');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('sanitizeScreenshotFilename neutralizes path traversal, RLO bidi spoofing, XSS chars, reserved names, and length overflows', () => {
+  assert.equal(sanitizeScreenshotFilename('Bug Report #42'), 'Bug Report #42.png');
+  assert.equal(sanitizeScreenshotFilename('  My-Shot.PNG  '), 'My-Shot.png');
+  assert.equal(sanitizeScreenshotFilename('double.png.PNG'), 'double.png');
+
+  // Path traversal and directory separators
+  const traversal = sanitizeScreenshotFilename('../../etc/passwd');
+  assert.ok(!traversal.includes('/') && !traversal.includes('..'));
+  assert.equal(traversal, 'etc_passwd.png');
+
+  const winPath = sanitizeScreenshotFilename('..\\..\\Windows\\System32\\cmd.exe');
+  assert.ok(!winPath.includes('\\') && !winPath.includes('..'));
+  assert.equal(winPath, 'Windows_System32_cmd.exe.png');
+
+  // Right-to-Left Override (U+202E) extension spoofing defense
+  const rloSpoof = sanitizeScreenshotFilename('invoice\u202egnp.exe');
+  assert.ok(!rloSpoof.includes('\u202e'));
+  assert.equal(rloSpoof, 'invoicegnp.exe.png');
+
+  // Control characters and HTML/XSS metacharacters
+  const xssName = sanitizeScreenshotFilename('<img src=x onerror="alert(1)">\x00\r\n.png');
+  assert.ok(!xssName.includes('<') && !xssName.includes('>') && !xssName.includes('"'));
+  assert.ok(xssName.endsWith('.png'));
+
+  // Windows reserved device basenames fall back cleanly
+  for (const reserved of ['CON', 'con.png', 'PRN', 'AUX', 'NUL', 'COM1.png', 'LPT9']) {
+    assert.equal(
+      sanitizeScreenshotFilename(reserved, 'Fallback_Shot.png'),
+      'Fallback_Shot.png'
+    );
+  }
+
+  // Empty, dot-only, null/undefined, and reserved fallback
+  for (const emptyVal of ['', '   ', '...', '.png', null, undefined]) {
+    assert.equal(sanitizeScreenshotFilename(emptyVal), 'Screenshot.png');
+  }
+  assert.equal(sanitizeScreenshotFilename('', 'CON.png'), 'Screenshot.png');
+
+  // Overlong names capped at <= 104 chars total (100 base + .png)
+  const huge = sanitizeScreenshotFilename('a'.repeat(300));
+  assert.equal(huge.length, 104);
+  assert.ok(huge.endsWith('.png'));
+
+  // Valid Unicode names preserved
+  assert.equal(
+    sanitizeScreenshotFilename('日本語_テスト 01.png'),
+    '日本語_テスト 01.png'
+  );
+});
+
+test('Drive fileId validation, in-place file replacement (multipart + rename-only PATCH), and media download', async () => {
+  // 1. Reject path traversal, query injection, prototype pollution keys, and malformed IDs
+  for (const badId of [
+    '',
+    'ab',
+    '../about',
+    'file/../../etc',
+    'file123?fields=*',
+    'file123&alt=media',
+    'file123#frag',
+    'file with space',
+    '__proto__',
+    'constructor',
+    'prototype',
+    'a'.repeat(129),
+    null,
+    undefined,
+    42,
+  ]) {
+    assert.throws(
+      () => validateDriveFileId(badId),
+      (err) => err.code === 'INVALID_FILE_ID',
+      `Should reject malicious or invalid fileId: ${String(badId)}`
+    );
+  }
+
+  assert.equal(
+    validateDriveFileId('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'),
+    '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'
+  );
+
+  // Corrupted cached folderId in ensureDriveFolder self-heals without throwing INVALID_FILE_ID
+  const healedFolder = await ensureDriveFolder(
+    'tok-heal',
+    { folderName: 'Safe_Folder', cachedFolderId: '../bad?inject=1', accountKey: 'u@e.com' },
+    async (url) => {
+      assert.ok(!url.includes('../bad'), 'Must never send unvalidated folderId to network');
+      return new Response(
+        JSON.stringify({ files: [{ id: 'clean-folder-id', name: 'Safe_Folder' }] }),
+        { status: 200 }
+      );
+    }
+  );
+  assert.equal(healedFolder.id, 'clean-folder-id');
+
+  // 2. Full multipart PATCH replaces PNG bytes + updates filename while preserving webViewLink
+  const newPng = new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], { type: 'image/png' });
+  let patchCall = null;
+  const replaced = await updateScreenshotInDrive(
+    'tok-patch',
+    {
+      fileId: 'drive_file_1234',
+      filename: 'Annotated_Shot.png',
+      pngBlob: newPng,
+    },
+    async (url, opts) => {
+      patchCall = { url, method: opts.method, headers: opts.headers, bodyText: await opts.body.text() };
+      return new Response(
+        JSON.stringify({
+          id: 'drive_file_1234',
+          name: 'Annotated_Shot.png',
+          webViewLink: 'https://drive.google.com/file/d/drive_file_1234/view',
+          modifiedTime: '2026-11-20T12:00:00.000Z',
+          size: '7',
+        }),
+        { status: 200 }
+      );
+    }
+  );
+  assert.equal(patchCall.method, 'PATCH');
+  assert.match(patchCall.url, /\/upload\/drive\/v3\/files\/drive_file_1234\?uploadType=multipart/);
+  assert.match(patchCall.headers['Content-Type'], /^multipart\/related;/);
+  assert.match(patchCall.bodyText, /"name":"Annotated_Shot\.png"/);
+  assert.equal(replaced.id, 'drive_file_1234');
+  assert.equal(replaced.name, 'Annotated_Shot.png');
+  assert.equal(replaced.webViewLink, 'https://drive.google.com/file/d/drive_file_1234/view');
+
+  // 3. Metadata-only PATCH (pngBlob: null) renames without uploading binary multipart body
+  let renameCall = null;
+  const renamedOnly = await updateScreenshotInDrive(
+    'tok-patch',
+    {
+      fileId: 'drive_file_1234',
+      filename: 'Renamed_Only.png',
+      pngBlob: null,
+    },
+    async (url, opts) => {
+      renameCall = { url, method: opts.method, headers: opts.headers, body: opts.body };
+      return new Response(
+        JSON.stringify({
+          id: 'drive_file_1234',
+          name: 'Renamed_Only.png',
+          webViewLink: 'https://drive.google.com/file/d/drive_file_1234/view',
+        }),
+        { status: 200 }
+      );
+    }
+  );
+  assert.equal(renameCall.method, 'PATCH');
+  assert.match(renameCall.url, /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/drive_file_1234\?fields=/);
+  assert.equal(renameCall.body, JSON.stringify({ name: 'Renamed_Only.png' }));
+  assert.equal(renamedOnly.name, 'Renamed_Only.png');
+
+  // 4. Media download normalizes octet-stream to image/png and rejects empty files
+  const downloaded = await downloadScreenshotFromDrive(
+    'tok-dl',
+    'drive_file_1234',
+    async (url) => {
+      assert.equal(url, 'https://www.googleapis.com/drive/v3/files/drive_file_1234?alt=media');
+      return new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
+    }
+  );
+  assert.equal(downloaded.type, 'image/png');
+  assert.equal(downloaded.size, 4);
+
+  await assert.rejects(
+    () =>
+      downloadScreenshotFromDrive(
+        'tok-dl',
+        'drive_file_1234',
+        async () => new Response(new Uint8Array([]), { status: 200 })
+      ),
+    (err) => err.code === 'EMPTY_DRIVE_FILE'
+  );
+});
+
+test('editor-core geometry, subpixel-proof redaction snapping, color validation, and mock canvas rendering', () => {
+  // 1. Outward integer pixel snapping for redaction prevents anti-aliased edge bleed
+  const snapped = normalizeRect(10.8, 20.9, 15.1, 30.2, 100, 100, { snapOutward: true });
+  assert.deepEqual(snapped, { x: 10, y: 20, width: 6, height: 11 });
+
+  // Reversed drag + out-of-bounds + NaN/Infinity clamping
+  const reversed = normalizeRect(150, 90, -20, 10, 100, 80, { snapOutward: true });
+  assert.deepEqual(reversed, { x: 0, y: 10, width: 100, height: 70 });
+  assert.deepEqual(clampPoint(Number.NaN, Number.POSITIVE_INFINITY, 200, 100), { x: 0, y: 0 });
+  assert.deepEqual(clampPoint(250, 150, 200, 100), { x: 200, y: 100 });
+
+  // 2. Color validation blocks CSS injection strings
+  assert.equal(sanitizeHexColor('#EF4444'), '#ef4444');
+  assert.equal(sanitizeHexColor('red; background:url(x)'), '#ef4444');
+  assert.equal(sanitizeHexColor('#fff'), '#ef4444');
+
+  // 3. Arrow geometry handles zero-length drag without NaN
+  assert.equal(computeArrowGeometry(10, 10, 10, 10, 4), null);
+  const arrow = computeArrowGeometry(0, 0, 100, 0, 4);
+  assert.ok(arrow.shaftEnd.x < 100 && arrow.shaftEnd.x > 80);
+
+  // 4. Mock 2D context exercises all 7 annotation tools + transform error guard
+  const opsLog = [];
+  const mockCtx = {
+    canvas: { width: 200, height: 120 },
+    save: () => opsLog.push('save'),
+    restore: () => opsLog.push('restore'),
+    fillRect: (x, y, w, h) => opsLog.push(['fillRect', x, y, w, h, mockCtx.fillStyle]),
+    strokeRect: (x, y, w, h) => opsLog.push(['strokeRect', x, y, w, h]),
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    quadraticCurveTo: () => opsLog.push('curve'),
+    arc: () => opsLog.push('arc'),
+    ellipse: () => opsLog.push('ellipse'),
+    closePath: () => {},
+    stroke: () => opsLog.push('stroke'),
+    fill: () => opsLog.push('fill'),
+    strokeText: (t) => opsLog.push(['strokeText', t]),
+    fillText: (t) => opsLog.push(['fillText', t]),
+  };
+
+  assert.equal(renderAnnotation(mockCtx, null, 200, 120), false);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'unknown' }, 200, 120), false);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'text', text: '   ' }, 200, 120), false);
+
+  assert.equal(
+    renderAnnotation(
+      mockCtx,
+      { tool: 'redact', color: '#22c55e', x1: 5.4, y1: 6.7, x2: 25.2, y2: 18.1 },
+      200,
+      120
+    ),
+    true
+  );
+  // Redact MUST ignore user color and force solid #000000 on integer-expanded bounds
+  assert.deepEqual(
+    opsLog.find((entry) => Array.isArray(entry) && entry[0] === 'fillRect'),
+    ['fillRect', 5, 6, 21, 13, '#000000']
+  );
+
+  assert.equal(renderAnnotation(mockCtx, { tool: 'box', x1: 10, y1: 10, x2: 40, y2: 30 }, 200, 120), true);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'circle', x1: 10, y1: 10, x2: 40, y2: 30 }, 200, 120), true);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'line', x1: 10, y1: 10, x2: 40, y2: 30 }, 200, 120), true);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'arrow', x1: 10, y1: 10, x2: 60, y2: 40 }, 200, 120), true);
+  assert.equal(renderAnnotation(mockCtx, { tool: 'pencil', points: [{ x: 12, y: 12 }] }, 200, 120), true);
+  assert.equal(
+    renderAnnotation(
+      mockCtx,
+      { tool: 'pencil', points: [{ x: 10, y: 10 }, { x: 20, y: 25 }, { x: 35, y: 30 }, { x: 50, y: 50 }] },
+      200,
+      120
+    ),
+    true
+  );
+  assert.equal(
+    renderAnnotation(mockCtx, { tool: 'text', text: 'Line 1\nLine 2', x: 15, y: 20, color: '#ffffff' }, 200, 120),
+    true
+  );
+
+  assert.throws(() => transformSourceToCanvas({ width: 10, height: 10 }, 'skew-45', {}), /Unsupported transform/);
+});
+
+test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow, post-upload Replace vs New vs Rename-only, Drive media fallback, and signOut RAM wipe', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    const activeTabs = [
+      {
+        id: 77,
+        windowId: 3,
+        active: true,
+        url: 'https://app.example.com/billing',
+        title: 'Billing Portal',
+        incognito: false,
+      },
+    ];
+
+    const mock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: {
+          email: 'sec@example.com',
+          name: 'Sec Tester',
+          verifiedAt: Date.now(),
+        },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'folder-sec-1',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/folder-sec-1',
+          folderCacheByEmail: {
+            'sec@example.com': {
+              folderName: 'Chrome_SaveShot_ScreenShots',
+              folderId: 'folder-sec-1',
+              folderWebViewLink: 'https://drive.google.com/drive/folders/folder-sec-1',
+            },
+          },
+          autoCopyLink: true,
+          editBeforeUpload: false,
+        },
+        recentUploads: [
+          {
+            id: 'older_drive_id_99',
+            name: 'Older_Shot.png',
+            webViewLink: 'https://drive.google.com/file/d/older_drive_id_99/view',
+            createdTime: '2026-11-19T10:00:00.000Z',
+            pageTitle: 'Older Page',
+            mode: 'visible',
+            thumbnailDataUrl: '',
+          },
+        ],
+      },
+      tabs: activeTabs,
+    });
+
+    const { registerServiceWorkerListeners } = await import('../background/service-worker.js');
+    registerServiceWorkerListeners();
+
+    const driveRequests = [];
+    let createdCounter = 0;
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.startsWith('data:image/')) {
+        return origFetch(url, opts);
+      }
+      driveRequests.push({ url: u, method: opts.method || 'GET' });
+
+      if (u.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({ user: { displayName: 'Sec Tester', emailAddress: 'sec@example.com' } }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/drive/v3/files/folder-sec-1')) {
+        return new Response(
+          JSON.stringify({
+            id: 'folder-sec-1',
+            name: 'Chrome_SaveShot_ScreenShots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/folder-sec-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('?alt=media')) {
+        const rawBytes = await (await origFetch(TINY_PNG_DATA_URL)).arrayBuffer();
+        return new Response(rawBytes, {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        });
+      }
+      if (opts.method === 'PATCH' && u.includes('/upload/drive/v3/files/')) {
+        const id = u.split('/upload/drive/v3/files/')[1].split('?')[0];
+        const bodyText = await opts.body.text();
+        const nameMatch = bodyText.match(/"name":"([^"]+)"/);
+        const updatedName = nameMatch ? nameMatch[1] : 'Updated.png';
+        return new Response(
+          JSON.stringify({
+            id,
+            name: updatedName,
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            modifiedTime: '2026-11-20T12:10:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (opts.method === 'PATCH' && u.includes('/drive/v3/files/')) {
+        const id = u.split('/drive/v3/files/')[1].split('?')[0];
+        const parsed = JSON.parse(opts.body);
+        return new Response(
+          JSON.stringify({
+            id,
+            name: parsed.name,
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            modifiedTime: '2026-11-20T12:11:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (opts.method === 'POST' && u.includes('/upload/drive/v3/files')) {
+        createdCounter += 1;
+        const bodyText = await opts.body.text();
+        const nameMatch = bodyText.match(/"name":"([^"]+)"/);
+        const id = `created_file_${createdCounter}`;
+        return new Response(
+          JSON.stringify({
+            id,
+            name: nameMatch ? nameMatch[1] : `Shot_${createdCounter}.png`,
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            createdTime: '2026-11-20T12:05:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unhandled fetch in security SW test: ${opts.method || 'GET'} ${u}`);
+    };
+
+    // 1. SECURITY: Webpage content-script sender and cross-extension sender MUST be blocked on all privileged actions
+    const untrustedWebSender = {
+      url: 'https://evil.example/phish',
+      tab: { id: 77, url: 'https://evil.example/phish' },
+    };
+    for (const blockedType of [
+      'GET_STATE',
+      'SIGN_IN',
+      'SIGN_OUT',
+      'OPEN_DRIVE_FOLDER',
+      'UPDATE_SETTINGS',
+      'CLEAR_HISTORY',
+      'CAPTURE_VISIBLE',
+      'START_REGION_CAPTURE',
+      'OPEN_EDITOR',
+      'GET_EDITOR_SESSION',
+      'SAVE_EDITED_SCREENSHOT',
+    ]) {
+      const res = await mock.dispatchMessage({ type: blockedType }, untrustedWebSender);
+      assert.equal(res.ok, false, `${blockedType} must be blocked from webpage sender`);
+      assert.equal(res.code, 'FORBIDDEN_SENDER');
+    }
+
+    // Trusted extension tab sender (e.g. pages/editor.html) IS allowed
+    const trustedEditorSender = {
+      url: 'chrome-extension://testext/pages/editor.html?session=abc',
+      tab: { id: 500, url: 'chrome-extension://testext/pages/editor.html?session=abc' },
+    };
+    const stateFromTrusted = await mock.dispatchMessage({ type: 'GET_STATE' }, trustedEditorSender);
+    assert.equal(stateFromTrusted.ok, true);
+
+    // 2. Settings allowlist ignores arbitrary injected keys while enabling editBeforeUpload
+    const settingsRes = await mock.dispatchMessage({
+      type: 'UPDATE_SETTINGS',
+      patch: { editBeforeUpload: true, injectedAdminFlag: true },
+    });
+    assert.equal(settingsRes.ok, true);
+    assert.equal(settingsRes.settings.editBeforeUpload, true);
+    assert.equal(settingsRes.settings.injectedAdminFlag, undefined);
+
+    // 3. Pre-upload editor flow (editBeforeUpload = true): captures tab WITHOUT uploading to Drive first
+    const preUploadCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 77 });
+    assert.equal(preUploadCap.ok, true);
+    assert.equal(preUploadCap.openedEditor, true);
+    assert.ok(preUploadCap.sessionId);
+    assert.equal(
+      driveRequests.filter((r) => r.url.includes('/upload/drive/v3/files')).length,
+      0,
+      'Zero bytes should be uploaded to Google Drive before user finishes redacting in pre-upload mode'
+    );
+    assert.match(
+      mock.createdTabs[mock.createdTabs.length - 1].url,
+      new RegExp(`pages/editor\\.html\\?session=${preUploadCap.sessionId}$`)
+    );
+
+    const loadedNewSession = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: preUploadCap.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(loadedNewSession.ok, true);
+    assert.equal(loadedNewSession.session.mode, 'new');
+    assert.ok(loadedNewSession.dataUrl.startsWith('data:image/png;base64,'));
+
+    // Reject non-PNG dataUrl injection on SAVE_EDITED_SCREENSHOT
+    const badDataRes = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preUploadCap.sessionId,
+        filename: 'clean.png',
+        dataUrl: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(badDataRes.ok, false);
+    assert.equal(badDataRes.code, 'INVALID_IMAGE_DATA');
+
+    // Save pre-upload session -> creates Drive file with sanitized filename and transitions session to 'existing'
+    const firstSave = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preUploadCap.sessionId,
+        filename: '../Billing_Redacted\u202e.PNG',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(firstSave.ok, true);
+    assert.equal(firstSave.action, 'created');
+    assert.equal(firstSave.upload.id, 'created_file_1');
+    assert.equal(firstSave.upload.name, 'Billing_Redacted.png');
+
+    // 4. Subsequent rename-only save on that same session uses fast metadata-only PATCH (no multipart upload!)
+    const beforePatchCount = driveRequests.length;
+    const renameOnlySave = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preUploadCap.sessionId,
+        filename: 'Billing_Q4_Final',
+        dataUrl: '',
+        imageModified: false,
+        saveMode: 'replace',
+      },
+      trustedEditorSender
+    );
+    assert.equal(renameOnlySave.ok, true);
+    assert.equal(renameOnlySave.action, 'replaced');
+    assert.equal(renameOnlySave.upload.id, 'created_file_1');
+    assert.equal(renameOnlySave.upload.name, 'Billing_Q4_Final.png');
+    const lastDriveReq = driveRequests[driveRequests.length - 1];
+    assert.equal(lastDriveReq.method, 'PATCH');
+    assert.ok(
+      lastDriveReq.url.includes('/drive/v3/files/created_file_1') &&
+        !lastDriveReq.url.includes('/upload/'),
+      'Rename-only update must use metadata-only PATCH endpoint'
+    );
+    assert.ok(driveRequests.length > beforePatchCount);
+
+    // Verify recentUploads in storage updated in-place
+    const recentAfterRename = await getRecentUploads();
+    assert.equal(recentAfterRename[0].id, 'created_file_1');
+    assert.equal(recentAfterRename[0].name, 'Billing_Q4_Final.png');
+
+    // 5. Full pixel replace (imageModified: true, saveMode: 'replace') uses multipart PATCH and keeps same fileId & link
+    const pixelReplace = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preUploadCap.sessionId,
+        filename: 'Billing_Q4_Final.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+      },
+      trustedEditorSender
+    );
+    assert.equal(pixelReplace.ok, true);
+    assert.equal(pixelReplace.action, 'replaced');
+    assert.equal(pixelReplace.upload.id, 'created_file_1');
+    assert.equal(
+      pixelReplace.upload.webViewLink,
+      'https://drive.google.com/file/d/created_file_1/view'
+    );
+    assert.match(
+      driveRequests[driveRequests.length - 1].url,
+      /\/upload\/drive\/v3\/files\/created_file_1\?uploadType=multipart/
+    );
+
+    // 6. Save as new copy (saveMode: 'new') on an existing session creates a separate Drive file
+    const newCopyRes = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: preUploadCap.sessionId,
+        filename: 'Billing_Copy.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(newCopyRes.ok, true);
+    assert.equal(newCopyRes.action, 'created');
+    assert.equal(newCopyRes.upload.id, 'created_file_2');
+
+    // 7. Webpage toast OPEN_LAST_CAPTURE_EDITOR is allowed from content script and opens last capture
+    const toastEditRes = await mock.dispatchMessage(
+      { type: 'OPEN_LAST_CAPTURE_EDITOR' },
+      untrustedWebSender
+    );
+    assert.equal(toastEditRes.ok, true);
+    assert.ok(toastEditRes.sessionId);
+
+    // 8. Older Recent Upload not in RAM downloads PNG from Drive via ?alt=media when editor opens
+    const olderOpen = await mock.dispatchMessage(
+      { type: 'OPEN_EDITOR', fileId: 'older_drive_id_99', filename: 'Older_Shot.png' },
+      trustedEditorSender
+    );
+    assert.equal(olderOpen.ok, true);
+    const olderLoaded = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: olderOpen.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(olderLoaded.ok, true);
+    assert.equal(olderLoaded.session.fileId, 'older_drive_id_99');
+    assert.ok(
+      driveRequests.some((r) => r.url.includes('/files/older_drive_id_99?alt=media')),
+      'Should download older screenshot media from Google Drive when not cached in memory'
+    );
+
+    // 9. Update recent upload helper ignores nonexistent IDs safely
+    const unchangedRecent = await updateRecentUpload('nonexistent_id', { name: 'Nope.png' });
+    assert.ok(unchangedRecent.every((x) => x.name !== 'Nope.png'));
+
+    // 10. SIGN_OUT wipes all editor sessions and cached captures from memory immediately
+    await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedEditorSender);
+    const afterSignOutSession = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: olderOpen.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(afterSignOutSession.ok, false);
+    assert.equal(afterSignOutSession.code, 'EDITOR_SESSION_EXPIRED');
   } finally {
     globalThis.fetch = origFetch;
   }

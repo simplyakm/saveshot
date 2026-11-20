@@ -54,6 +54,7 @@
 
 body {
   width: 356px;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--text);
   font: 400 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -620,11 +621,22 @@ body {
   color: var(--primary);
 }
 
+.status-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
 .upload-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+
+.upload-actions .small-btn {
+  padding: 4px 7px;
 }
 
 .small-btn {

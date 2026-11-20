@@ -635,6 +635,378 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(svgRegion.ok, false);
     assert.equal(svgRegion.code, 'UNSUPPORTED_DOM');
     assert.match(svgRegion.reason, /Visible Tab/);
+
+    // -------------------------------------------------------------------------
+    // 5. Real Chromium Editor E2E: Destructive Redaction, Rotate/Flip/Undo,
+    //    XSS Immunity, Replace Warning Modal, and Real Content-Script Privilege Guard
+    // -------------------------------------------------------------------------
+    await evalIn(
+      swSession,
+      `(async () => {
+        globalThis.__e2eDriveCalls = [];
+
+        // Build a 160x100 PNG with a bright green (0,255,0) secret block at (20..70, 20..55) on white background
+        const c = new OffscreenCanvas(160, 100);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = 'rgb(255, 255, 255)';
+        ctx.fillRect(0, 0, 160, 100);
+        ctx.fillStyle = 'rgb(0, 255, 0)';
+        ctx.fillRect(20, 20, 50, 35);
+        const secretBlob = await c.convertToBlob({ type: 'image/png' });
+        const secretBytes = await secretBlob.arrayBuffer();
+
+        await chrome.storage.local.set({
+          signedOut: false,
+          userProfile: { email: 'e2e@example.com', name: 'E2E User', verifiedAt: Date.now() },
+          settings: {
+            folderName: 'Chrome_SaveShot_ScreenShots',
+            folderId: 'folder_e2e_1',
+            folderWebViewLink: 'https://drive.google.com/drive/folders/folder_e2e_1',
+            folderCacheByEmail: {
+              'e2e@example.com': {
+                folderName: 'Chrome_SaveShot_ScreenShots',
+                folderId: 'folder_e2e_1',
+                folderWebViewLink: 'https://drive.google.com/drive/folders/folder_e2e_1',
+              },
+            },
+            autoCopyLink: false,
+            editBeforeUpload: false,
+          },
+          recentUploads: [
+            {
+              id: 'e2e_shot_01',
+              name: 'Original_Secret.png',
+              webViewLink: 'https://drive.google.com/file/d/e2e_shot_01/view',
+              createdTime: new Date().toISOString(),
+              pageTitle: 'Secret Dashboard',
+              mode: 'visible',
+              thumbnailDataUrl: '',
+            },
+          ],
+        });
+
+        chrome.identity.getAuthToken = (_opts, cb) => cb('e2e-mock-token');
+
+        const realFetch = globalThis.fetch.bind(globalThis);
+        globalThis.fetch = async (url, opts = {}) => {
+          const u = String(url);
+          if (u.startsWith('data:image/')) return realFetch(url, opts);
+
+          const method = opts.method || 'GET';
+          globalThis.__e2eDriveCalls.push({ url: u, method });
+
+          if (u.includes('?alt=media')) {
+            return new Response(secretBytes.slice(0), {
+              status: 200,
+              headers: { 'Content-Type': 'image/png' },
+            });
+          }
+          if (method === 'PATCH' && u.includes('/upload/drive/v3/files/e2e_shot_01')) {
+            const bodyText = await opts.body.text();
+            const m = bodyText.match(/"name":"([^"]+)"/);
+            return new Response(
+              JSON.stringify({
+                id: 'e2e_shot_01',
+                name: m ? m[1] : 'Updated.png',
+                webViewLink: 'https://drive.google.com/file/d/e2e_shot_01/view',
+                modifiedTime: new Date().toISOString(),
+              }),
+              { status: 200 }
+            );
+          }
+          return new Response(JSON.stringify({ id: 'folder_e2e_1', name: 'Chrome_SaveShot_ScreenShots' }), {
+            status: 200,
+          });
+        };
+      })()`
+    );
+
+    // Open editor from trusted extension context
+    const openEditorRes = await evalIn(
+      extPageSession,
+      `new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            type: 'OPEN_EDITOR',
+            fileId: 'e2e_shot_01',
+            filename: 'Original_Secret.png',
+            webViewLink: 'https://drive.google.com/file/d/e2e_shot_01/view',
+          },
+          resolve
+        );
+      })`
+    );
+    assert.equal(openEditorRes.ok, true);
+
+    let editorTarget = null;
+    for (let i = 0; i < 20; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      editorTarget = targetInfos.find(
+        (t) => t.type === 'page' && t.url.includes('/pages/editor.html?session=')
+      );
+      if (editorTarget) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    assert.ok(editorTarget, 'pages/editor.html tab must open');
+
+    const { sessionId: editorSession } = await cdp.send('Target.attachToTarget', {
+      targetId: editorTarget.targetId,
+      flatten: true,
+    });
+
+    // Wait for editor canvas to finish loading the 160x100 PNG from Drive media endpoint
+    for (let i = 0; i < 25; i += 1) {
+      const ready = await evalIn(
+        editorSession,
+        `(() => {
+          const c = document.getElementById('base-canvas');
+          return !document.getElementById('canvas-wrap').hidden && c.width === 160 && c.height === 100;
+        })()`
+      );
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // 5A. Select Redact tool and drag across the green secret region (18,18 -> 74,58)
+    const redactCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        document.querySelector('[data-tool="redact"]').click();
+        await new Promise((r) => setTimeout(r, 20));
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        const scaleX = rect.width / 160;
+        const scaleY = rect.height / 100;
+
+        const fire = (type, cx, cy) => {
+          preview.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              button: 0,
+              pointerId: 1,
+              clientX: rect.left + cx * scaleX,
+              clientY: rect.top + cy * scaleY,
+            })
+          );
+        };
+        fire('pointerdown', 18, 18);
+        fire('pointermove', 74, 58);
+        fire('pointerup', 74, 58);
+        await new Promise((r) => setTimeout(r, 40));
+
+        const base = document.getElementById('base-canvas');
+        const ctx = base.getContext('2d');
+        const secretPixels = ctx.getImageData(20, 20, 50, 35).data;
+        let nonBlackInSecret = 0;
+        for (let i = 0; i < secretPixels.length; i += 4) {
+          if (
+            secretPixels[i] !== 0 ||
+            secretPixels[i + 1] !== 0 ||
+            secretPixels[i + 2] !== 0 ||
+            secretPixels[i + 3] !== 255
+          ) {
+            nonBlackInSecret += 1;
+          }
+        }
+        return {
+          styleDimmed: document.getElementById('style-group').classList.contains('dimmed'),
+          nonBlackInSecret,
+        };
+      })()`
+    );
+    assert.equal(redactCheck.styleDimmed, true, 'Style swatches should dim while Redact is active');
+    assert.equal(
+      redactCheck.nonBlackInSecret,
+      0,
+      'Every pixel under Redact must be 100% opaque #000000 with zero green bleed'
+    );
+
+    // 5B. Test Rotate 90deg CW, Flip Horizontal, and Undo restoring dimensions & pixel locations
+    const transformCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        const base = document.getElementById('base-canvas');
+        const ctx = base.getContext('2d');
+
+        document.querySelector('[data-transform="rotate-cw"]').click();
+        await new Promise((r) => setTimeout(r, 40));
+        const afterRotate = {
+          w: base.width,
+          h: base.height,
+          dimText: document.getElementById('dim-label').textContent,
+          rotatedBlackPixel: Array.from(ctx.getImageData(74, 25, 1, 1).data),
+        };
+
+        document.querySelector('[data-transform="flip-h"]').click();
+        await new Promise((r) => setTimeout(r, 40));
+        const flippedBlackPixel = Array.from(ctx.getImageData(25, 25, 1, 1).data);
+
+        // Undo twice -> restores 160x100 upright redacted image
+        document.getElementById('undo-btn').click();
+        await new Promise((r) => setTimeout(r, 30));
+        document.getElementById('undo-btn').click();
+        await new Promise((r) => setTimeout(r, 30));
+
+        return {
+          afterRotate,
+          flippedBlackPixel,
+          restoredW: base.width,
+          restoredH: base.height,
+          restoredBlackPixel: Array.from(ctx.getImageData(25, 25, 1, 1).data),
+        };
+      })()`
+    );
+    assert.equal(transformCheck.afterRotate.w, 100);
+    assert.equal(transformCheck.afterRotate.h, 160);
+    assert.equal(transformCheck.afterRotate.dimText, '100 x 160 px');
+    assert.deepEqual(transformCheck.afterRotate.rotatedBlackPixel, [0, 0, 0, 255]);
+    assert.deepEqual(transformCheck.flippedBlackPixel, [0, 0, 0, 255]);
+    assert.equal(transformCheck.restoredW, 160);
+    assert.equal(transformCheck.restoredH, 100);
+    assert.deepEqual(transformCheck.restoredBlackPixel, [0, 0, 0, 255]);
+
+    // 5C. Draw Arrow + Text with XSS payload, then verify Replace Existing File Warning <dialog>
+    const dialogAndXssCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        window.__xssTriggered = false;
+        document.querySelector('[data-tool="arrow"]').click();
+        await new Promise((r) => setTimeout(r, 20));
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        const sx = rect.width / 160;
+        const sy = rect.height / 100;
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 90 * sx, clientY: rect.top + 70 * sy }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, clientX: rect.left + 140 * sx, clientY: rect.top + 30 * sy }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: rect.left + 140 * sx, clientY: rect.top + 30 * sy }));
+        await new Promise((r) => setTimeout(r, 30));
+
+        // Text tool with HTML payload
+        document.querySelector('[data-tool="text"]').click();
+        await new Promise((r) => setTimeout(r, 20));
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 80 * sx, clientY: rect.top + 75 * sy }));
+        await new Promise((r) => setTimeout(r, 20));
+        const txt = document.getElementById('text-overlay-input');
+        txt.value = '<img src=x onerror="window.__xssTriggered=true">Verified';
+        txt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+
+        // Rename input with XSS/traversal chars and click Replace in Drive
+        const fnInput = document.getElementById('filename-input');
+        fnInput.value = '../<script>window.__xssTriggered=true</script>Clean_Report';
+        fnInput.dispatchEvent(new Event('blur'));
+
+        document.getElementById('save-drive-btn').click();
+        await new Promise((r) => setTimeout(r, 30));
+
+        const dlg = document.getElementById('confirm-replace-dialog');
+        const dialogOpenOnSave = dlg.open;
+        const targetText = document.getElementById('replace-target-name').textContent;
+
+        // Cancel first -> must close modal without sending PATCH
+        document.getElementById('cancel-replace-btn').click();
+        await new Promise((r) => setTimeout(r, 20));
+        const closedAfterCancel = !dlg.open;
+
+        return {
+          xssTriggered: window.__xssTriggered,
+          sanitizedInputVal: fnInput.value,
+          dialogOpenOnSave,
+          targetText,
+          closedAfterCancel,
+        };
+      })()`
+    );
+    assert.equal(dialogAndXssCheck.xssTriggered, false, 'Zero DOM XSS allowed in text or filename');
+    assert.equal(dialogAndXssCheck.dialogOpenOnSave, true, 'Must warn before replacing existing Drive file');
+    assert.equal(dialogAndXssCheck.targetText, 'Original_Secret.png');
+    assert.equal(dialogAndXssCheck.closedAfterCancel, true);
+
+    const patchCountAfterCancel = await evalIn(
+      swSession,
+      `globalThis.__e2eDriveCalls.filter((c) => c.method === 'PATCH').length`
+    );
+    assert.equal(patchCountAfterCancel, 0, 'Cancel must not replace the Drive file');
+
+    // Confirm Replace in modal -> executes PATCH and updates storage
+    const confirmSaveCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        document.getElementById('save-drive-btn').click();
+        await new Promise((r) => setTimeout(r, 20));
+        document.getElementById('confirm-replace-btn').click();
+        for (let i = 0; i < 30; i += 1) {
+          const pill = document.getElementById('status-pill');
+          if (!pill.hidden && pill.textContent.includes('Replaced in Google Drive')) {
+            return { ok: true, pillText: pill.textContent };
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return { ok: false, pillText: document.getElementById('status-pill').textContent };
+      })()`
+    );
+    assert.equal(confirmSaveCheck.ok, true, `Expected Replaced pill, got: ${confirmSaveCheck.pillText}`);
+
+    const swVerifyAfterReplace = await evalIn(
+      swSession,
+      `(async () => {
+        const { recentUploads } = await chrome.storage.local.get('recentUploads');
+        return {
+          patchCalls: globalThis.__e2eDriveCalls.filter((c) => c.method === 'PATCH').length,
+          latestRecent: recentUploads[0],
+        };
+      })()`
+    );
+    assert.equal(swVerifyAfterReplace.patchCalls, 1);
+    assert.equal(
+      swVerifyAfterReplace.latestRecent.webViewLink,
+      'https://drive.google.com/file/d/e2e_shot_01/view'
+    );
+    assert.match(swVerifyAfterReplace.latestRecent.name, /Clean_Report\.png$/);
+
+    // 5D. Verify real Chromium content-script MessageSender cannot invoke privileged SIGN_OUT,
+    //     while webpage success toast renders opt-in Edit button cleanly
+    await cdp.send('Page.navigate', { url: `${baseUrl}/` }, pageSession);
+    await new Promise((r) => setTimeout(r, 300));
+
+    const realSenderSecurityCheck = await evalIn(
+      swSession,
+      `(async () => {
+        await chrome.scripting.executeScript({ target: { tabId: ${testTabInfo.tabId} }, files: ['content/selector.js'] });
+        await chrome.tabs.sendMessage(${testTabInfo.tabId}, {
+          type: 'SHOW_TOAST',
+          payload: {
+            status: 'success',
+            title: 'Saved to Drive',
+            message: 'Shot.png',
+            webViewLink: 'https://drive.google.com/file/d/e2e_shot_01/view',
+            canEdit: true,
+          },
+        });
+
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId: ${testTabInfo.tabId} },
+          func: () =>
+            new Promise((resolve) => {
+              const host = document.getElementById('__saveshot-toast-host');
+              const buttons = Array.from(host?.shadowRoot?.querySelectorAll('button, a') || []).map(
+                (el) => el.textContent.trim()
+              );
+              chrome.runtime.sendMessage({ type: 'SIGN_OUT' }, (res) => {
+                resolve({ buttons, signOutAttempt: res });
+              });
+            }),
+        });
+        return result;
+      })()`
+    );
+    assert.ok(realSenderSecurityCheck.buttons.includes('Edit'), 'Success toast should render Edit button');
+    assert.equal(realSenderSecurityCheck.signOutAttempt.ok, false);
+    assert.equal(
+      realSenderSecurityCheck.signOutAttempt.code,
+      'FORBIDDEN_SENDER',
+      'Real Chromium content-script world must be blocked from privileged background actions'
+    );
   } finally {
     cleanup();
     server.closeAllConnections();

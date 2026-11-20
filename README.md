@@ -8,6 +8,7 @@ SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots
 - **Select area (`Alt+Shift+R`)**: Drag a box over any part of a page to crop and upload just that section.
 - **Saves to a Drive folder**: Uploads PNGs to a `Chrome_SaveShot_ScreenShots` folder in your Google Drive (you can rename the folder in Settings).
 - **Quick link sharing**: Copies the Drive link after upload and keeps your last 8 screenshots in the popup for quick access.
+- **Optional lightweight editor**: Click **Edit** after capture (or enable **Open editor before uploading** in Settings) to rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, rotate or flip, and update the existing Drive file while keeping the same share link.
 - **Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.
 - **Narrow permissions**: Uses `activeTab` and `drive.file`. SaveShot can only access the folder and screenshots it creates, not the rest of your Google Drive.
 
