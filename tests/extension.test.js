@@ -1070,6 +1070,17 @@ test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, C
       if (u.startsWith('data:image/')) {
         return origFetch(url, opts);
       }
+      if (u.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({
+            user: {
+              displayName: 'Aashish',
+              emailAddress: 'aashish@example.com',
+            },
+          }),
+          { status: 200 }
+        );
+      }
       if (driveShouldFailQuota && u.includes('/upload/drive/v3/files')) {
         return new Response(
           JSON.stringify({
@@ -1119,6 +1130,15 @@ test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, C
       }
       throw new Error(`Unhandled fetch URL in SW test: ${u}`);
     };
+
+    // Verify SIGN_IN immediately creates the Drive folder and caches folderWebViewLink before returning
+    const signInRes = await mock.dispatchMessage({ type: 'SIGN_IN' });
+    assert.equal(signInRes.ok, true);
+    assert.equal(signInRes.settings.folderId, 'folder-custom-1');
+    assert.equal(
+      signInRes.settings.folderWebViewLink,
+      'https://drive.google.com/drive/folders/folder-custom-1'
+    );
 
     const folderRes = await mock.dispatchMessage({ type: 'OPEN_DRIVE_FOLDER' });
     assert.equal(folderRes.ok, true);

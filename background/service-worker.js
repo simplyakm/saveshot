@@ -446,6 +446,9 @@ export function registerServiceWorkerListeners() {
                 getRecentUploads(),
                 checkTabCapturable(activeTab),
               ]);
+              if (session?.signedIn && !settings?.folderWebViewLink) {
+                resolveDriveFolderLink({ prewarmOnly: true }).catch(() => {});
+              }
               sendResponse({
                 ok: true,
                 session,
@@ -459,11 +462,26 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'SIGN_IN': {
-              const { profile } = await signIn();
+              const { token, profile } = await signIn();
               lastErrorCode = '';
-              // Best-effort pre-warm destination folder link so "Open screenshots folder" works immediately
-              resolveDriveFolderLink({ prewarmOnly: true }).catch(() => {});
-              sendResponse({ ok: true, profile });
+              let settings = await getSettings();
+              try {
+                const email = profile?.email || '';
+                const accountCache = getAccountFolderCache(settings, email);
+                const folder = await ensureDriveFolder(token, {
+                  folderName: settings.folderName || 'Chrome_SaveShot_ScreenShots',
+                  cachedFolderId: accountCache.folderId,
+                  accountKey: email,
+                });
+                settings = await saveAccountFolderCache(email, {
+                  folderName: folder.name,
+                  folderId: folder.id,
+                  folderWebViewLink: folder.webViewLink,
+                });
+              } catch {
+                // Non-fatal if network drops right after consent; upload or OPEN_DRIVE_FOLDER will retry
+              }
+              sendResponse({ ok: true, profile, settings });
               return;
             }
 
