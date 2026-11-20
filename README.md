@@ -17,10 +17,8 @@ Chrome's `chrome.identity` API ties Google sign-in to your extension ID. Set up 
 
 1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select this folder. Copy the 32-character **ID** shown on the SaveShot card.
 2. In the [Google Cloud Console](https://console.cloud.google.com/), create or pick a project and enable the **Google Drive API** under **APIs & Services > Library**.
-3. Under **APIs & Services > OAuth consent screen**, configure your app and add these scopes:
+3. Under **APIs & Services > OAuth consent screen**, configure your app and add this scope:
    - `https://www.googleapis.com/auth/drive.file`
-   - `https://www.googleapis.com/auth/userinfo.email`
-   - `https://www.googleapis.com/auth/userinfo.profile`
    *(If the consent screen is in Testing mode, add your Google email under Test users.)*
 4. Under **APIs & Services > Credentials**, click **Create Credentials > OAuth client ID**:
    - Application type: **Chrome Extension**

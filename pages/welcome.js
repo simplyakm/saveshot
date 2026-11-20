@@ -108,7 +108,7 @@ async function loadStatus() {
       els.accountDot.classList.remove('connected');
       els.accountHeading.textContent = 'Google Drive not connected yet';
       els.accountDetail.textContent =
-        'Approve one-time Google Drive access with your Chrome Google account to start saving screenshots.';
+        'Approve one-time access to your Google Drive to start saving screenshots.';
       els.signInBtn.hidden = false;
       els.openDriveBtn.hidden = true;
       els.devSetupNotice.hidden = !res.session?.needsSetup;

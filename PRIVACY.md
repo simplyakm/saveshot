@@ -9,8 +9,7 @@ SaveShot is a browser extension that lets you take screenshots in Chrome and sav
 SaveShot only accesses data when you choose to sign in or take a screenshot:
 
 1. **Screenshots you capture**: When you click **Visible Tab**, click **Select Region**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop it (for region captures) and upload it to your Google Drive. SaveShot never captures your screen in the background.
-2. **Google account info (`userinfo.email`, `userinfo.profile`)**: Used to show your name, email address, and profile photo inside the extension popup so you know which Google account is connected.
-3. **Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests the narrow `drive.file` permission. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself. It cannot read, list, edit, or delete your other Google Drive files.
+2. **Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests the single, narrow `drive.file` permission. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete your other Google Drive files.
 
 ## Where your data goes
 
