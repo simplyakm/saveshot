@@ -1,0 +1,12 @@
+name: Feature request
+description: Suggest an improvement or new option for SaveShot
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to add?
+      description: Describe how the feature should work and why it would be helpful.
+      placeholder: Example: Add an option to save screenshots as WebP or JPEG to use less Drive space.
+    validations:
+      required: true

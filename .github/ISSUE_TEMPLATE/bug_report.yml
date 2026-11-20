@@ -1,0 +1,25 @@
+name: Bug report
+description: Report something that is broken or not working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened?
+      description: Explain what you did, what happened, and what you expected.
+      placeholder: |
+        1. Clicked Select Region on ...
+        2. Dragged across the page
+        3. Saw error ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Browser and OS
+      placeholder: Chrome 156 on macOS / Windows / Linux
+  - type: input
+    id: version
+    attributes:
+      label: SaveShot version and error code (optional)
+      placeholder: v1.1.0, error code: NONE

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SaveShot Help and Setup</title>
+    <link rel="stylesheet" href="welcome.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <div class="brand-row">
+          <img src="../icons/icon48.png" alt="SaveShot" width="40" height="40" class="logo" />
+          <div>
+            <h1>SaveShot</h1>
+            <p class="subtitle">Take screenshots in Chrome and save them to Google Drive.</p>
+          </div>
+        </div>
+        <span class="version-pill" id="ext-version">v1.1.0</span>
+      </header>
+
+      <!-- Live Account / Setup Card -->
+      <section class="card status-card">
+        <div class="status-left">
+          <div class="status-dot" id="account-dot"></div>
+          <div>
+            <h2 id="account-heading">Checking Google account...</h2>
+            <p class="muted" id="account-detail">Seeing if your Chrome Google account is connected.</p>
+          </div>
+        </div>
+        <div class="status-actions">
+          <button class="btn primary" id="sign-in-btn" hidden>Sign in with Google</button>
+          <a
+            class="btn"
+            id="open-drive-btn"
+            href="https://drive.google.com/drive/my-drive"
+            target="_blank"
+            rel="noopener noreferrer"
+            hidden
+          >
+            Open Google Drive
+          </a>
+        </div>
+      </section>
+
+      <div class="notice warn" id="dev-setup-notice" hidden>
+        <strong>Developer setup needed:</strong> Paste your Chrome Extension OAuth
+        <code>client_id</code> into <code>manifest.json</code> and reload SaveShot in
+        <code>chrome://extensions</code>. Full steps are in <code>README.md</code>.
+      </div>
+
+      <div class="notice error" id="auth-error" hidden></div>
+
+      <!-- Quick Start Steps -->
+      <section class="section">
+        <h2 class="section-title">How it works</h2>
+        <div class="steps-grid">
+          <div class="card step-card">
+            <span class="step-num">1</span>
+            <h3>Pin and sign in</h3>
+            <p class="muted">
+              Click the puzzle icon in Chrome's top bar, pin SaveShot, and sign in with your Google account.
+            </p>
+          </div>
+
+          <div class="card step-card">
+            <span class="step-num">2</span>
+            <h3>Capture a tab or area</h3>
+            <p class="muted">
+              Use the toolbar popup or keyboard shortcuts to capture the full visible tab or drag across part of a page.
+            </p>
+          </div>
+
+          <div class="card step-card">
+            <span class="step-num">3</span>
+            <h3>Saved to Google Drive</h3>
+            <p class="muted">
+              Screenshots go into a <strong>Chrome_SaveShot_ScreenShots</strong> folder in your Drive, and the link copies to your clipboard.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Shortcuts -->
+      <section class="card shortcuts-card">
+        <div>
+          <h2>Keyboard shortcuts</h2>
+          <div class="shortcut-list">
+            <div class="shortcut-item">
+              <span>Capture visible tab</span>
+              <kbd id="shortcut-visible">Alt+Shift+S</kbd>
+            </div>
+            <div class="shortcut-item">
+              <span>Select area on page</span>
+              <kbd id="shortcut-region">Alt+Shift+R</kbd>
+            </div>
+          </div>
+        </div>
+        <button class="btn" id="edit-shortcuts-btn">Change shortcuts</button>
+      </section>
+
+      <!-- Good to Know / FAQ -->
+      <section class="section">
+        <h2 class="section-title">Good to know</h2>
+        <div class="card faq-list">
+          <div class="faq-item">
+            <h3>Can SaveShot see my other Google Drive files?</h3>
+            <p class="muted">
+              No. SaveShot uses the narrow <code>drive.file</code> permission. It can only access the folder and screenshots that SaveShot creates itself.
+            </p>
+          </div>
+          <div class="faq-item">
+            <h3>Why are buttons disabled on some tabs?</h3>
+            <p class="muted">
+              Chrome blocks all extensions from running on internal pages like <code>chrome://settings</code> and on the Chrome Web Store. For local PDFs or <code>file://</code> pages, turn on <strong>Allow access to file URLs</strong> in SaveShot's settings at <code>chrome://extensions</code>.
+            </p>
+          </div>
+          <div class="faq-item">
+            <h3>What happens if my Google Drive is full or offline?</h3>
+            <p class="muted">
+              If an upload fails after taking a screenshot, SaveShot shows a <strong>Save PNG locally</strong> button so you can save the image to your computer instead of losing it.
+            </p>
+          </div>
+          <div class="faq-item">
+            <h3>How does Incognito mode work?</h3>
+            <p class="muted">
+              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload to your Google Drive, while page URLs and local upload history are left out for privacy.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bug Report & Feature Request Section -->
+      <section class="section" id="feedback">
+        <h2 class="section-title">Report a bug or request a feature</h2>
+        <div class="card feedback-card">
+          <p class="muted">
+            Found something broken or want a new option? Fill this out to open a pre-filled issue on GitHub, or copy the report text if you prefer not to use GitHub.
+          </p>
+
+          <div class="type-tabs" role="tablist">
+            <button type="button" class="tab-btn active" id="tab-bug" data-kind="bug">
+              Bug report
+            </button>
+            <button type="button" class="tab-btn" id="tab-feature" data-kind="feature">
+              Feature request
+            </button>
+          </div>
+
+          <div class="form-field">
+            <label for="fb-title">Short summary</label>
+            <input
+              type="text"
+              id="fb-title"
+              maxlength="120"
+              placeholder="Example: Region capture shifts when page is scrolled"
+            />
+          </div>
+
+          <div class="form-field">
+            <label for="fb-details" id="fb-details-label">What happened?</label>
+            <textarea
+              id="fb-details"
+              rows="4"
+              placeholder="Tell us what steps you took and what you expected to happen."
+            ></textarea>
+          </div>
+
+          <div class="diag-box">
+            <label class="checkbox-label">
+              <input type="checkbox" id="fb-include-diag" checked />
+              <span>Include basic browser and version info (no personal data or URLs)</span>
+            </label>
+            <pre class="diag-preview" id="diag-preview"></pre>
+          </div>
+
+          <div class="feedback-actions">
+            <button type="button" class="btn primary" id="open-github-issue-btn">
+              Open pre-filled GitHub issue
+            </button>
+            <button type="button" class="btn" id="copy-report-btn">
+              Copy report text
+            </button>
+            <a
+              class="text-link"
+              id="repo-issues-link"
+              href="https://github.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View existing issues
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="welcome.js"></script>
+  </body>
+</html>

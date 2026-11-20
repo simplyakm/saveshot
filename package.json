@@ -1,0 +1,13 @@
+{
+  "name": "saveshot",
+  "version": "1.1.0",
+  "description": "Lightweight Chrome extension to take screenshots and save them to Google Drive.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test:unit": "node --test tests/extension.test.js",
+    "test:e2e": "node --test tests/browser-e2e.test.js",
+    "test": "node --test tests/extension.test.js tests/browser-e2e.test.js"
+  }
+}
