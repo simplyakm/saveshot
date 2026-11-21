@@ -1004,21 +1004,35 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const dialogOpenOnSave = dlg.open;
         const dialogHeading = dlg.querySelector('h2')?.textContent?.trim() || '';
 
-        // Measure all 3 dialog buttons for pixel-exact height, row alignment, and typography parity
-        const dlgBtns = ['cancel-replace-btn', 'save-new-copy-btn', 'confirm-replace-btn'].map((id) => {
-          const el = document.getElementById(id);
-          const b = el.getBoundingClientRect();
-          const cs = getComputedStyle(el);
-          return {
-            id,
-            top: b.top,
-            bottom: b.bottom,
-            height: Math.round(b.height),
-            fontSize: cs.fontSize,
-            lineHeight: cs.lineHeight,
-            borderRadius: cs.borderRadius,
-          };
-        });
+        // Measure all 4 right-hand topbar controls and all 3 dialog buttons for pixel-exact 32px parity
+        const measureBtns = (ids) =>
+          ids.map((id) => {
+            const el = document.getElementById(id);
+            const b = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return {
+              id,
+              text: el.textContent.trim(),
+              top: b.top,
+              bottom: b.bottom,
+              height: Math.round(b.height),
+              fontSize: cs.fontSize,
+              lineHeight: cs.lineHeight,
+              borderRadius: cs.borderRadius,
+            };
+          });
+
+        const topbarBtns = measureBtns([
+          'download-btn',
+          'copy-link-btn',
+          'open-drive-link',
+          'save-drive-btn',
+        ]);
+        const dlgBtns = measureBtns([
+          'cancel-replace-btn',
+          'save-new-copy-btn',
+          'confirm-replace-btn',
+        ]);
 
         // Cancel first -> must close modal without sending PATCH
         document.getElementById('cancel-replace-btn').click();
@@ -1035,6 +1049,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           sanitizedDisplay,
           dialogOpenOnSave,
           dialogHeading,
+          topbarBtns,
           dlgBtns,
           closedAfterCancel,
         };
@@ -1051,6 +1066,18 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.match(dialogAndXssCheck.sanitizedDisplay, /Clean_Report$/);
     assert.equal(dialogAndXssCheck.dialogOpenOnSave, true, 'Must warn before replacing existing Drive file');
     assert.equal(dialogAndXssCheck.dialogHeading, 'Replace existing file?');
+
+    // Verify all 4 Editor topbar buttons (Download, Copy link, Open, Save) share exact 32px height and 0px vertical drift
+    const [dlBtnMetrics, copyBtnMetrics, openBtnMetrics, saveBtnMetrics] = dialogAndXssCheck.topbarBtns;
+    assert.equal(openBtnMetrics.text, 'Open');
+    for (const m of [dlBtnMetrics, copyBtnMetrics, openBtnMetrics, saveBtnMetrics]) {
+      assert.equal(m.height, 32, `${m.id} must be 32px tall`);
+      assert.equal(m.fontSize, '12.5px', `${m.id} must use 12.5px font-size`);
+      assert.equal(m.lineHeight, '18px', `${m.id} must use 18px line-height`);
+      assert.equal(m.borderRadius, '8px', `${m.id} must use 8px border-radius`);
+      assert.ok(Math.abs(m.top - dlBtnMetrics.top) <= 0.5, `${m.id} top misaligned`);
+      assert.ok(Math.abs(m.bottom - dlBtnMetrics.bottom) <= 0.5, `${m.id} bottom misaligned`);
+    }
 
     // Verify all 3 modal buttons (Cancel, Save as new, Replace) share exact 32px height, 0px vertical drift, and identical typography
     const [cancelMetrics, saveNewMetrics, replaceMetrics] = dialogAndXssCheck.dlgBtns;
