@@ -2571,27 +2571,31 @@ test('all repository source, UI, and documentation files contain no em dashes or
     'docs/icon128.png must match icons/icon128.png byte-for-byte'
   );
 
-  const lockedStoreAssetHashes = {
-    'store-assets/promo-small-440x280.png':
-      'aa1ad5cdcf3e455a38a6cb48513c8c8737610d64d3a3b5b2733204090888979a',
-    'store-assets/promo-marquee-1400x560.png':
-      '9fddf39798e5f4d598a42c0ab5fd3b2323d5344f8ad4dcc057a5181a8dd42426',
-    'store-assets/screenshot-1-capture-1280x800.png':
-      'a8ad572a9507b9da665fdf495f5ad33218e8d318004a33a8f33ed19e37858684',
-    'store-assets/screenshot-2-editor-1280x800.png':
-      '1fc2737d6fa035f594705d5de34ddaa5f5700ebe65d6106ec73cb03bc0893faa',
-    'store-assets/screenshot-3-privacy-1280x800.png':
-      '2830b7d1455e43ca25a4c03d2d13aada720fcc8281ad68625529695d23bc2bad',
-    'store-assets/screenshot-4-themes-1280x800.png':
-      '84b462bcf8511f646980ff8566c31e4a031ac76aa8fbd8a4ce066d66048ad9b4',
-    'store-assets/screenshot-welcome-1280x800.png':
-      '70c5a10d5cdcb42d37b3b141280613a8b180b4952e79a8a0a294453fc0081539',
-  };
-  for (const [assetRel, expectedSha] of Object.entries(lockedStoreAssetHashes)) {
+  // Verify store-assets were generated from the current extension UI, CSS tokens, icons, and copy
+  const { ASSET_INPUT_FILES, STORE_ASSET_SPECS, computeAssetSourceHashes } = await import(
+    '../scripts/generate-store-assets.mjs'
+  );
+  const assetManifestPath = path.join(rootDir, 'store-assets/.asset-manifest.json');
+  assert.ok(
+    fs.existsSync(assetManifestPath),
+    'Missing store-assets/.asset-manifest.json (run npm run build:assets)'
+  );
+  const assetManifest = JSON.parse(fs.readFileSync(assetManifestPath, 'utf8'));
+  const liveSourceHashes = computeAssetSourceHashes(rootDir);
+
+  for (const relInput of ASSET_INPUT_FILES) {
+    assert.equal(
+      assetManifest.sourceHashes?.[relInput],
+      liveSourceHashes[relInput],
+      `Extension source "${relInput}" changed since store-assets were generated. Run "npm run build:assets" to regenerate store visuals.`
+    );
+  }
+
+  for (const [assetRel] of STORE_ASSET_SPECS) {
     assert.equal(
       sha256Of(assetRel),
-      expectedSha,
-      `Verified store asset ${assetRel} drifted unexpectedly`
+      assetManifest.outputHashes?.[assetRel],
+      `Generated store asset ${assetRel} does not match .asset-manifest.json (run npm run build:assets)`
     );
   }
 
