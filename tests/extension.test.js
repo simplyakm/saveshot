@@ -298,9 +298,21 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
     assert.equal(pngH, expected, `${iconRelPath} height must be ${expected}`);
   }
 
-  const storeShot = fs.readFileSync(path.join(rootDir, 'store-assets/screenshot-welcome-1280x800.png'));
-  assert.equal(storeShot.readUInt32BE(16), 1280);
-  assert.equal(storeShot.readUInt32BE(20), 800);
+  const expectedStoreAssets = [
+    ['store-assets/promo-small-440x280.png', 440, 280],
+    ['store-assets/promo-marquee-1400x560.png', 1400, 560],
+    ['store-assets/screenshot-1-capture-1280x800.png', 1280, 800],
+    ['store-assets/screenshot-2-editor-1280x800.png', 1280, 800],
+    ['store-assets/screenshot-3-privacy-1280x800.png', 1280, 800],
+    ['store-assets/screenshot-4-themes-1280x800.png', 1280, 800],
+    ['store-assets/screenshot-welcome-1280x800.png', 1280, 800],
+  ];
+  for (const [assetRel, expW, expH] of expectedStoreAssets) {
+    const buf = fs.readFileSync(path.join(rootDir, assetRel));
+    assert.equal(buf.readUInt32BE(16), expW, `${assetRel} width must be ${expW}`);
+    assert.equal(buf.readUInt32BE(20), expH, `${assetRel} height must be ${expH}`);
+    assert.equal(buf[25], 2, `${assetRel} must be 24-bit RGB PNG with no alpha channel`);
+  }
 
   const readme = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
   assert.ok(readme.slice(0, 160).includes('src="icons/icon128.png"'), 'README.md top must render icons/icon128.png');

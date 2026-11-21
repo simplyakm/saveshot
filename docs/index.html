@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SaveShot: Screenshot to Google Drive</title>
+    <meta
+      name="description"
+      content="Capture and edit screenshots straight to your Google Drive. 100% local in Chrome with no external servers or tracking."
+    />
+    <style>
+      :root {
+        --bg: #f5f6f8;
+        --card: #ffffff;
+        --text: #141518;
+        --sub: #525866;
+        --muted: #767c89;
+        --border: rgba(15, 18, 24, 0.09);
+        --accent: #1a73e8;
+        --accent-hover: #155fc4;
+        --accent-soft: rgba(26, 115, 232, 0.09);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131416;
+          --card: #1c1d20;
+          --text: #f3f4f6;
+          --sub: #a6abb6;
+          --muted: #7c828f;
+          --border: rgba(255, 255, 255, 0.09);
+          --accent: #5b9df9;
+          --accent-hover: #428bf7;
+          --accent-soft: rgba(91, 157, 249, 0.14);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.55;
+        padding: 48px 20px 64px;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+      .hero {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .brand-badge {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #1b6ef3 0%, #134ea8 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      h1 {
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+      }
+      .lead {
+        font-size: 16px;
+        color: var(--sub);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding-top: 4px;
+      }
+      .btn {
+        height: 40px;
+        padding: 0 18px;
+        border-radius: 9px;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        .btn-primary {
+          color: #0d131f;
+        }
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+      .btn-secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      @media (max-width: 580px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .card h2 {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .card p {
+        font-size: 13.5px;
+        color: var(--sub);
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        background: var(--accent-soft);
+        padding: 2px 5px;
+        border-radius: 4px;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        padding-top: 8px;
+      }
+      footer a {
+        color: var(--sub);
+        text-decoration: none;
+      }
+      footer a:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <div class="brand">
+          <div class="brand-badge" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+              <path d="M7 11V8.5A1.5 1.5 0 0 1 8.5 7H11M21 7h2.5A1.5 1.5 0 0 1 25 8.5V11M25 21v2.5a1.5 1.5 0 0 1-1.5 1.5H21M11 25H8.5A1.5 1.5 0 0 1 7 23.5V21" stroke="#BFDBFE" stroke-width="2.2" stroke-linecap="round"/>
+              <path d="M16 21V11.5M12 15l4-4 4 4" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div>
+            <h1>SaveShot</h1>
+            <p class="lead">Private screenshots straight from Chrome to your Google Drive.</p>
+          </div>
+        </div>
+        <p class="lead">
+          SaveShot captures any selected screen area or visible browser tab, opens a fast built-in annotation and redaction editor, and uploads PNGs directly from Chrome to your own Google Drive with zero external servers and zero tracking.
+        </p>
+        <div class="actions">
+          <a
+            class="btn btn-primary"
+            href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf"
+          >
+            Add to Chrome
+          </a>
+          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
+          <a class="btn btn-secondary" href="https://github.com/simplyakm/saveshot">GitHub Source</a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Select Area or Full Tab</h2>
+          <p>
+            Drag across any region of a webpage (<code>Alt+Shift+S</code>) or capture the visible tab in one click (<code>Alt+Shift+V</code>), with pixel-exact HiDPI and zoom accuracy.
+          </p>
+        </div>
+        <div class="card">
+          <h2>Annotate, Redact &amp; Rename</h2>
+          <p>
+            Add arrows, boxes, circles, lines, freehand strokes, text, custom hex colors, or solid black pixel redactions, and save straight back to the same Google Drive link.
+          </p>
+        </div>
+        <div class="card">
+          <h2>100% Local in Chrome</h2>
+          <p>
+            Screenshots go directly from your browser to Google's official Drive API (<code>https://www.googleapis.com</code>). SaveShot has no private servers, analytics, or ads.
+          </p>
+        </div>
+        <div class="card">
+          <h2>Narrow <code>drive.file</code> Scope</h2>
+          <p>
+            SaveShot only accesses the screenshots and folder (<code>Chrome_SaveShot_ScreenShots</code>) it creates itself. It cannot view or modify any other files in your Google Drive.
+          </p>
+        </div>
+      </section>
+
+      <footer>
+        <span>SaveShot · Open Source (Apache 2.0)</span>
+        <div>
+          <a href="privacy.html">Privacy Policy</a> ·
+          <a href="https://github.com/simplyakm/saveshot/issues">Support</a> ·
+          <a href="https://x.com/_simplyakm">@_simplyakm</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>
