@@ -12,43 +12,9 @@ SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots
 - **Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.
 - **Narrow permissions**: Uses `activeTab` and `drive.file`. SaveShot can only access the folder and screenshots it creates, not the rest of your Google Drive.
 
-## Setup (local development or self-hosting)
-
-Chrome's `chrome.identity` API ties Google sign-in to your extension ID. Set up an OAuth client ID once in Google Cloud:
-
-1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select this folder. Copy the 32-character **ID** shown on the SaveShot card.
-2. In the [Google Cloud Console](https://console.cloud.google.com/), create or pick a project and enable the **Google Drive API** under **APIs & Services > Library**.
-3. Under **APIs & Services > OAuth consent screen**, configure your app and add this scope:
-   - `https://www.googleapis.com/auth/drive.file`
-   *(If the consent screen is in Testing mode, add your Google email under Test users.)*
-4. Under **APIs & Services > Credentials**, click **Create Credentials > OAuth client ID**:
-   - Application type: **Chrome Extension**
-   - Item ID: paste the extension ID from step 1.
-5. Copy the generated Client ID into `oauth2.client_id` inside `manifest.json` (and update `homepage_url` with your GitHub repo URL if needed).
-6. Reload SaveShot in `chrome://extensions` and click **Connect Google Drive** in the popup.
-
-## Notes and limitations
-
-- Chrome blocks all extensions on internal pages (`chrome://`) and on the Chrome Web Store.
-- For local files or PDFs (`file://`), turn on **Allow access to file URLs** on SaveShot's details page in `chrome://extensions`.
-- If you enable **Allow in Incognito**, screenshots still upload to your Google Drive, while page URLs and local upload history are skipped.
-- DRM-protected video streams (such as Netflix) appear black in screenshots due to OS content protection.
-
 ## Reporting bugs or requesting features
 
 Click the **?** icon (or **Report bug** / **Request feature** at the bottom of the popup) to open the built-in feedback form. It lets you open a pre-filled GitHub issue with basic version and error info, or copy the report as plain text.
-
-## Running tests
-
-Requires Node.js 20+:
-
-```bash
-# Run unit and edge-case tests
-npm run test:unit
-
-# Run full suite (unit tests + headless Chromium end-to-end tests)
-npm test
-```
 
 ## Privacy
 
