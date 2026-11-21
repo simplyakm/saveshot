@@ -36,6 +36,7 @@ import {
 
 const CONTENT_SCRIPT_ALLOWED_TYPES = new Set([
   'REGION_SELECTED',
+  'CAPTURE_VISIBLE_FROM_OVERLAY',
   'GET_FALLBACK_PNG',
   'OPEN_LAST_CAPTURE_EDITOR',
 ]);
@@ -45,6 +46,7 @@ const RECENT_CAPTURE_TTL_MS = 5 * 60 * 1000;
 const MAX_RAM_EDITOR_SESSIONS = 6;
 const MAX_PERSISTED_EDITOR_SESSIONS = 12;
 const FALLBACK_SESSION_TTL_MS = 10 * 60 * 1000;
+const REGION_SESSION_TTL_MS = 2 * 60 * 1000;
 const MAX_EDITED_DATA_URL_LENGTH = 48 * 1024 * 1024;
 const EDITOR_SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{8,64}$/;
 
@@ -52,6 +54,7 @@ const SESSION_META_MAP_KEY = 'editorSessionsById';
 const PREUPLOAD_PNG_PREFIX = 'preUploadPng_';
 const LAST_UPLOADED_META_KEY = 'lastUploadedMeta';
 const FALLBACK_CAPTURE_KEY = 'lastFailedCaptureSession';
+const PENDING_REGION_TABS_KEY = 'pendingRegionTabs';
 
 let badgeClearTimer = null;
 let lastCaptureTimestamp = 0;
@@ -62,6 +65,7 @@ let fallbackExpiryTimer = null;
 let lastUploadedFileId = '';
 const recentUploadedCaptures = new Map();
 const editorSessions = new Map();
+const pendingRegionTabIds = new Map();
 
 export function isTrustedExtensionSender(sender) {
   const extOriginPrefix = chrome?.runtime?.getURL
@@ -399,6 +403,42 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
   });
 }
 
+async function registerPendingRegionTab(tabId) {
+  if (typeof tabId !== 'number') return;
+  const now = Date.now();
+  for (const [id, exp] of pendingRegionTabIds) {
+    if (exp <= now) pendingRegionTabIds.delete(id);
+  }
+  const expiresAt = now + REGION_SESSION_TTL_MS;
+  pendingRegionTabIds.set(tabId, expiresAt);
+
+  const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
+  const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
+  for (const [k, exp] of Object.entries(nextMap)) {
+    if (Number(exp) <= now) delete nextMap[k];
+  }
+  nextMap[String(tabId)] = expiresAt;
+  await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+}
+
+async function consumePendingRegionTab(tabId) {
+  if (typeof tabId !== 'number') return false;
+  const now = Date.now();
+  const ramExp = pendingRegionTabIds.get(tabId);
+  pendingRegionTabIds.delete(tabId);
+
+  const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
+  const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
+  const storedExp = Number(nextMap[String(tabId)] || 0);
+  delete nextMap[String(tabId)];
+  for (const [k, exp] of Object.entries(nextMap)) {
+    if (Number(exp) <= now) delete nextMap[k];
+  }
+  await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+
+  return (typeof ramExp === 'number' && ramExp > now) || storedExp > now;
+}
+
 /**
  * Test helper to simulate Chrome terminating and cold-restarting the MV3 service worker
  * (wiping all module-level RAM Maps while preserving chrome.storage.session and chrome.storage.local).
@@ -406,6 +446,7 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
 export function resetInMemoryWorkerStateForTests() {
   clearRecentCaptureCache();
   clearAllEditorSessions();
+  pendingRegionTabIds.clear();
   if (fallbackExpiryTimer) {
     clearTimeout(fallbackExpiryTimer);
     fallbackExpiryTimer = null;
@@ -525,7 +566,15 @@ async function hidePageUiBeforeCapture(tabId) {
 async function sendTabToast(tabId, payload) {
   if (!tabId) return;
   try {
-    await sendMessageToContentScript(tabId, { type: 'SHOW_TOAST', payload });
+    let theme = payload?.theme;
+    if (!theme) {
+      const settings = await getSettings().catch(() => null);
+      theme = settings?.theme || 'auto';
+    }
+    await sendMessageToContentScript(tabId, {
+      type: 'SHOW_TOAST',
+      payload: { ...payload, theme },
+    });
   } catch {
     // Ignore if tab navigated or closed
   }
@@ -718,7 +767,7 @@ async function captureVisibleTabFlow({
       interactiveAuth,
     });
 
-    setBadge('✓', '#1e8e3e', 3000);
+    setBadge('✓', '#15803d', 3000);
 
     if (showPageToast) {
       await sendTabToast(targetTab.id, {
@@ -729,6 +778,7 @@ async function captureVisibleTabFlow({
         thumbnailDataUrl: result.upload.previewThumbnail,
         autoCopyLink: Boolean(result.settings?.autoCopyLink),
         canEdit: true,
+        theme: result.settings?.theme,
       });
     }
 
@@ -736,7 +786,7 @@ async function captureVisibleTabFlow({
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
-    setBadge('!', '#d93025', 4000);
+    setBadge('!', '#dc2626', 4000);
     if (showPageToast) {
       await sendTabToast(targetTab?.id, {
         status: 'error',
@@ -789,10 +839,13 @@ async function startRegionCaptureFlow({ tab, tabId } = {}) {
         'Region selection does not work on this page. Use "Visible Tab" instead.',
     });
   }
+
+  await registerPendingRegionTab(targetTab.id);
 }
 
 async function handleRegionSelected(selection, senderTab) {
   if (!senderTab?.id) return;
+  consumePendingRegionTab(senderTab.id).catch(() => {});
 
   setBadge('...', '#1a73e8');
   try {
@@ -834,6 +887,7 @@ async function handleRegionSelected(selection, senderTab) {
       status: 'uploading',
       title: 'Uploading region screenshot...',
       message: 'Saving to Google Drive',
+      theme: settings.theme,
     });
 
     const result = await uploadCapturedBlob({
@@ -843,7 +897,7 @@ async function handleRegionSelected(selection, senderTab) {
       interactiveAuth: false,
     });
 
-    setBadge('✓', '#1e8e3e', 3000);
+    setBadge('✓', '#15803d', 3000);
     await sendTabToast(liveTab.id, {
       status: 'success',
       title: `Saved to "${result.upload.folderName}"`,
@@ -852,11 +906,12 @@ async function handleRegionSelected(selection, senderTab) {
       thumbnailDataUrl: result.upload.previewThumbnail,
       autoCopyLink: Boolean(result.settings?.autoCopyLink),
       canEdit: true,
+      theme: result.settings?.theme,
     });
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
-    setBadge('!', '#d93025', 4000);
+    setBadge('!', '#dc2626', 4000);
     await sendTabToast(senderTab.id, {
       status: 'error',
       title: 'Screenshot upload failed',
@@ -1092,6 +1147,7 @@ export function registerServiceWorkerListeners() {
               clearFallbackCapture();
               clearRecentCaptureCache();
               clearAllEditorSessions();
+              pendingRegionTabIds.clear();
               await clearSessionStorageArea();
               await signOut();
               sendResponse({ ok: true });
@@ -1144,6 +1200,42 @@ export function registerServiceWorkerListeners() {
             case 'REGION_SELECTED': {
               sendResponse({ ok: true });
               await handleRegionSelected(message.selection, sender.tab);
+              return;
+            }
+
+            case 'CAPTURE_VISIBLE_FROM_OVERLAY': {
+              const senderTabId = sender?.tab?.id;
+              const allowed = await consumePendingRegionTab(senderTabId);
+              if (!allowed) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
+              const liveTab = await chrome.tabs.get(senderTabId);
+              if (!liveTab || !liveTab.active) {
+                const switchedErr = new SaveShotError({
+                  code: 'TAB_SWITCHED',
+                  userMessage:
+                    'The tab changed before capture finished. Stay on the tab and try again.',
+                });
+                await sendTabToast(senderTabId, {
+                  status: 'error',
+                  title: 'Screenshot upload failed',
+                  message: switchedErr.userMessage,
+                });
+                throw switchedErr;
+              }
+              const result = await captureVisibleTabFlow({
+                tab: liveTab,
+                showPageToast: true,
+                interactiveAuth: false,
+              });
+              sendResponse({
+                ok: true,
+                openedEditor: Boolean(result.openedEditor),
+                sessionId: result.sessionId || '',
+              });
               return;
             }
 

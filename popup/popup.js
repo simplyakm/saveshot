@@ -1,3 +1,13 @@
+import {
+  applyDocumentTheme,
+  initThemeSync,
+  normalizeTheme,
+  safeHttpsUrl,
+  sendRuntimeMessage,
+} from '../lib/ui.js';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 const els = {
   helpBtn: document.getElementById('help-btn'),
   headerActions: document.getElementById('header-actions'),
@@ -11,26 +21,27 @@ const els = {
   authError: document.getElementById('auth-error'),
   mainView: document.getElementById('main-view'),
   userAvatar: document.getElementById('user-avatar'),
-  userName: document.getElementById('user-name'),
   userEmail: document.getElementById('user-email'),
   folderChip: document.getElementById('folder-chip'),
   folderChipName: document.getElementById('folder-chip-name'),
   settingsDrawer: document.getElementById('settings-drawer'),
   folderNameInput: document.getElementById('folder-name-input'),
   saveFolderBtn: document.getElementById('save-folder-btn'),
+  themeSegmented: document.getElementById('theme-segmented'),
   autoCopyCheckbox: document.getElementById('auto-copy-checkbox'),
   editBeforeUploadCheckbox: document.getElementById('edit-before-upload-checkbox'),
   incognitoNotice: document.getElementById('incognito-notice'),
   restrictedWarning: document.getElementById('restricted-warning'),
-  captureVisibleBtn: document.getElementById('capture-visible-btn'),
   captureRegionBtn: document.getElementById('capture-region-btn'),
+  captureVisibleBtn: document.getElementById('capture-visible-btn'),
+  shortcutRegion: document.getElementById('popup-shortcut-region'),
+  shortcutVisible: document.getElementById('popup-shortcut-visible'),
   statusBanner: document.getElementById('status-banner'),
   clearHistoryBtn: document.getElementById('clear-history-btn'),
   emptyHistory: document.getElementById('empty-history'),
   uploadList: document.getElementById('upload-list'),
-  footerHelpBtn: document.getElementById('footer-help-btn'),
+  popupVersion: document.getElementById('popup-version'),
   footerBugBtn: document.getElementById('footer-bug-btn'),
-  footerFeatureBtn: document.getElementById('footer-feature-btn'),
 };
 
 let currentState = {
@@ -48,14 +59,45 @@ let currentState = {
   busy: false,
 };
 
-function safeHttpsUrl(url, fallback = '') {
-  if (typeof url !== 'string' || !url) return fallback;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' ? parsed.href : fallback;
-  } catch {
-    return fallback;
+function createActionSvg(kind) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', kind === 'check' ? '2.3' : '1.95');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const add = (tag, attrs) => {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      el.setAttribute(k, v);
+    }
+    svg.appendChild(el);
+  };
+
+  if (kind === 'edit') {
+    add('path', { d: 'M12 20h9' });
+    add('path', { d: 'M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z' });
+  } else if (kind === 'copy') {
+    add('rect', { x: '9', y: '9', width: '13', height: '13', rx: '2' });
+    add('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' });
+  } else if (kind === 'open') {
+    add('path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' });
+    add('polyline', { points: '15 3 21 3 21 9' });
+    add('line', { x1: '10', y1: '14', x2: '21', y2: '3' });
+  } else if (kind === 'check') {
+    add('polyline', { points: '20 6 9 17 4 12' });
   }
+  return svg;
+}
+
+function formatShortcutDisplay(raw) {
+  if (!raw) return '';
+  return String(raw).replace(/\+/g, ' + ');
 }
 
 function openHelpPage({ kind = '', errorCode = '', jumpToFeedback = false } = {}) {
@@ -76,22 +118,6 @@ async function getPopupWindowTabId() {
   }
 }
 
-function sendMessage(payload) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!response) {
-        reject(new Error('No response from background service worker.'));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
-
 function formatRelativeTime(isoString) {
   if (!isoString) return '';
   const ts = Date.parse(isoString);
@@ -103,14 +129,22 @@ function formatRelativeTime(isoString) {
   return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
+function renderThemeButtons(theme) {
+  const active = normalizeTheme(theme);
+  applyDocumentTheme(active);
+  for (const btn of els.themeSegmented.querySelectorAll('[data-theme-opt]')) {
+    btn.classList.toggle('active', btn.dataset.themeOpt === active);
+  }
+}
+
 function showStatus(type, content) {
   els.statusBanner.hidden = false;
   els.statusBanner.className = `status-banner ${type}`;
-  els.statusBanner.innerHTML = '';
+  els.statusBanner.replaceChildren();
 
   if (type === 'loading') {
     const spinner = document.createElement('div');
-    spinner.className = 'spinner';
+    spinner.className = 'ss-spinner';
     const text = document.createElement('span');
     text.textContent = content;
     els.statusBanner.append(spinner, text);
@@ -130,12 +164,13 @@ function showStatus(type, content) {
 
     if (details.hasFallback) {
       const saveLocalBtn = document.createElement('button');
-      saveLocalBtn.className = 'small-btn primary';
+      saveLocalBtn.type = 'button';
+      saveLocalBtn.className = 'ss-btn ss-btn-sm ss-btn-primary';
       saveLocalBtn.textContent = 'Save PNG locally';
       saveLocalBtn.addEventListener('click', async () => {
         saveLocalBtn.disabled = true;
         try {
-          const fallback = await sendMessage({ type: 'GET_FALLBACK_PNG' });
+          const fallback = await sendRuntimeMessage({ type: 'GET_FALLBACK_PNG' });
           if (fallback.ok && fallback.dataUrl) {
             const a = document.createElement('a');
             a.href = fallback.dataUrl;
@@ -154,22 +189,23 @@ function showStatus(type, content) {
 
     if (details.code === 'DRIVE_QUOTA_EXCEEDED') {
       const manageQuota = document.createElement('a');
-      manageQuota.className = 'small-btn';
+      manageQuota.className = 'ss-btn ss-btn-sm ss-btn-secondary';
       manageQuota.href = 'https://drive.google.com/drive/quota';
       manageQuota.target = '_blank';
       manageQuota.rel = 'noopener noreferrer';
-      manageQuota.textContent = 'Manage Drive storage';
+      manageQuota.textContent = 'Manage storage';
       actions.append(manageQuota);
     }
 
     if (details.requiresReauth) {
       const reconnectBtn = document.createElement('button');
-      reconnectBtn.className = 'small-btn';
-      reconnectBtn.textContent = 'Reconnect Google Drive';
+      reconnectBtn.type = 'button';
+      reconnectBtn.className = 'ss-btn ss-btn-sm ss-btn-secondary';
+      reconnectBtn.textContent = 'Reconnect';
       reconnectBtn.addEventListener('click', async () => {
         reconnectBtn.disabled = true;
         try {
-          const res = await sendMessage({ type: 'SIGN_IN' });
+          const res = await sendRuntimeMessage({ type: 'SIGN_IN' });
           if (res.ok) {
             await loadState();
           } else if (res.error) {
@@ -183,7 +219,8 @@ function showStatus(type, content) {
     }
 
     const reportBtn = document.createElement('button');
-    reportBtn.className = 'small-btn';
+    reportBtn.type = 'button';
+    reportBtn.className = 'ss-btn ss-btn-sm ss-btn-secondary';
     reportBtn.textContent = 'Report bug';
     reportBtn.addEventListener('click', () => {
       openHelpPage({
@@ -210,7 +247,8 @@ function showStatus(type, content) {
 
       if (content.fileId) {
         const editBtn = document.createElement('button');
-        editBtn.className = 'small-btn';
+        editBtn.type = 'button';
+        editBtn.className = 'status-link-action';
         editBtn.textContent = 'Edit';
         editBtn.title = 'Annotate, redact, rotate, or rename screenshot';
         editBtn.addEventListener('click', () => {
@@ -226,7 +264,7 @@ function showStatus(type, content) {
 
       if (safeLink) {
         const openLink = document.createElement('a');
-        openLink.className = 'small-btn';
+        openLink.className = 'status-link-action';
         openLink.href = safeLink;
         openLink.target = '_blank';
         openLink.rel = 'noopener noreferrer';
@@ -242,7 +280,7 @@ function showStatus(type, content) {
 async function openEditorForUpload({ fileId, filename, webViewLink, folderName }) {
   if (!fileId) return;
   try {
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'OPEN_EDITOR',
       fileId,
       filename,
@@ -267,27 +305,31 @@ function hideStatus() {
   els.statusBanner.hidden = true;
 }
 
+function setAvatarInitial(initial) {
+  const span = document.createElement('span');
+  span.className = 'avatar-initial';
+  span.textContent = initial;
+  els.userAvatar.replaceChildren(span);
+}
+
 function renderProfile(profile) {
   const name = profile?.name || 'Google Account';
   const email = profile?.email || '';
-  els.userName.textContent = name;
-  els.userEmail.textContent = email;
+  els.userEmail.textContent = email || name;
+  els.userEmail.title = email && name && name !== email ? `${name} (${email})` : email || name;
 
-  els.userAvatar.innerHTML = '';
-  const initial = (name || email || 'G').trim().charAt(0).toUpperCase();
-
+  const initial = (email || name || 'G').trim().charAt(0).toUpperCase();
   const safePic = safeHttpsUrl(profile?.picture);
+
   if (safePic) {
     const img = document.createElement('img');
     img.src = safePic;
     img.alt = name;
     img.referrerPolicy = 'no-referrer';
-    img.addEventListener('error', () => {
-      els.userAvatar.textContent = initial;
-    });
-    els.userAvatar.append(img);
+    img.addEventListener('error', () => setAvatarInitial(initial));
+    els.userAvatar.replaceChildren(img);
   } else {
-    els.userAvatar.textContent = initial;
+    setAvatarInitial(initial);
   }
 }
 
@@ -301,14 +343,13 @@ function renderSettings(settings) {
   );
   els.folderNameInput.value = folderName;
   els.autoCopyCheckbox.checked = Boolean(settings?.autoCopyLink);
-  if (els.editBeforeUploadCheckbox) {
-    els.editBeforeUploadCheckbox.checked = Boolean(settings?.editBeforeUpload);
-  }
+  els.editBeforeUploadCheckbox.checked = Boolean(settings?.editBeforeUpload);
+  renderThemeButtons(settings?.theme);
 }
 
 function renderRecentUploads(uploads) {
   const list = Array.isArray(uploads) ? uploads : [];
-  els.uploadList.innerHTML = '';
+  els.uploadList.replaceChildren();
 
   if (list.length === 0) {
     els.emptyHistory.hidden = false;
@@ -345,21 +386,16 @@ function renderRecentUploads(uploads) {
     meta.className = 'upload-meta';
 
     const title = document.createElement('div');
-    title.className = 'upload-name';
+    title.className = 'ss-body upload-name';
     title.textContent = item.pageTitle || item.name || 'Screenshot';
     title.title = item.name || '';
 
     const sub = document.createElement('div');
-    sub.className = 'upload-sub';
+    sub.className = 'ss-meta tabular';
+    const modeWord = item.mode === 'region' ? 'Area' : 'Tab';
+    const relTime = formatRelativeTime(item.createdTime);
+    sub.textContent = relTime ? `${modeWord} \u00b7 ${relTime}` : modeWord;
 
-    const modeBadge = document.createElement('span');
-    modeBadge.className = 'mode-pill';
-    modeBadge.textContent = item.mode === 'region' ? 'Region' : 'Tab';
-
-    const timeSpan = document.createElement('span');
-    timeSpan.textContent = formatRelativeTime(item.createdTime);
-
-    sub.append(modeBadge, timeSpan);
     meta.append(title, sub);
 
     const actions = document.createElement('div');
@@ -369,9 +405,11 @@ function renderRecentUploads(uploads) {
 
     if (item.id) {
       const editBtn = document.createElement('button');
-      editBtn.className = 'small-btn';
-      editBtn.textContent = 'Edit';
-      editBtn.title = 'Edit, redact, rotate, or rename in Google Drive';
+      editBtn.type = 'button';
+      editBtn.className = 'ss-icon-btn';
+      editBtn.title = 'Edit screenshot';
+      editBtn.setAttribute('aria-label', 'Edit screenshot');
+      editBtn.append(createActionSvg('edit'));
       editBtn.addEventListener('click', () => {
         openEditorForUpload({
           fileId: item.id,
@@ -385,28 +423,33 @@ function renderRecentUploads(uploads) {
 
     if (safeLink) {
       const copyBtn = document.createElement('button');
-      copyBtn.className = 'small-btn';
-      copyBtn.textContent = 'Copy';
-      copyBtn.title = 'Copy Google Drive link';
+      copyBtn.type = 'button';
+      copyBtn.className = 'ss-icon-btn';
+      copyBtn.title = 'Copy Drive link';
+      copyBtn.setAttribute('aria-label', 'Copy Drive link');
+      copyBtn.append(createActionSvg('copy'));
       copyBtn.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(safeLink);
-          copyBtn.textContent = 'Copied!';
+          copyBtn.classList.add('copied');
+          copyBtn.replaceChildren(createActionSvg('check'));
           setTimeout(() => {
-            copyBtn.textContent = 'Copy';
-          }, 1600);
+            copyBtn.classList.remove('copied');
+            copyBtn.replaceChildren(createActionSvg('copy'));
+          }, 1400);
         } catch {
-          copyBtn.textContent = 'Error';
+          copyBtn.title = 'Could not copy link';
         }
       });
 
       const openLink = document.createElement('a');
-      openLink.className = 'small-btn';
+      openLink.className = 'ss-icon-btn';
       openLink.href = safeLink;
       openLink.target = '_blank';
       openLink.rel = 'noopener noreferrer';
-      openLink.textContent = 'Open';
-      openLink.title = 'Open screenshot in Google Drive';
+      openLink.title = 'Open in Google Drive';
+      openLink.setAttribute('aria-label', 'Open in Google Drive');
+      openLink.append(createActionSvg('open'));
 
       actions.append(copyBtn, openLink);
     }
@@ -445,13 +488,31 @@ function showView(viewName) {
   els.signedOutView.hidden = viewName !== 'signed-out';
   els.mainView.hidden = viewName !== 'main';
   els.headerActions.hidden = viewName !== 'main';
+  els.signOutBtn.hidden = viewName !== 'main';
+}
+
+function initStaticMetadata() {
+  const version = chrome?.runtime?.getManifest?.()?.version || '1.1.1';
+  els.popupVersion.textContent = `v${version}`;
+
+  if (chrome?.commands?.getAll) {
+    chrome.commands.getAll((commands) => {
+      for (const cmd of commands || []) {
+        if (cmd.name === 'capture-region' && cmd.shortcut) {
+          els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
+        } else if (cmd.name === 'capture-visible' && cmd.shortcut) {
+          els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
+        }
+      }
+    });
+  }
 }
 
 async function loadState() {
   showView('loading');
   try {
     currentState.activeTabId = await getPopupWindowTabId();
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'GET_STATE',
       tabId: currentState.activeTabId,
     });
@@ -464,6 +525,10 @@ async function loadState() {
     };
     currentState.incognito = Boolean(res.incognito);
     currentState.lastErrorCode = res.lastErrorCode || '';
+
+    if (res.settings) {
+      renderThemeButtons(res.settings.theme);
+    }
 
     if (!res.session?.signedIn) {
       els.setupBanner.hidden = !res.session?.needsSetup;
@@ -480,14 +545,13 @@ async function loadState() {
     showView('main');
   } catch (err) {
     els.authError.textContent = err.message || 'Could not load SaveShot.';
-    els.authError.className = 'alert error';
+    els.authError.className = 'ss-alert error';
     els.authError.hidden = false;
     showView('signed-out');
   }
 }
 
 els.helpBtn.addEventListener('click', () => openHelpPage());
-els.footerHelpBtn.addEventListener('click', () => openHelpPage());
 els.footerBugBtn.addEventListener('click', () =>
   openHelpPage({
     kind: 'bug',
@@ -495,15 +559,12 @@ els.footerBugBtn.addEventListener('click', () =>
     jumpToFeedback: true,
   })
 );
-els.footerFeatureBtn.addEventListener('click', () =>
-  openHelpPage({ kind: 'feature', jumpToFeedback: true })
-);
 
 els.signInBtn.addEventListener('click', async () => {
   els.signInBtn.disabled = true;
   els.authError.hidden = true;
   try {
-    const res = await sendMessage({ type: 'SIGN_IN' });
+    const res = await sendRuntimeMessage({ type: 'SIGN_IN' });
     if (!res.ok) {
       const err = new Error(res.error || 'Google sign-in failed.');
       err.code = res.code;
@@ -513,7 +574,7 @@ els.signInBtn.addEventListener('click', async () => {
   } catch (err) {
     els.authError.textContent = err.message || 'Google sign-in failed.';
     els.authError.className =
-      err.code === 'AUTH_CANCELLED' ? 'alert warning' : 'alert error';
+      err.code === 'AUTH_CANCELLED' ? 'ss-alert warning' : 'ss-alert error';
     els.authError.hidden = false;
   } finally {
     els.signInBtn.disabled = false;
@@ -523,7 +584,7 @@ els.signInBtn.addEventListener('click', async () => {
 els.signOutBtn.addEventListener('click', async () => {
   els.signOutBtn.disabled = true;
   try {
-    await sendMessage({ type: 'SIGN_OUT' });
+    await sendRuntimeMessage({ type: 'SIGN_OUT' });
     els.settingsDrawer.hidden = true;
     els.settingsToggleBtn.classList.remove('active');
     await loadState();
@@ -542,14 +603,14 @@ els.saveFolderBtn.addEventListener('click', async () => {
   const folderName = els.folderNameInput.value.trim() || 'Chrome_SaveShot_ScreenShots';
   els.saveFolderBtn.disabled = true;
   try {
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'UPDATE_SETTINGS',
       patch: { folderName },
     });
     if (res.ok) {
       renderSettings(res.settings);
       showStatus('success', {
-        message: `New screenshots will save to "${res.settings.folderName}".`,
+        message: `Saving new screenshots to "${res.settings.folderName}"`,
       });
     }
   } finally {
@@ -557,16 +618,28 @@ els.saveFolderBtn.addEventListener('click', async () => {
   }
 });
 
+for (const btn of els.themeSegmented.querySelectorAll('[data-theme-opt]')) {
+  btn.addEventListener('click', async () => {
+    const theme = normalizeTheme(btn.dataset.themeOpt);
+    renderThemeButtons(theme);
+    const res = await sendRuntimeMessage({
+      type: 'UPDATE_SETTINGS',
+      patch: { theme },
+    });
+    if (res.ok) renderSettings(res.settings);
+  });
+}
+
 els.autoCopyCheckbox.addEventListener('change', async () => {
-  const res = await sendMessage({
+  const res = await sendRuntimeMessage({
     type: 'UPDATE_SETTINGS',
     patch: { autoCopyLink: els.autoCopyCheckbox.checked },
   });
   if (res.ok) renderSettings(res.settings);
 });
 
-els.editBeforeUploadCheckbox?.addEventListener('change', async () => {
-  const res = await sendMessage({
+els.editBeforeUploadCheckbox.addEventListener('change', async () => {
+  const res = await sendRuntimeMessage({
     type: 'UPDATE_SETTINGS',
     patch: { editBeforeUpload: els.editBeforeUploadCheckbox.checked },
   });
@@ -585,7 +658,7 @@ els.captureVisibleBtn.addEventListener('click', async () => {
   );
 
   try {
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'CAPTURE_VISIBLE',
       tabId: currentState.activeTabId,
     });
@@ -620,9 +693,7 @@ els.captureVisibleBtn.addEventListener('click', async () => {
     }
 
     showStatus('success', {
-      message: copied
-        ? `Saved to "${res.upload.folderName}" and link copied!`
-        : `Saved to "${res.upload.folderName}"!`,
+      message: copied ? 'Saved \u00b7 Link copied' : 'Saved to Google Drive',
       fileId: res.upload.id,
       filename: res.upload.name,
       folderName: res.upload.folderName,
@@ -642,7 +713,7 @@ els.captureRegionBtn.addEventListener('click', async () => {
   updateCaptureAvailability();
 
   try {
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'START_REGION_CAPTURE',
       tabId: currentState.activeTabId,
     });
@@ -675,15 +746,15 @@ let openingFolder = false;
 
 async function openDestinationDriveFolder() {
   if (openingFolder) return;
-  const cached = currentState.settings?.folderWebViewLink || '';
+  const cached = safeHttpsUrl(currentState.settings?.folderWebViewLink);
   if (cached.includes('/drive/folders/')) {
     chrome.tabs.create({ url: cached });
     return;
   }
   openingFolder = true;
   try {
-    const res = await sendMessage({ type: 'OPEN_DRIVE_FOLDER' });
-    const url = (res.ok && res.url) || 'https://drive.google.com/drive/my-drive';
+    const res = await sendRuntimeMessage({ type: 'OPEN_DRIVE_FOLDER' });
+    const url = safeHttpsUrl(res.ok ? res.url : '', 'https://drive.google.com/drive/my-drive');
     if (currentState.settings && url.includes('/drive/folders/')) {
       currentState.settings.folderWebViewLink = url;
       els.folderChip.href = url;
@@ -708,8 +779,10 @@ els.folderChip.addEventListener('click', (event) => {
 });
 
 els.clearHistoryBtn.addEventListener('click', async () => {
-  const res = await sendMessage({ type: 'CLEAR_HISTORY' });
+  const res = await sendRuntimeMessage({ type: 'CLEAR_HISTORY' });
   if (res.ok) renderRecentUploads([]);
 });
 
+initThemeSync();
+initStaticMetadata();
 loadState();

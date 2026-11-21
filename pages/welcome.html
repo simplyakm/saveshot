@@ -4,133 +4,139 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SaveShot Help and Setup</title>
+    <link rel="stylesheet" href="../styles/tokens.css" />
     <link rel="stylesheet" href="welcome.css" />
   </head>
   <body>
     <main class="container">
       <header class="hero">
         <div class="brand-row">
-          <img src="../icons/icon48.png" alt="SaveShot" width="40" height="40" class="logo" />
+          <img src="../icons/icon48.png" alt="SaveShot" width="36" height="36" class="logo" />
           <div>
-            <h1>SaveShot</h1>
-            <p class="subtitle">Privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive.</p>
+            <h1 class="ss-title-lg">SaveShot</h1>
+            <p class="ss-body-regular subtitle">Private screenshots straight to your Google Drive.</p>
           </div>
         </div>
-        <span class="version-pill" id="ext-version">v1.1.1</span>
+        <span class="ss-kbd" id="ext-version">v1.1.1</span>
       </header>
 
       <!-- Live Account / Setup Card -->
-      <section class="card status-card">
+      <section class="welcome-card status-card">
         <div class="status-left">
           <div class="status-dot" id="account-dot"></div>
           <div>
-            <h2 id="account-heading">Checking Google account...</h2>
-            <p class="muted" id="account-detail">Seeing if your Chrome Google account is connected.</p>
+            <h2 class="ss-title-sm" id="account-heading">Checking Google account...</h2>
+            <p class="ss-body-regular status-detail" id="account-detail">Seeing if your Chrome Google account is connected.</p>
           </div>
         </div>
         <div class="status-actions">
-          <button class="btn primary" id="sign-in-btn" hidden>Connect Google Drive</button>
+          <button type="button" class="ss-btn ss-btn-primary" id="sign-in-btn" hidden>Connect Google Drive</button>
           <a
-            class="btn"
+            class="ss-btn ss-btn-secondary"
             id="open-drive-btn"
             href="https://drive.google.com/drive/my-drive"
             target="_blank"
             rel="noopener noreferrer"
             hidden
           >
-            Open screenshots folder
+            <span>Open folder</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
           </a>
         </div>
       </section>
 
-      <div class="notice warn" id="dev-setup-notice" hidden>
+      <div class="ss-alert warning" id="dev-setup-notice" hidden>
         <strong>Developer setup needed:</strong> Paste your Chrome Extension OAuth
         <code>client_id</code> into <code>manifest.json</code> and reload SaveShot in
-        <code>chrome://extensions</code>. Full steps are in <code>README.md</code>.
+        <code>chrome://extensions</code>.
       </div>
 
-      <div class="notice error" id="auth-error" hidden></div>
+      <div class="ss-alert error" id="auth-error" hidden></div>
 
       <!-- Quick Start Steps -->
       <section class="section">
-        <h2 class="section-title">How it works</h2>
+        <h2 class="ss-meta section-title">How it works</h2>
         <div class="steps-grid">
-          <div class="card step-card">
-            <span class="step-num">1</span>
-            <h3>Pin and connect</h3>
-            <p class="muted">
-              Click the puzzle icon in Chrome's top bar, pin SaveShot, and connect your Google Drive.
+          <div class="welcome-card step-card">
+            <span class="step-num tabular">1</span>
+            <h3 class="ss-title-sm">Pin and connect</h3>
+            <p class="ss-body-regular">
+              Click the puzzle icon in Chrome's top bar, pin SaveShot, and connect your Google Drive once.
             </p>
           </div>
 
-          <div class="card step-card">
-            <span class="step-num">2</span>
-            <h3>Capture a tab or area</h3>
-            <p class="muted">
-              Use the toolbar popup or keyboard shortcuts to capture the full visible tab or drag across part of a page.
+          <div class="welcome-card step-card">
+            <span class="step-num tabular">2</span>
+            <h3 class="ss-title-sm">Select area or tab</h3>
+            <p class="ss-body-regular">
+              Drag across part of a page or capture the full visible tab from the popup or keyboard shortcuts.
             </p>
           </div>
 
-          <div class="card step-card">
-            <span class="step-num">3</span>
-            <h3>Saved to Google Drive</h3>
-            <p class="muted">
-              Screenshots go into a <strong>Chrome_SaveShot_ScreenShots</strong> folder in your Drive, and the link copies to your clipboard.
+          <div class="welcome-card step-card">
+            <span class="step-num tabular">3</span>
+            <h3 class="ss-title-sm">Saved to Google Drive</h3>
+            <p class="ss-body-regular">
+              Screenshots go into <strong>Chrome_SaveShot_ScreenShots</strong> in your Drive and copy the link automatically.
             </p>
           </div>
         </div>
       </section>
 
       <!-- Shortcuts -->
-      <section class="card shortcuts-card">
-        <div>
-          <h2>Keyboard shortcuts</h2>
-          <div class="shortcut-list">
-            <div class="shortcut-item">
-              <span>Capture visible tab</span>
-              <kbd id="shortcut-visible">Alt+Shift+S</kbd>
-            </div>
-            <div class="shortcut-item">
-              <span>Select area on page</span>
-              <kbd id="shortcut-region">Alt+Shift+R</kbd>
-            </div>
+      <section class="welcome-card shortcuts-card">
+        <div class="shortcuts-header">
+          <h2 class="ss-title-sm">Keyboard shortcuts</h2>
+          <button type="button" class="ss-btn ss-btn-secondary" id="edit-shortcuts-btn">Change shortcuts</button>
+        </div>
+        <div class="shortcut-rows">
+          <div class="shortcut-row">
+            <span class="ss-body">Select area</span>
+            <kbd class="ss-kbd" id="shortcut-region">Alt + Shift + R</kbd>
+          </div>
+          <div class="shortcut-row">
+            <span class="ss-body">Visible tab</span>
+            <kbd class="ss-kbd" id="shortcut-visible">Alt + Shift + S</kbd>
           </div>
         </div>
-        <button class="btn" id="edit-shortcuts-btn">Change shortcuts</button>
       </section>
 
       <!-- Good to Know / FAQ -->
       <section class="section">
-        <h2 class="section-title">Good to know</h2>
-        <div class="card faq-list">
+        <h2 class="ss-meta section-title">Good to know</h2>
+        <div class="welcome-card faq-list">
           <div class="faq-item">
-            <h3>Can I annotate, redact, rotate, or rename screenshots?</h3>
-            <p class="muted">
-              Yes. Click <strong>Edit</strong> after taking a screenshot (or on any recent item in the popup) to add arrows, shapes, text, black-bar redactions, rotate or flip, rename the file, and replace the file in Google Drive while keeping the same share link. You can also turn on <strong>Open editor before uploading</strong> in Settings so sensitive info is redacted before anything is uploaded.
+            <h3 class="ss-title-sm">Can I annotate, redact, rotate, or rename screenshots?</h3>
+            <p class="ss-body-regular">
+              Yes. Click <strong>Edit</strong> after taking a screenshot (or on any item in Recent) to add arrows, shapes, text, black-bar redactions, custom hex colors, rotate or flip, rename the file, and update the file in Google Drive while keeping the same link. Turn on <strong>Open editor before uploading</strong> in Settings to redact before initial upload.
             </p>
           </div>
           <div class="faq-item">
-            <h3>Can SaveShot see my other Google Drive files?</h3>
-            <p class="muted">
+            <h3 class="ss-title-sm">Can SaveShot see my other Google Drive files?</h3>
+            <p class="ss-body-regular">
               No. SaveShot uses the narrow <code>drive.file</code> permission. It can only access the folder and screenshots that SaveShot creates itself.
             </p>
           </div>
           <div class="faq-item">
-            <h3>Why are buttons disabled on some tabs?</h3>
-            <p class="muted">
+            <h3 class="ss-title-sm">Why are buttons disabled on some tabs?</h3>
+            <p class="ss-body-regular">
               Chrome blocks all extensions from running on internal pages like <code>chrome://settings</code> and on the Chrome Web Store. For local PDFs or <code>file://</code> pages, turn on <strong>Allow access to file URLs</strong> in SaveShot's settings at <code>chrome://extensions</code>.
             </p>
           </div>
           <div class="faq-item">
-            <h3>What happens if my Google Drive is full or offline?</h3>
-            <p class="muted">
-              If an upload fails after taking a screenshot, SaveShot shows a <strong>Save PNG locally</strong> button so you can save the image to your computer instead of losing it.
+            <h3 class="ss-title-sm">What happens if my Google Drive is full or offline?</h3>
+            <p class="ss-body-regular">
+              If an upload fails after taking a screenshot, SaveShot shows a <strong>Save PNG locally</strong> button so you can save the image to your computer without losing it.
             </p>
           </div>
           <div class="faq-item">
-            <h3>How does Incognito mode work?</h3>
-            <p class="muted">
-              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload to your Google Drive, while page URLs and local upload history are left out for privacy.
+            <h3 class="ss-title-sm">How does Incognito mode work?</h3>
+            <p class="ss-body-regular">
+              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload to your Google Drive while page URLs and local upload history are left out for privacy.
             </p>
           </div>
         </div>
@@ -138,25 +144,26 @@
 
       <!-- Bug Report & Feature Request Section -->
       <section class="section" id="feedback">
-        <h2 class="section-title">Report a bug or request a feature</h2>
-        <div class="card feedback-card">
-          <p class="muted">
-            Found something broken or want a new option? Fill this out to open a pre-filled issue on GitHub, or copy the report text if you prefer not to use GitHub.
+        <h2 class="ss-meta section-title">Report a bug or request a feature</h2>
+        <div class="welcome-card feedback-card">
+          <p class="ss-body-regular">
+            Found something broken or want a new option? Open a pre-filled issue on GitHub, or copy the report text if you prefer not to use GitHub.
           </p>
 
-          <div class="type-tabs" role="tablist">
-            <button type="button" class="tab-btn active" id="tab-bug" data-kind="bug">
+          <div class="ss-segmented feedback-tabs" role="tablist">
+            <button type="button" class="ss-seg-item active" id="tab-bug" data-kind="bug">
               Bug report
             </button>
-            <button type="button" class="tab-btn" id="tab-feature" data-kind="feature">
+            <button type="button" class="ss-seg-item" id="tab-feature" data-kind="feature">
               Feature request
             </button>
           </div>
 
           <div class="form-field">
-            <label for="fb-title">Short summary</label>
+            <label for="fb-title" class="ss-body">Short summary</label>
             <input
               type="text"
+              class="ss-input"
               id="fb-title"
               maxlength="120"
               placeholder="Example: Region capture shifts when page is scrolled"
@@ -164,8 +171,9 @@
           </div>
 
           <div class="form-field">
-            <label for="fb-details" id="fb-details-label">What happened?</label>
+            <label for="fb-details" class="ss-body" id="fb-details-label">What happened?</label>
             <textarea
+              class="ss-textarea"
               id="fb-details"
               rows="4"
               placeholder="Tell us what steps you took and what you expected to happen."
@@ -174,23 +182,23 @@
 
           <div class="diag-box">
             <label class="checkbox-label">
-              <input type="checkbox" id="fb-include-diag" checked />
-              <span>Include basic browser and version info (no personal data or URLs)</span>
+              <input type="checkbox" class="diag-checkbox" id="fb-include-diag" checked />
+              <span class="ss-body-regular">Include basic browser and version info (no personal data or URLs)</span>
             </label>
             <pre class="diag-preview" id="diag-preview"></pre>
           </div>
 
           <div class="feedback-actions">
-            <button type="button" class="btn primary" id="open-github-issue-btn">
+            <button type="button" class="ss-btn ss-btn-primary" id="open-github-issue-btn">
               Open pre-filled GitHub issue
             </button>
-            <button type="button" class="btn" id="copy-report-btn">
+            <button type="button" class="ss-btn ss-btn-secondary" id="copy-report-btn">
               Copy report text
             </button>
             <a
-              class="text-link"
+              class="ss-body ss-author-link"
               id="repo-issues-link"
-              href="https://github.com"
+              href="https://github.com/simplyakm/saveshot/issues"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -199,6 +207,19 @@
           </div>
         </div>
       </section>
+
+      <footer class="welcome-footer ss-meta">
+        <span>Privacy-first &middot; Zero tracking</span>
+        <a
+          href="https://x.com/_simplyakm"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ss-author-link"
+          id="welcome-author-link"
+        >
+          Built by @_simplyakm
+        </a>
+      </footer>
     </main>
 
     <script type="module" src="welcome.js"></script>

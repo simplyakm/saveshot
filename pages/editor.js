@@ -1,28 +1,39 @@
-import { sanitizeScreenshotFilename } from '../lib/capture.js';
+import { dataUrlToBlob, sanitizeScreenshotFilename } from '../lib/capture.js';
 import {
   FONT_SIZES,
+  parseHexColorInput,
   renderAnnotation,
+  sanitizeHexColor,
   STROKE_SIZES,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
+import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
 
 const MAX_UNDO_STEPS = 20;
 
 const els = {
+  filenameReadonly: document.getElementById('filename-readonly'),
+  filenameDisplay: document.getElementById('filename-display'),
+  renamePencilBtn: document.getElementById('rename-pencil-btn'),
+  filenameEditing: document.getElementById('filename-editing'),
   filenameInput: document.getElementById('filename-input'),
-  folderBadge: document.getElementById('folder-badge'),
+  dimLabel: document.getElementById('dim-label'),
+  statusPill: document.getElementById('status-pill'),
   downloadBtn: document.getElementById('download-btn'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   openDriveLink: document.getElementById('open-drive-link'),
   saveDriveBtn: document.getElementById('save-drive-btn'),
   styleGroup: document.getElementById('style-group'),
   colorSwatches: document.getElementById('color-swatches'),
+  customColorBtn: document.getElementById('custom-color-btn'),
+  hexPopover: document.getElementById('hex-popover'),
+  hexColorNative: document.getElementById('hex-color-native'),
+  hexInputWrap: document.getElementById('hex-input-wrap'),
+  hexTextInput: document.getElementById('hex-text-input'),
+  applyHexBtn: document.getElementById('apply-hex-btn'),
   sizePills: document.getElementById('size-pills'),
   undoBtn: document.getElementById('undo-btn'),
   resetBtn: document.getElementById('reset-btn'),
-  modeNote: document.getElementById('mode-note'),
-  statusPill: document.getElementById('status-pill'),
-  dimLabel: document.getElementById('dim-label'),
   stageMessage: document.getElementById('stage-message'),
   stageSpinner: document.getElementById('stage-spinner'),
   stageMessageText: document.getElementById('stage-message-text'),
@@ -31,7 +42,6 @@ const els = {
   previewCanvas: document.getElementById('preview-canvas'),
   textOverlayInput: document.getElementById('text-overlay-input'),
   confirmReplaceDialog: document.getElementById('confirm-replace-dialog'),
-  replaceTargetName: document.getElementById('replace-target-name'),
   cancelReplaceBtn: document.getElementById('cancel-replace-btn'),
   saveNewCopyBtn: document.getElementById('save-new-copy-btn'),
   confirmReplaceBtn: document.getElementById('confirm-replace-btn'),
@@ -45,6 +55,7 @@ const state = {
   mode: 'new', // 'new' | 'existing'
   fileId: null,
   savedFilename: 'Screenshot.png',
+  committedStem: 'Screenshot',
   folderName: 'Chrome_SaveShot_ScreenShots',
   webViewLink: '',
   captureMode: 'visible',
@@ -66,38 +77,23 @@ const state = {
   activeTextAnchor: null,
 };
 
-function safeHttpsUrl(url) {
-  if (typeof url !== 'string' || !url) return '';
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'https:' ? parsed.href : '';
-  } catch {
-    return '';
-  }
-}
-
-function sendMessage(payload) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!response) {
-        reject(new Error('No response from background service worker.'));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
-
 function stripPngSuffix(filename) {
   return String(filename || 'Screenshot.png').replace(/\.png$/i, '');
 }
 
 function getDesiredFilename() {
-  return sanitizeScreenshotFilename(els.filenameInput.value, state.savedFilename);
+  const rawCandidate = !els.filenameEditing.hidden
+    ? els.filenameInput.value
+    : els.filenameInput.value || state.committedStem;
+  return sanitizeScreenshotFilename(rawCandidate, state.savedFilename);
+}
+
+function syncFilenameDisplay(cleanFilename) {
+  const stem = stripPngSuffix(cleanFilename);
+  state.committedStem = stem;
+  els.filenameInput.value = stem;
+  els.filenameDisplay.textContent = stem;
+  els.filenameDisplay.title = `${stem}.png`;
 }
 
 function hasUnsavedChanges() {
@@ -125,16 +121,26 @@ function showStatusPill(kind, text, autoHideMs = 0) {
 function updateDimensionsLabel() {
   if (!state.ready) {
     els.dimLabel.textContent = '';
+    els.dimLabel.hidden = true;
     return;
   }
-  els.dimLabel.textContent = `${els.baseCanvas.width} x ${els.baseCanvas.height} px`;
+  els.dimLabel.hidden = false;
+  els.dimLabel.textContent = `${els.baseCanvas.width} \u00d7 ${els.baseCanvas.height}`;
 }
 
-function updateModeBannerAndButtons() {
-  els.folderBadge.textContent = `Folder: ${state.folderName}`;
-  els.saveDriveBtn.textContent =
-    state.mode === 'existing' ? 'Replace in Drive' : 'Upload to Drive';
-  els.saveDriveBtn.disabled = !state.ready || state.saving;
+function updateUiState() {
+  const dirty = hasUnsavedChanges();
+  const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
+
+  els.saveDriveBtn.textContent = 'Save';
+  els.saveDriveBtn.disabled = !canSave;
+  els.saveDriveBtn.title = !state.ready
+    ? 'Loading screenshot...'
+    : state.mode === 'new'
+    ? 'Upload screenshot to Google Drive'
+    : dirty
+    ? 'Save changes to Google Drive'
+    : 'Make an edit or rename to enable Save';
 
   const safeLink = safeHttpsUrl(state.webViewLink);
   if (safeLink) {
@@ -144,19 +150,6 @@ function updateModeBannerAndButtons() {
   } else {
     els.copyLinkBtn.hidden = true;
     els.openDriveLink.hidden = true;
-  }
-
-  if (state.mode === 'existing') {
-    if (state.tool === 'redact') {
-      els.modeNote.textContent =
-        'Editing an uploaded Drive file. Tip: turn on "Open editor before uploading" in Settings to redact before initial upload.';
-    } else {
-      els.modeNote.textContent =
-        'Editing an uploaded Drive file. Saving replaces the existing file and keeps the same Drive link.';
-    }
-  } else {
-    els.modeNote.textContent =
-      'Not uploaded yet. Edit or redact freely, then click "Upload to Drive".';
   }
 
   els.undoBtn.disabled = !state.ready || state.saving || state.undoStack.length === 0;
@@ -209,7 +202,7 @@ async function pushUndoSnapshot() {
     const evicted = state.undoStack.shift();
     evicted?.bitmap?.close?.();
   }
-  updateModeBannerAndButtons();
+  updateUiState();
 }
 
 function clearUndoStack() {
@@ -264,7 +257,7 @@ function commitActiveTextIfNeeded() {
       const popped = state.undoStack.pop();
       popped?.bitmap?.close?.();
     }
-    updateModeBannerAndButtons();
+    updateUiState();
   });
 }
 
@@ -287,13 +280,18 @@ function openTextOverlayAt(coords) {
     fontSize: getEffectiveFontSize(),
   };
 
-  els.textOverlayInput.style.left = `${clampedCssX}px`;
-  els.textOverlayInput.style.top = `${clampedCssY}px`;
-  els.textOverlayInput.style.color = state.color;
-  els.textOverlayInput.style.fontSize = `${cssFontSize}px`;
+  els.textOverlayInput.style.setProperty('--tx', `${clampedCssX}px`);
+  els.textOverlayInput.style.setProperty('--ty', `${clampedCssY}px`);
+  els.textOverlayInput.style.setProperty('--tcolor', state.color);
+  els.textOverlayInput.style.setProperty('--tsize', `${cssFontSize}px`);
   els.textOverlayInput.value = '';
   els.textOverlayInput.hidden = false;
   requestAnimationFrame(() => els.textOverlayInput.focus());
+}
+
+function closeHexPopover() {
+  els.hexPopover.hidden = true;
+  els.hexInputWrap.classList.remove('invalid');
 }
 
 async function setTool(nextTool) {
@@ -304,19 +302,38 @@ async function setTool(nextTool) {
     btn.classList.toggle('active', btn.dataset.tool === nextTool);
   }
 
+  if (nextTool === 'redact') {
+    closeHexPopover();
+  }
   els.styleGroup.classList.toggle('dimmed', nextTool === 'redact');
   els.previewCanvas.classList.toggle('text-cursor', nextTool === 'text');
-  updateModeBannerAndButtons();
+  updateUiState();
 }
 
-function setColor(nextColor) {
-  state.color = nextColor;
+function setColor(nextColor, { isCustom = false } = {}) {
+  const safeColor = sanitizeHexColor(nextColor, state.color);
+  state.color = safeColor;
+
+  let matchedPreset = false;
   for (const btn of els.colorSwatches.querySelectorAll('[data-color]')) {
-    btn.classList.toggle('active', btn.dataset.color === nextColor);
+    const isMatch = !isCustom && btn.dataset.color.toLowerCase() === safeColor;
+    btn.classList.toggle('active', isMatch);
+    if (isMatch) matchedPreset = true;
   }
+
+  if (isCustom || !matchedPreset) {
+    els.customColorBtn.classList.add('active');
+    document.documentElement.style.setProperty('--ss-custom-swatch', safeColor);
+    els.hexColorNative.value = safeColor;
+    els.hexTextInput.value = safeColor.slice(1).toUpperCase();
+  } else {
+    els.customColorBtn.classList.remove('active');
+    document.documentElement.style.removeProperty('--ss-custom-swatch');
+  }
+
   if (!els.textOverlayInput.hidden && state.activeTextAnchor) {
-    state.activeTextAnchor.color = nextColor;
-    els.textOverlayInput.style.color = nextColor;
+    state.activeTextAnchor.color = safeColor;
+    els.textOverlayInput.style.setProperty('--tcolor', safeColor);
   }
 }
 
@@ -327,7 +344,10 @@ function setSizeKey(nextSize) {
   }
   if (!els.textOverlayInput.hidden && state.activeTextAnchor) {
     state.activeTextAnchor.fontSize = getEffectiveFontSize();
-    els.textOverlayInput.style.fontSize = `${FONT_SIZES[nextSize] || FONT_SIZES.md}px`;
+    els.textOverlayInput.style.setProperty(
+      '--tsize',
+      `${FONT_SIZES[nextSize] || FONT_SIZES.md}px`
+    );
   }
 }
 
@@ -355,7 +375,7 @@ function applyTransform(kind) {
     syncPreviewCanvasSize();
     state.isAtOriginalCapture = false;
     state.imageModifiedSinceSave = true;
-    updateModeBannerAndButtons();
+    updateUiState();
   });
 }
 
@@ -380,7 +400,7 @@ function undoLastChange() {
     } finally {
       prev.bitmap.close();
     }
-    updateModeBannerAndButtons();
+    updateUiState();
   });
 }
 
@@ -400,7 +420,7 @@ function resetToOriginal() {
 
     state.isAtOriginalCapture = true;
     state.imageModifiedSinceSave = !state.driveMatchesInitial;
-    updateModeBannerAndButtons();
+    updateUiState();
   });
 }
 
@@ -431,6 +451,7 @@ function renderActiveDragPreview() {
 els.previewCanvas.addEventListener('pointerdown', (event) => {
   if (!state.ready || state.saving || event.button !== 0) return;
   event.preventDefault();
+  closeHexPopover();
 
   const coords = getCanvasCoordinates(event);
   commitActiveTextIfNeeded();
@@ -505,7 +526,7 @@ function finishPointerDrag(event) {
       const unused = state.undoStack.pop();
       unused?.bitmap?.close?.();
     }
-    updateModeBannerAndButtons();
+    updateUiState();
   });
 }
 
@@ -527,15 +548,103 @@ els.textOverlayInput.addEventListener('keydown', async (event) => {
   }
 });
 
-els.filenameInput.addEventListener('blur', () => {
-  const clean = getDesiredFilename();
-  els.filenameInput.value = stripPngSuffix(clean);
-});
+/* Intentional Pencil Rename Handlers */
+function openFilenameEditor() {
+  if (!state.ready || state.saving) return;
+  els.filenameReadonly.hidden = true;
+  els.filenameEditing.hidden = false;
+  els.filenameInput.value = state.committedStem;
+  els.filenameInput.focus();
+  els.filenameInput.select();
+}
 
+function commitFilenameEdit() {
+  const clean = sanitizeScreenshotFilename(els.filenameInput.value, state.savedFilename);
+  syncFilenameDisplay(clean);
+  els.filenameEditing.hidden = true;
+  els.filenameReadonly.hidden = false;
+  updateUiState();
+}
+
+function cancelFilenameEdit() {
+  els.filenameInput.value = state.committedStem;
+  els.filenameEditing.hidden = true;
+  els.filenameReadonly.hidden = false;
+  updateUiState();
+}
+
+els.renamePencilBtn.addEventListener('click', openFilenameEditor);
+els.filenameInput.addEventListener('input', () => updateUiState());
+els.filenameInput.addEventListener('blur', commitFilenameEdit);
 els.filenameInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
     els.filenameInput.blur();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelFilenameEdit();
+  }
+});
+
+/* Custom Hex Color Popover Handlers */
+els.customColorBtn.addEventListener('click', (event) => {
+  event.stopPropagation();
+  const willShow = els.hexPopover.hidden;
+  els.hexPopover.hidden = !willShow;
+  els.hexInputWrap.classList.remove('invalid');
+  if (willShow) {
+    els.hexColorNative.value = state.color;
+    els.hexTextInput.value = state.color.slice(1).toUpperCase();
+    els.hexTextInput.focus();
+    els.hexTextInput.select();
+  }
+});
+
+els.hexPopover.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
+els.hexColorNative.addEventListener('input', () => {
+  const parsed = parseHexColorInput(els.hexColorNative.value);
+  if (parsed) {
+    els.hexInputWrap.classList.remove('invalid');
+    setColor(parsed, { isCustom: true });
+  }
+});
+
+function applyHexFromTextInput() {
+  const parsed = parseHexColorInput(els.hexTextInput.value);
+  if (!parsed) {
+    els.hexInputWrap.classList.add('invalid');
+    return false;
+  }
+  els.hexInputWrap.classList.remove('invalid');
+  setColor(parsed, { isCustom: true });
+  closeHexPopover();
+  return true;
+}
+
+els.applyHexBtn.addEventListener('click', () => {
+  applyHexFromTextInput();
+});
+
+els.hexTextInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    applyHexFromTextInput();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeHexPopover();
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (
+    !els.hexPopover.hidden &&
+    !els.hexPopover.contains(event.target) &&
+    event.target !== els.customColorBtn
+  ) {
+    closeHexPopover();
   }
 });
 
@@ -544,7 +653,10 @@ for (const btn of document.querySelectorAll('[data-tool]')) {
 }
 
 for (const swatch of els.colorSwatches.querySelectorAll('[data-color]')) {
-  swatch.addEventListener('click', () => setColor(swatch.dataset.color));
+  swatch.addEventListener('click', () => {
+    closeHexPopover();
+    setColor(swatch.dataset.color, { isCustom: false });
+  });
 }
 
 for (const pill of els.sizePills.querySelectorAll('[data-size]')) {
@@ -579,10 +691,10 @@ els.copyLinkBtn.addEventListener('click', async () => {
   if (!safeLink) return;
   try {
     await navigator.clipboard.writeText(safeLink);
-    els.copyLinkBtn.textContent = 'Link copied!';
+    els.copyLinkBtn.textContent = 'Copied!';
     setTimeout(() => {
       els.copyLinkBtn.textContent = 'Copy link';
-    }, 1800);
+    }, 1600);
   } catch {
     showStatusPill('err', 'Could not copy link to clipboard.', 3000);
   }
@@ -609,23 +721,23 @@ async function performSave(saveMode) {
   await commitActiveTextIfNeeded();
 
   const desiredFilename = getDesiredFilename();
-  els.filenameInput.value = stripPngSuffix(desiredFilename);
+  syncFilenameDisplay(desiredFilename);
 
   const needImagePayload =
     state.mode === 'new' || saveMode === 'new' || state.imageModifiedSinceSave;
 
   state.saving = true;
-  updateModeBannerAndButtons();
+  updateUiState();
   showStatusPill(
     'warn',
     saveMode === 'replace' && state.mode === 'existing'
-      ? 'Replacing file in Google Drive...'
+      ? 'Replacing in Google Drive...'
       : 'Uploading to Google Drive...'
   );
 
   try {
     const dataUrl = needImagePayload ? await exportCanvasDataUrl() : '';
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'SAVE_EDITED_SCREENSHOT',
       sessionId: state.sessionId,
       filename: desiredFilename,
@@ -661,7 +773,7 @@ async function performSave(saveMode) {
       }
     }
     state.imageModifiedSinceSave = false;
-    els.filenameInput.value = stripPngSuffix(state.savedFilename);
+    syncFilenameDisplay(state.savedFilename);
 
     let copied = false;
     const safeLink = safeHttpsUrl(state.webViewLink);
@@ -678,17 +790,17 @@ async function performSave(saveMode) {
       res.action === 'replaced' ? 'Replaced in Google Drive' : 'Saved to Google Drive';
     showStatusPill(
       'ok',
-      copied ? `${actionWord} - link copied!` : `${actionWord}!`,
+      copied ? `${actionWord} \u00b7 Link copied` : actionWord,
       5000
     );
   } catch (err) {
     showStatusPill(
       'err',
-      err.message || 'Could not save to Google Drive. Use "Download PNG" to save locally.'
+      err.message || 'Could not save to Google Drive. Use "Download" to save locally.'
     );
   } finally {
     state.saving = false;
-    updateModeBannerAndButtons();
+    updateUiState();
   }
 }
 
@@ -698,10 +810,8 @@ els.saveDriveBtn.addEventListener('click', async () => {
 
   if (state.mode === 'existing') {
     if (!hasUnsavedChanges()) {
-      showStatusPill('ok', 'No changes to save yet.', 2600);
       return;
     }
-    els.replaceTargetName.textContent = state.savedFilename;
     els.confirmReplaceDialog.showModal();
     return;
   }
@@ -727,6 +837,12 @@ window.addEventListener('keydown', (event) => {
   if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+  if (event.key === 'Escape' && !els.hexPopover.hidden) {
+    event.preventDefault();
+    closeHexPopover();
+    return;
+  }
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault();
@@ -771,14 +887,13 @@ async function initEditor() {
     els.stageSpinner.hidden = true;
     els.stageMessageText.textContent =
       'No screenshot session specified. Capture a screenshot or click Edit in the SaveShot popup.';
-    els.modeNote.textContent = 'Session missing';
     return;
   }
 
   state.sessionId = sessionId;
 
   try {
-    const res = await sendMessage({
+    const res = await sendRuntimeMessage({
       type: 'GET_EDITOR_SESSION',
       sessionId,
     });
@@ -786,7 +901,7 @@ async function initEditor() {
       throw new Error(res.error || 'Could not load screenshot session.');
     }
 
-    const blob = await (await fetch(res.dataUrl)).blob();
+    const blob = await dataUrlToBlob(res.dataUrl);
     const bitmap = await createImageBitmap(blob);
 
     state.initialBitmap = bitmap;
@@ -798,29 +913,30 @@ async function initEditor() {
     );
     state.folderName = res.session.folderName || 'Chrome_SaveShot_ScreenShots';
     state.webViewLink = res.session.webViewLink || '';
-    state.captureMode = res.session.captureMode === 'region' ? 'region' : 'visible';
+    state.captureMode = res.session.captureMode || 'visible';
     state.pageUrl = res.session.pageUrl || '';
     state.pageTitle = res.session.pageTitle || '';
     state.incognito = Boolean(res.session.incognito);
     state.autoCopyLink = Boolean(res.session.autoCopyLink);
 
-    els.filenameInput.value = stripPngSuffix(state.savedFilename);
+    syncFilenameDisplay(state.savedFilename);
 
     els.baseCanvas.width = bitmap.width;
     els.baseCanvas.height = bitmap.height;
     baseCtx.drawImage(bitmap, 0, 0);
     syncPreviewCanvasSize();
 
+    state.ready = true;
     els.stageMessage.hidden = true;
     els.canvasWrap.hidden = false;
-    state.ready = true;
-    updateModeBannerAndButtons();
+    updateUiState();
   } catch (err) {
     els.stageSpinner.hidden = true;
     els.stageMessageText.textContent =
       err.message || 'Could not load screenshot for editing.';
-    els.modeNote.textContent = 'Could not load screenshot';
+    showStatusPill('err', 'Session unavailable');
   }
 }
 
+initThemeSync();
 initEditor();

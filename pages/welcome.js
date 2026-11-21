@@ -3,6 +3,7 @@ import {
   getEnvironmentSummary,
   getRepoUrl,
 } from '../lib/feedback.js';
+import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
 
 const els = {
   extVersion: document.getElementById('ext-version'),
@@ -31,16 +32,9 @@ const els = {
 let feedbackKind = 'bug';
 let lastErrorCode = '';
 
-function sendMessage(payload) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, (res) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(res || { ok: false });
-    });
-  });
+function formatShortcutDisplay(raw) {
+  if (!raw) return '';
+  return String(raw).replace(/\+/g, ' + ');
 }
 
 function setFeedbackKind(kind) {
@@ -73,9 +67,11 @@ function updateDiagnosticPreview() {
 async function loadStatus() {
   const env = getEnvironmentSummary();
   els.extVersion.textContent = `v${env.extensionVersion}`;
-  els.repoIssuesLink.href = `${getRepoUrl()}/issues`;
+  els.repoIssuesLink.href = safeHttpsUrl(
+    `${getRepoUrl()}/issues`,
+    'https://github.com/simplyakm/saveshot/issues'
+  );
 
-  // Check URL query/hash parameters (e.g. welcome.html?kind=bug&error=DRIVE_QUOTA_EXCEEDED#feedback)
   const params = new URLSearchParams(window.location.search);
   if (params.get('error')) {
     lastErrorCode = params.get('error');
@@ -84,21 +80,20 @@ async function loadStatus() {
     setFeedbackKind(params.get('kind'));
   }
 
-  // Load live keyboard shortcuts from Chrome
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {
       for (const cmd of commands || []) {
         if (cmd.name === 'capture-visible' && cmd.shortcut) {
-          els.shortcutVisible.textContent = cmd.shortcut;
+          els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
         } else if (cmd.name === 'capture-region' && cmd.shortcut) {
-          els.shortcutRegion.textContent = cmd.shortcut;
+          els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
         }
       }
     });
   }
 
   try {
-    const res = await sendMessage({ type: 'GET_STATE' });
+    const res = await sendRuntimeMessage({ type: 'GET_STATE' });
     if (res.lastErrorCode && !lastErrorCode) {
       lastErrorCode = res.lastErrorCode;
     }
@@ -122,8 +117,10 @@ async function loadStatus() {
     els.accountDetail.textContent = `Screenshots save to "${folderName}" in your Google Drive.`;
     els.signInBtn.hidden = true;
     els.openDriveBtn.hidden = false;
-    els.openDriveBtn.href =
-      res.settings?.folderWebViewLink || 'https://drive.google.com/drive/my-drive';
+    els.openDriveBtn.href = safeHttpsUrl(
+      res.settings?.folderWebViewLink,
+      'https://drive.google.com/drive/my-drive'
+    );
     els.devSetupNotice.hidden = true;
   } catch {
     updateDiagnosticPreview();
@@ -134,7 +131,7 @@ els.signInBtn.addEventListener('click', async () => {
   els.signInBtn.disabled = true;
   els.authError.hidden = true;
   try {
-    const res = await sendMessage({ type: 'SIGN_IN' });
+    const res = await sendRuntimeMessage({ type: 'SIGN_IN' });
     if (!res.ok) throw new Error(res.error || 'Sign-in failed.');
     await loadStatus();
   } catch (err) {
@@ -153,17 +150,18 @@ els.openDriveBtn.addEventListener('click', async (event) => {
   event.preventDefault();
   if (openingWelcomeFolder) return;
   openingWelcomeFolder = true;
-  const originalText = els.openDriveBtn.textContent;
-  els.openDriveBtn.textContent = 'Opening folder...';
+  const labelSpan = els.openDriveBtn.querySelector('span');
+  const originalText = labelSpan ? labelSpan.textContent : '';
+  if (labelSpan) labelSpan.textContent = 'Opening...';
   try {
-    const res = await sendMessage({ type: 'OPEN_DRIVE_FOLDER' });
-    const url = (res.ok && res.url) || 'https://drive.google.com/drive/my-drive';
+    const res = await sendRuntimeMessage({ type: 'OPEN_DRIVE_FOLDER' });
+    const url = safeHttpsUrl(res.ok ? res.url : '', 'https://drive.google.com/drive/my-drive');
     els.openDriveBtn.href = url;
     chrome.tabs.create({ url });
   } catch {
     chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
   } finally {
-    els.openDriveBtn.textContent = originalText;
+    if (labelSpan) labelSpan.textContent = originalText;
     openingWelcomeFolder = false;
   }
 });
@@ -206,4 +204,5 @@ els.copyReportBtn.addEventListener('click', async () => {
   }
 });
 
+initThemeSync();
 loadStatus();

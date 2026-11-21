@@ -165,13 +165,14 @@
     shadow.innerHTML = `
       <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+        [hidden] { display: none !important; }
         .backdrop {
           position: fixed;
           inset: 0;
           width: 100vw;
           height: 100vh;
           cursor: crosshair;
-          background: rgba(15, 23, 42, 0.35);
+          background: rgba(15, 18, 24, 0.34);
           touch-action: none;
         }
         .backdrop.dragging {
@@ -183,22 +184,68 @@
           left: ${hintLeft}px;
           transform: translateX(-50%) scale(${1 / vvScale});
           transform-origin: top center;
-          background: rgba(15, 23, 42, 0.9);
-          color: #f8fafc;
-          font: 500 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-          padding: 8px 16px;
-          border-radius: 999px;
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          pointer-events: none;
+          background: rgba(20, 21, 24, 0.94);
+          backdrop-filter: blur(10px);
+          color: #f3f4f6;
+          font: 500 12.5px/18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+          height: 36px;
+          padding: 0 8px 0 12px;
+          border-radius: 12px;
+          box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          pointer-events: auto;
           white-space: nowrap;
+          cursor: default;
+        }
+        .sep {
+          width: 1px;
+          height: 14px;
+          background: rgba(255, 255, 255, 0.16);
+          flex-shrink: 0;
+        }
+        .hud-btn {
+          height: 24px;
+          padding: 0 8px;
+          border-radius: 7px;
+          border: 1px solid rgba(255, 255, 255, 0.16);
+          background: rgba(255, 255, 255, 0.08);
+          color: #ffffff;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 500;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          transition: background 120ms ease, border-color 120ms ease;
+        }
+        .hud-btn:hover {
+          background: rgba(255, 255, 255, 0.16);
+          border-color: rgba(255, 255, 255, 0.28);
+        }
+        .hud-kbd {
+          height: 18px;
+          padding: 0 5px;
+          border-radius: 4px;
+          background: rgba(255, 255, 255, 0.1);
+          color: #a6abb6;
+          font-family: inherit;
+          font-size: 10.5px;
+          font-weight: 500;
+          line-height: 16px;
+          display: inline-flex;
+          align-items: center;
+          font-variant-numeric: tabular-nums;
         }
         .selection {
           position: fixed;
           display: none;
-          border: ${Math.max(1, 2 / vvScale)}px solid #1a73e8;
+          border: ${Math.max(1, 1.5 / vvScale)}px solid #1a73e8;
           background: transparent;
-          box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.42);
+          box-shadow: 0 0 0 9999px rgba(15, 18, 24, 0.42);
           pointer-events: none;
         }
         .dimensions {
@@ -206,18 +253,29 @@
           display: none;
           transform: scale(${1 / vvScale});
           transform-origin: top left;
-          background: #0f172a;
-          color: #f8fafc;
-          font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-          padding: 4px 8px;
+          background: rgba(20, 21, 24, 0.94);
+          color: #f3f4f6;
+          font: 600 11px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-variant-numeric: tabular-nums;
+          padding: 3px 8px;
           border-radius: 6px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
           pointer-events: none;
           white-space: nowrap;
         }
       </style>
       <div class="backdrop" id="backdrop">
-        <div class="hint" id="hint">Drag to select screenshot area · Press Esc to cancel</div>
+        <div class="hint" id="hint">
+          <span>Drag to select area</span>
+          <span class="sep" aria-hidden="true"></span>
+          <button type="button" class="hud-btn" id="full-tab-btn" title="Capture full visible tab (Enter)">
+            <span>Full tab</span>
+            <kbd class="hud-kbd">Enter</kbd>
+          </button>
+          <span class="sep" aria-hidden="true"></span>
+          <kbd class="hud-kbd" title="Press Esc to cancel">Esc</kbd>
+        </div>
         <div class="selection" id="selection"></div>
         <div class="dimensions" id="dimensions"></div>
       </div>
@@ -225,6 +283,7 @@
 
     const backdrop = shadow.getElementById('backdrop');
     const hint = shadow.getElementById('hint');
+    const fullTabBtn = shadow.getElementById('full-tab-btn');
     const selectionEl = shadow.getElementById('selection');
     const dimensionsEl = shadow.getElementById('dimensions');
 
@@ -275,7 +334,7 @@
       const pxH = Math.max(1, Math.round(height * dpr * vScale));
 
       dimensionsEl.style.display = 'block';
-      dimensionsEl.textContent = `${pxW} × ${pxH} px`;
+      dimensionsEl.textContent = `${pxW} \u00d7 ${pxH}`;
       const badgeTop =
         y + height + 8 + 26 / vScale < bounds.maxY
           ? y + height + 8 / vScale
@@ -294,7 +353,30 @@
       e.stopImmediatePropagation();
     }
 
+    function triggerFullTabCapture() {
+      installTrailingClickShield();
+      clearActiveOverlay();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            chrome.runtime
+              .sendMessage({ type: 'CAPTURE_VISIBLE_FROM_OVERLAY' })
+              .catch(() => {});
+          }, 35);
+        });
+      });
+    }
+
+    fullTabBtn.addEventListener('click', (e) => {
+      stopEvent(e);
+      triggerFullTabCapture();
+    });
+
     function onPointerDown(e) {
+      if (hint.contains(e.target)) {
+        e.stopPropagation();
+        return;
+      }
       stopEvent(e);
       if (e.button !== 0) {
         installTrailingClickShield();
@@ -310,7 +392,7 @@
         // Synthetic events may not have an active pointerId
       }
       backdrop.classList.add('dragging');
-      hint.style.display = 'none';
+      hint.hidden = true;
       updateBox(e.clientX, e.clientY);
     }
 
@@ -355,7 +437,7 @@
         showToast({
           status: 'info',
           title: 'Selection cancelled',
-          message: 'Drag across an area to capture a region screenshot.',
+          message: 'Drag across an area or press Enter to capture the full tab.',
         });
         return;
       }
@@ -379,6 +461,11 @@
       if (e.key === 'Escape') {
         stopEvent(e);
         clearActiveOverlay();
+        return;
+      }
+      if (e.key === 'Enter' && !isDragging) {
+        stopEvent(e);
+        triggerFullTabCapture();
       }
     }
 
@@ -399,11 +486,19 @@
       }
     }
 
+    function onMouseDownCapture(e) {
+      if (e.composedPath().includes(hint)) {
+        e.stopPropagation();
+        return;
+      }
+      stopEvent(e);
+    }
+
     backdrop.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('pointermove', onPointerMove, true);
     window.addEventListener('pointerup', onPointerUp, true);
     window.addEventListener('pointercancel', onCancelEvent, true);
-    window.addEventListener('mousedown', stopEvent, true);
+    window.addEventListener('mousedown', onMouseDownCapture, true);
     window.addEventListener('dragstart', stopEvent, true);
     window.addEventListener('selectstart', stopEvent, true);
     window.addEventListener('contextmenu', onCancelEvent, true);
@@ -417,7 +512,7 @@
       window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerup', onPointerUp, true);
       window.removeEventListener('pointercancel', onCancelEvent, true);
-      window.removeEventListener('mousedown', stopEvent, true);
+      window.removeEventListener('mousedown', onMouseDownCapture, true);
       window.removeEventListener('dragstart', stopEvent, true);
       window.removeEventListener('selectstart', stopEvent, true);
       window.removeEventListener('contextmenu', onCancelEvent, true);
@@ -453,6 +548,7 @@
       hasFallback = false,
       fallbackDataUrl = '',
       fallbackFilename = 'Screenshot.png',
+      theme = 'auto',
     } = payload || {};
 
     const safeHttpsLink = (() => {
@@ -469,8 +565,8 @@
     const vvScale = vv?.scale || 1;
     const posCss =
       vv && vvScale > 1.001
-        ? `left:${Math.round(vv.offsetLeft + vv.width - 340 / vvScale)}px !important;top:${Math.round(
-            vv.offsetTop + vv.height - 130 / vvScale
+        ? `left:${Math.round(vv.offsetLeft + vv.width - 344 / vvScale)}px !important;top:${Math.round(
+            vv.offsetTop + vv.height - 132 / vvScale
           )}px !important;`
         : 'bottom:20px !important;right:20px !important;';
 
@@ -482,40 +578,74 @@
     shadow.innerHTML = `
       <style>
         * { box-sizing: border-box; }
+        [hidden] { display: none !important; }
         .toast {
-          width: 328px;
+          --t-bg: #ffffff;
+          --t-surface: #f5f6f8;
+          --t-surface-hover: #eceef2;
+          --t-border: rgba(15, 18, 24, 0.08);
+          --t-border-strong: rgba(15, 18, 24, 0.15);
+          --t-text: #141518;
+          --t-sub: #525866;
+          --t-muted: #767c89;
+          --t-accent: #1a73e8;
+          --t-accent-hover: #155fc4;
+          --t-on-accent: #ffffff;
+          --t-green: #15803d;
+          --t-err: #dc2626;
+          --t-shadow: 0 16px 38px rgba(15, 18, 24, 0.18), 0 1px 3px rgba(15, 18, 24, 0.08);
+
+          width: 332px;
           transform: scale(${1 / vvScale});
           transform-origin: bottom right;
-          background: #ffffff;
-          color: #0f172a;
-          border-radius: 12px;
-          border: 1px solid rgba(15, 23, 42, 0.12);
-          box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+          background: var(--t-bg);
+          color: var(--t-text);
+          border-radius: 14px;
+          border: 1px solid var(--t-border-strong);
+          box-shadow: var(--t-shadow);
           padding: 12px 14px;
-          font: 400 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font: 400 12.5px/18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
           display: flex;
           flex-direction: column;
           gap: 10px;
-          animation: slideIn 160ms ease-out;
+          animation: slideIn 150ms ease-out;
         }
         @media (prefers-color-scheme: dark) {
-          .toast {
-            background: #1e293b;
-            color: #f8fafc;
-            border-color: rgba(255, 255, 255, 0.12);
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+          .toast:not([data-theme="light"]) {
+            --t-bg: #1c1d20;
+            --t-surface: #25262b;
+            --t-surface-hover: #2f3137;
+            --t-border: rgba(255, 255, 255, 0.08);
+            --t-border-strong: rgba(255, 255, 255, 0.16);
+            --t-text: #f3f4f6;
+            --t-sub: #a6abb6;
+            --t-muted: #7c828f;
+            --t-accent: #5b9df9;
+            --t-accent-hover: #428bf7;
+            --t-on-accent: #0d131f;
+            --t-green: #4ade80;
+            --t-err: #f87171;
+            --t-shadow: 0 18px 42px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.08);
           }
-          .sub { color: #cbd5e1; }
-          .btn-secondary {
-            background: #334155;
-            color: #f8fafc;
-            border-color: rgba(255, 255, 255, 0.12);
-          }
-          .btn-secondary:hover { background: #475569; }
-          .close { color: #94a3b8; }
+        }
+        .toast[data-theme="dark"] {
+          --t-bg: #1c1d20;
+          --t-surface: #25262b;
+          --t-surface-hover: #2f3137;
+          --t-border: rgba(255, 255, 255, 0.08);
+          --t-border-strong: rgba(255, 255, 255, 0.16);
+          --t-text: #f3f4f6;
+          --t-sub: #a6abb6;
+          --t-muted: #7c828f;
+          --t-accent: #5b9df9;
+          --t-accent-hover: #428bf7;
+          --t-on-accent: #0d131f;
+          --t-green: #4ade80;
+          --t-err: #f87171;
+          --t-shadow: 0 18px 42px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.08);
         }
         @keyframes slideIn {
-          from { opacity: 0; transform: translateY(10px) scale(${1 / vvScale}); }
+          from { opacity: 0; transform: translateY(8px) scale(${1 / vvScale}); }
           to { opacity: 1; transform: translateY(0) scale(${1 / vvScale}); }
         }
         .row {
@@ -524,19 +654,19 @@
           gap: 10px;
         }
         .thumb {
-          width: 48px;
-          height: 36px;
+          width: 46px;
+          height: 34px;
           object-fit: cover;
           border-radius: 6px;
-          border: 1px solid rgba(15, 23, 42, 0.12);
+          border: 1px solid var(--t-border);
           flex-shrink: 0;
-          background: #0f172a;
+          background: var(--t-surface);
         }
         .spinner {
           width: 18px;
           height: 18px;
-          border: 2.5px solid rgba(26, 115, 232, 0.25);
-          border-top-color: #1a73e8;
+          border: 2px solid var(--t-border-strong);
+          border-top-color: var(--t-accent);
           border-radius: 50%;
           animation: spin 700ms linear infinite;
           flex-shrink: 0;
@@ -545,14 +675,14 @@
           to { transform: rotate(360deg); }
         }
         .dot {
-          width: 10px;
-          height: 10px;
+          width: 9px;
+          height: 9px;
           border-radius: 50%;
           flex-shrink: 0;
         }
-        .dot.success { background: #1e8e3e; }
-        .dot.error { background: #d93025; }
-        .dot.info { background: #1a73e8; }
+        .dot.success { background: var(--t-green); }
+        .dot.error { background: var(--t-err); }
+        .dot.info { background: var(--t-accent); }
         .body {
           flex: 1;
           min-width: 0;
@@ -560,14 +690,17 @@
         .title {
           font-weight: 600;
           font-size: 13px;
+          line-height: 18px;
+          letter-spacing: -0.015em;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
         .sub {
           font-size: 12px;
-          color: #475569;
-          margin-top: 2px;
+          line-height: 17px;
+          color: var(--t-sub);
+          margin-top: 1px;
           overflow: hidden;
           text-overflow: ellipsis;
           display: -webkit-box;
@@ -575,46 +708,63 @@
           -webkit-box-orient: vertical;
         }
         .close {
-          background: none;
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
+          background: transparent;
           border: none;
-          color: #64748b;
-          font-size: 18px;
+          color: var(--t-muted);
+          font-size: 17px;
           line-height: 1;
           cursor: pointer;
-          padding: 2px 4px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
           align-self: flex-start;
+          flex-shrink: 0;
+          transition: background 120ms ease, color 120ms ease;
         }
-        .close:hover { opacity: 0.7; }
+        .close:hover {
+          background: var(--t-surface-hover);
+          color: var(--t-text);
+        }
         .actions {
           display: flex;
           gap: 6px;
         }
         .btn {
           flex: 1;
+          height: 32px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          padding: 6px 8px;
+          padding: 0 10px;
           border-radius: 8px;
-          font-size: 12px;
-          font-weight: 600;
+          font-family: inherit;
+          font-size: 12.5px;
+          font-weight: 500;
+          line-height: 18px;
           cursor: pointer;
           text-decoration: none;
           border: 1px solid transparent;
           white-space: nowrap;
-          transition: background 120ms ease;
+          transition: background 120ms ease, border-color 120ms ease;
+        }
+        .btn-compact {
+          flex: 0.76;
         }
         .btn-primary {
-          background: #1a73e8;
-          color: #ffffff;
+          background: var(--t-accent);
+          color: var(--t-on-accent);
         }
-        .btn-primary:hover { background: #1557b0; }
+        .btn-primary:hover { background: var(--t-accent-hover); }
         .btn-secondary {
-          background: #f1f5f9;
-          color: #0f172a;
-          border-color: rgba(15, 23, 42, 0.08);
+          background: var(--t-bg);
+          color: var(--t-text);
+          border-color: var(--t-border-strong);
         }
-        .btn-secondary:hover { background: #e2e8f0; }
+        .btn-secondary:hover { background: var(--t-surface); }
       </style>
       <div class="toast" id="toast">
         <div class="row">
@@ -623,9 +773,9 @@
             <div class="title" id="title"></div>
             <div class="sub" id="message"></div>
           </div>
-          <button class="close" id="close" aria-label="Dismiss">&times;</button>
+          <button type="button" class="close" id="close" aria-label="Dismiss">&times;</button>
         </div>
-        <div class="actions" id="actions" style="display:none;"></div>
+        <div class="actions" id="actions" hidden></div>
       </div>
     `;
 
@@ -635,6 +785,10 @@
     const closeBtn = shadow.getElementById('close');
     const actionsEl = shadow.getElementById('actions');
     const toastEl = shadow.getElementById('toast');
+
+    if (theme === 'light' || theme === 'dark') {
+      toastEl.dataset.theme = theme;
+    }
 
     const makeStatusDot = () => {
       const dot = document.createElement('div');
@@ -661,9 +815,9 @@
 
     titleEl.textContent = title;
     msgEl.textContent = message;
-    if (!message) msgEl.style.display = 'none';
+    msgEl.hidden = !message;
 
-    const dismissToast = () => {
+    const dismiss = () => {
       if (toastDismissTimer) {
         clearTimeout(toastDismissTimer);
         toastDismissTimer = null;
@@ -672,10 +826,11 @@
     };
 
     if (status === 'success' && safeHttpsLink) {
-      actionsEl.style.display = 'flex';
+      actionsEl.hidden = false;
       const defaultCopyLabel = canEdit ? 'Copy link' : 'Copy Drive link';
 
       const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
       copyBtn.className = 'btn btn-primary';
       copyBtn.textContent = defaultCopyLabel;
 
@@ -708,23 +863,22 @@
 
       if (canEdit) {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-secondary';
-        editBtn.style.flex = '0.72';
+        editBtn.type = 'button';
+        editBtn.className = 'btn btn-secondary btn-compact';
         editBtn.textContent = 'Edit';
         editBtn.title = 'Annotate, redact, rotate, or rename in Google Drive';
         editBtn.addEventListener('click', () => {
           editBtn.disabled = true;
           chrome.runtime.sendMessage({ type: 'OPEN_LAST_CAPTURE_EDITOR' }, () => {
             void chrome.runtime.lastError;
-            dismissToast();
+            dismiss();
           });
         });
         actionsEl.append(editBtn);
       }
 
       const openLink = document.createElement('a');
-      openLink.className = 'btn btn-secondary';
-      if (canEdit) openLink.style.flex = '0.78';
+      openLink.className = canEdit ? 'btn btn-secondary btn-compact' : 'btn btn-secondary';
       openLink.href = safeHttpsLink;
       openLink.target = '_blank';
       openLink.rel = 'noopener noreferrer';
@@ -732,7 +886,7 @@
 
       actionsEl.append(openLink);
     } else if (status === 'error' && (hasFallback || fallbackDataUrl)) {
-      actionsEl.style.display = 'flex';
+      actionsEl.hidden = false;
       if (typeof fallbackDataUrl === 'string' && fallbackDataUrl.startsWith('data:image/')) {
         const saveLocalLink = document.createElement('a');
         saveLocalLink.className = 'btn btn-primary';
@@ -742,6 +896,7 @@
         actionsEl.append(saveLocalLink);
       } else {
         const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
         saveBtn.className = 'btn btn-primary';
         saveBtn.textContent = 'Save PNG locally';
         saveBtn.addEventListener('click', () => {
@@ -761,14 +916,6 @@
         actionsEl.append(saveBtn);
       }
     }
-
-    const dismiss = () => {
-      if (toastDismissTimer) {
-        clearTimeout(toastDismissTimer);
-        toastDismissTimer = null;
-      }
-      removeHostElement(TOAST_HOST_ID);
-    };
 
     closeBtn.addEventListener('click', dismiss);
 

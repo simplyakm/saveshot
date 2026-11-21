@@ -4,196 +4,244 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Edit Screenshot - SaveShot</title>
+    <link rel="stylesheet" href="../styles/tokens.css" />
     <link rel="stylesheet" href="editor.css" />
   </head>
   <body>
     <div class="editor-app">
-      <!-- Top Header Bar -->
+      <!-- Slim Top Header Bar -->
       <header class="topbar">
         <div class="topbar-left">
-          <div class="brand">
-            <img src="../icons/icon32.png" alt="SaveShot" width="24" height="24" class="brand-icon" />
-            <span class="brand-name">SaveShot</span>
+          <img src="../icons/icon32.png" alt="SaveShot" width="20" height="20" class="brand-icon" />
+
+          <!-- Read-only Filename + Intentional Pencil Rename Button -->
+          <div class="filename-readonly" id="filename-readonly">
+            <span class="filename-stem-wrap" id="filename-stem-wrap">
+              <span class="ss-body filename-display" id="filename-display">Screenshot</span><span class="ss-body filename-ext">.png</span>
+            </span>
+            <button
+              type="button"
+              class="ss-icon-btn rename-btn"
+              id="rename-pencil-btn"
+              title="Rename file"
+              aria-label="Rename file"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+              </svg>
+            </button>
           </div>
 
-          <div class="filename-box" title="Rename screenshot file">
+          <!-- Active Filename Input (shown only after clicking pencil) -->
+          <div class="filename-editing" id="filename-editing" hidden>
             <input
               type="text"
+              class="ss-body filename-edit-input"
               id="filename-input"
               maxlength="100"
               spellcheck="false"
               placeholder="Screenshot"
               aria-label="Screenshot filename"
             />
-            <span class="ext-pill">.png</span>
+            <span class="ss-body filename-ext">.png</span>
           </div>
 
-          <span class="folder-badge" id="folder-badge" title="Target Google Drive folder">
-            Folder: Chrome_SaveShot_ScreenShots
-          </span>
+          <span class="ss-meta tabular dim-label" id="dim-label"></span>
+          <span class="status-pill" id="status-pill" hidden></span>
         </div>
 
         <div class="topbar-right">
-          <button type="button" class="btn secondary" id="download-btn" title="Download PNG to your computer">
-            Download PNG
+          <button type="button" class="ss-btn ss-btn-secondary" id="download-btn" title="Download PNG to your computer">
+            Download
           </button>
-          <button type="button" class="btn secondary" id="copy-link-btn" hidden>
+          <button type="button" class="ss-btn ss-btn-secondary" id="copy-link-btn" hidden>
             Copy link
           </button>
           <a
-            class="btn secondary"
+            class="ss-icon-btn"
             id="open-drive-link"
             href="https://drive.google.com/drive/my-drive"
             target="_blank"
             rel="noopener noreferrer"
+            title="Open in Google Drive"
+            aria-label="Open in Google Drive"
             hidden
           >
-            Open in Drive
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
           </a>
-          <button type="button" class="btn primary" id="save-drive-btn" disabled>
-            Save to Drive
+          <button type="button" class="ss-btn ss-btn-primary" id="save-drive-btn" disabled>
+            Save
           </button>
         </div>
       </header>
 
-      <!-- Minimal Annotation & Transform Toolbar -->
-      <div class="toolbar" role="toolbar" aria-label="Editing tools">
-        <div class="tool-group" role="group" aria-label="Annotation tools">
-          <button type="button" class="tool-btn active" data-tool="arrow" title="Arrow (A)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="5" y1="19" x2="19" y2="5"></line>
-              <polyline points="9 5 19 5 19 15"></polyline>
-            </svg>
-            <span>Arrow</span>
-          </button>
+      <!-- Centered Icon-Only Floating Dock -->
+      <div class="dock-bar">
+        <div class="dock" id="editor-dock" role="toolbar" aria-label="Editing tools">
+          <div class="dock-group" role="group" aria-label="Annotation tools">
+            <button type="button" class="ss-dock-icon active" data-tool="arrow" title="Arrow (A)" aria-label="Arrow">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="5" y1="19" x2="19" y2="5"></line>
+                <polyline points="9 5 19 5 19 15"></polyline>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn" data-tool="box" title="Box (B)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="4" y="5" width="16" height="14" rx="2"></rect>
-            </svg>
-            <span>Box</span>
-          </button>
+            <button type="button" class="ss-dock-icon" data-tool="box" title="Rectangle (B)" aria-label="Rectangle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="5" width="16" height="14" rx="2"></rect>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn" data-tool="circle" title="Circle (C)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <circle cx="12" cy="12" r="8"></circle>
-            </svg>
-            <span>Circle</span>
-          </button>
+            <button type="button" class="ss-dock-icon" data-tool="circle" title="Circle (C)" aria-label="Circle">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95">
+                <circle cx="12" cy="12" r="8"></circle>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn" data-tool="line" title="Line (L)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-              <line x1="5" y1="19" x2="19" y2="5"></line>
-            </svg>
-            <span>Line</span>
-          </button>
+            <button type="button" class="ss-dock-icon" data-tool="line" title="Line (L)" aria-label="Line">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round">
+                <line x1="5" y1="19" x2="19" y2="5"></line>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn" data-tool="pencil" title="Freehand pencil (P)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-            </svg>
-            <span>Pencil</span>
-          </button>
+            <button type="button" class="ss-dock-icon" data-tool="pencil" title="Freehand pencil (P)" aria-label="Pencil">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn" data-tool="text" title="Add text (T)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="4 7 4 4 20 4 20 7"></polyline>
-              <line x1="9" y1="20" x2="15" y2="20"></line>
-              <line x1="12" y1="4" x2="12" y2="20"></line>
-            </svg>
-            <span>Text</span>
-          </button>
+            <button type="button" class="ss-dock-icon" data-tool="text" title="Add text (T)" aria-label="Text">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="5 7 5 4 19 4 19 7"></polyline>
+                <line x1="9" y1="20" x2="15" y2="20"></line>
+                <line x1="12" y1="4" x2="12" y2="20"></line>
+              </svg>
+            </button>
 
-          <button type="button" class="tool-btn redact-tool" data-tool="redact" title="Solid black pixel redaction (R)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="3" y="6" width="18" height="12" rx="2"></rect>
-            </svg>
-            <span>Redact</span>
-          </button>
-        </div>
-
-        <div class="divider" aria-hidden="true"></div>
-
-        <div class="tool-group style-group" id="style-group" role="group" aria-label="Color and stroke size">
-          <div class="color-swatches" id="color-swatches">
-            <button type="button" class="swatch active" data-color="#ef4444" style="--swatch:#ef4444" aria-label="Red" title="Red"></button>
-            <button type="button" class="swatch" data-color="#f59e0b" style="--swatch:#f59e0b" aria-label="Amber" title="Amber"></button>
-            <button type="button" class="swatch" data-color="#22c55e" style="--swatch:#22c55e" aria-label="Green" title="Green"></button>
-            <button type="button" class="swatch" data-color="#1a73e8" style="--swatch:#1a73e8" aria-label="Blue" title="Blue"></button>
-            <button type="button" class="swatch swatch-light" data-color="#ffffff" style="--swatch:#ffffff" aria-label="White" title="White"></button>
+            <button type="button" class="ss-dock-icon redact-tool" data-tool="redact" title="Redact sensitive info (R)" aria-label="Redact">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <line x1="3" y1="6" x2="21" y2="6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="2 3"></line>
+                <rect x="3" y="9" width="18" height="6.5" rx="1.5" fill="currentColor"></rect>
+                <line x1="3" y1="18.5" x2="15" y2="18.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="2 3"></line>
+              </svg>
+            </button>
           </div>
 
-          <div class="size-pills" id="size-pills">
-            <button type="button" class="size-btn" data-size="sm" title="Thin stroke / small text">S</button>
-            <button type="button" class="size-btn active" data-size="md" title="Medium stroke / text">M</button>
-            <button type="button" class="size-btn" data-size="lg" title="Thick stroke / large text">L</button>
+          <span class="dock-divider" aria-hidden="true"></span>
+
+          <div class="dock-group style-group" id="style-group" role="group" aria-label="Color and stroke size">
+            <div class="color-swatches" id="color-swatches">
+              <button type="button" class="swatch swatch-red active" data-color="#ef4444" aria-label="Red" title="Red (#EF4444)"></button>
+              <button type="button" class="swatch swatch-amber" data-color="#f59e0b" aria-label="Amber" title="Amber (#F59E0B)"></button>
+              <button type="button" class="swatch swatch-green" data-color="#22c55e" aria-label="Green" title="Green (#22C55E)"></button>
+              <button type="button" class="swatch swatch-blue" data-color="#1a73e8" aria-label="Blue" title="Blue (#1A73E8)"></button>
+              <button type="button" class="swatch swatch-white" data-color="#ffffff" aria-label="White" title="White (#FFFFFF)"></button>
+              <button
+                type="button"
+                class="custom-color-btn"
+                id="custom-color-btn"
+                title="Custom color or #HEX code"
+                aria-label="Custom color"
+              >
+                <span class="custom-color-inner" id="custom-color-inner"></span>
+              </button>
+            </div>
+
+            <!-- Custom Hex + Native Picker Popover -->
+            <div class="hex-popover" id="hex-popover" hidden>
+              <input
+                type="color"
+                class="hex-native-picker"
+                id="hex-color-native"
+                value="#ff0066"
+                title="Pick custom color"
+                aria-label="Pick custom color"
+              />
+              <div class="hex-input-wrap" id="hex-input-wrap">
+                <span class="hex-prefix">#</span>
+                <input
+                  type="text"
+                  class="hex-text-input"
+                  id="hex-text-input"
+                  maxlength="7"
+                  value="FF0066"
+                  spellcheck="false"
+                  aria-label="Hex color code"
+                />
+              </div>
+              <button type="button" class="ss-btn ss-btn-primary" id="apply-hex-btn">Apply</button>
+            </div>
+
+            <span class="dock-divider" aria-hidden="true"></span>
+
+            <div class="ss-segmented dock-segmented" id="size-pills" role="group" aria-label="Stroke and text size">
+              <button type="button" class="ss-seg-item size-seg-btn" data-size="sm" title="Small stroke / text">S</button>
+              <button type="button" class="ss-seg-item size-seg-btn active" data-size="md" title="Medium stroke / text">M</button>
+              <button type="button" class="ss-seg-item size-seg-btn" data-size="lg" title="Large stroke / text">L</button>
+            </div>
           </div>
-        </div>
 
-        <div class="divider" aria-hidden="true"></div>
+          <span class="dock-divider" aria-hidden="true"></span>
 
-        <div class="tool-group" role="group" aria-label="Rotate and flip">
-          <button type="button" class="icon-tool-btn" data-transform="rotate-ccw" title="Rotate 90 deg left" aria-label="Rotate left">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="1 4 1 10 7 10"></polyline>
-              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
-            </svg>
-          </button>
-          <button type="button" class="icon-tool-btn" data-transform="rotate-cw" title="Rotate 90 deg right" aria-label="Rotate right">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-            </svg>
-          </button>
-          <button type="button" class="icon-tool-btn" data-transform="flip-h" title="Flip horizontal" aria-label="Flip horizontal">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="3" x2="12" y2="21"></line>
-              <polygon points="4 7 9 12 4 17 4 7"></polygon>
-              <polygon points="20 7 15 12 20 17 20 7"></polygon>
-            </svg>
-          </button>
-          <button type="button" class="icon-tool-btn" data-transform="flip-v" title="Flip vertical" aria-label="Flip vertical">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="3" y1="12" x2="21" y2="12"></line>
-              <polygon points="7 4 12 9 17 4 7 4"></polygon>
-              <polygon points="7 20 12 15 17 20 7 20"></polygon>
-            </svg>
-          </button>
-        </div>
+          <div class="dock-group" role="group" aria-label="Rotate and flip">
+            <button type="button" class="ss-dock-icon" data-transform="rotate-ccw" title="Rotate 90 deg left" aria-label="Rotate left">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+              </svg>
+            </button>
+            <button type="button" class="ss-dock-icon" data-transform="rotate-cw" title="Rotate 90 deg right" aria-label="Rotate right">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+            </button>
+            <button type="button" class="ss-dock-icon" data-transform="flip-h" title="Flip horizontal" aria-label="Flip horizontal">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="3" x2="12" y2="21"></line>
+                <polygon points="4 7 9 12 4 17 4 7"></polygon>
+                <polygon points="20 7 15 12 20 17 20 7"></polygon>
+              </svg>
+            </button>
+            <button type="button" class="ss-dock-icon" data-transform="flip-v" title="Flip vertical" aria-label="Flip vertical">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <polygon points="7 4 12 9 17 4 7 4"></polygon>
+                <polygon points="7 20 12 15 17 20 7 20"></polygon>
+              </svg>
+            </button>
+          </div>
 
-        <div class="divider" aria-hidden="true"></div>
+          <span class="dock-divider" aria-hidden="true"></span>
 
-        <div class="tool-group" role="group" aria-label="History">
-          <button type="button" class="tool-btn" id="undo-btn" title="Undo (Ctrl+Z)" disabled>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 14 4 9 9 4"></polyline>
-              <path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>
-            </svg>
-            <span>Undo</span>
-          </button>
-          <button type="button" class="tool-btn" id="reset-btn" title="Reset to original screenshot" disabled>
-            <span>Reset</span>
-          </button>
+          <div class="dock-group" role="group" aria-label="History">
+            <button type="button" class="ss-dock-icon" id="undo-btn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 14 4 9 9 4"></polyline>
+                <path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>
+              </svg>
+            </button>
+            <button type="button" class="ss-dock-icon" id="reset-btn" title="Reset to original" aria-label="Reset" disabled>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Info / Status Strip -->
-      <div class="info-strip">
-        <div class="info-left">
-          <span class="mode-note" id="mode-note">Loading screenshot...</span>
-          <span class="status-pill" id="status-pill" hidden></span>
-        </div>
-        <div class="info-right">
-          <span class="dim-label" id="dim-label"></span>
-        </div>
-      </div>
-
-      <!-- Canvas Workspace -->
+      <!-- Calm Solid Neutral Canvas Stage -->
       <main class="stage" id="stage">
         <div class="stage-message" id="stage-message">
-          <div class="spinner" id="stage-spinner"></div>
-          <p id="stage-message-text">Loading screenshot...</p>
+          <div class="ss-spinner" id="stage-spinner"></div>
+          <p class="ss-body-regular" id="stage-message-text">Loading screenshot...</p>
         </div>
 
         <div class="canvas-wrap" id="canvas-wrap" hidden>
@@ -211,21 +259,28 @@
       </main>
     </div>
 
-    <!-- Replace Existing File Warning Modal -->
-    <dialog class="confirm-dialog" id="confirm-replace-dialog">
-      <div class="dialog-card">
-        <div class="dialog-header">
-          <div class="warn-badge" aria-hidden="true">!</div>
-          <h2>Replace existing file in Google Drive?</h2>
-        </div>
-        <p class="dialog-body">
-          Saving will overwrite <strong id="replace-target-name">Screenshot.png</strong> in Google Drive.
-          Anyone with the current Drive link will see the updated file.
+    <!-- Decluttered Unified Replace Confirmation Dialog -->
+    <dialog class="ss-dialog" id="confirm-replace-dialog">
+      <div class="ss-dialog-card">
+        <h2 class="ss-title-md">Replace existing file?</h2>
+        <p class="ss-body-regular ss-dialog-desc">
+          Updates the Drive file and keeps the same link.
         </p>
-        <div class="dialog-actions">
-          <button type="button" class="btn secondary" id="cancel-replace-btn">Cancel</button>
-          <button type="button" class="btn secondary" id="save-new-copy-btn">Save as new copy</button>
-          <button type="button" class="btn warning" id="confirm-replace-btn">Replace existing file</button>
+        <div class="ss-dialog-actions">
+          <button type="button" class="ss-btn ss-btn-ghost" id="cancel-replace-btn">
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="ss-btn ss-btn-secondary"
+            id="save-new-copy-btn"
+            title="Upload as a separate file instead"
+          >
+            Save as new
+          </button>
+          <button type="button" class="ss-btn ss-btn-primary" id="confirm-replace-btn">
+            Replace
+          </button>
         </div>
       </div>
     </dialog>

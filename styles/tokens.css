@@ -1,0 +1,584 @@
+/* =========================================================================
+   SaveShot Centralized Design System (tokens.css)
+   Single source of truth for palette, typography, radii, controls, & dialogs.
+   Zero external dependencies. Adapts automatically to Chrome light/dark themes
+   and supports explicit [data-theme="light"] / [data-theme="dark"] overrides.
+   ========================================================================= */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Radii (strict 3-tier hierarchy) */
+  --ss-radius-shell: 14px;
+  --ss-radius-dock: 12px;
+  --ss-radius-card: 11px;
+  --ss-radius-row: 10px;
+  --ss-radius-ctrl: 8px;
+  --ss-radius-sm: 6px;
+  --ss-radius-xs: 4px;
+
+  /* Font stacks (0 KB native OS typography) */
+  --ss-font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  --ss-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Neutral Light Palette */
+  --ss-bg: #ffffff;
+  --ss-page-bg: #f5f6f8;
+  --ss-surface: #f5f6f8;
+  --ss-surface-hover: #eceef2;
+  --ss-border: rgba(15, 18, 24, 0.08);
+  --ss-border-strong: rgba(15, 18, 24, 0.15);
+  --ss-text: #141518;
+  --ss-text-secondary: #525866;
+  --ss-text-muted: #767c89;
+
+  /* Semantic Accents */
+  --ss-accent: #1a73e8;
+  --ss-accent-hover: #155fc4;
+  --ss-accent-soft: rgba(26, 115, 232, 0.09);
+  --ss-accent-border: rgba(26, 115, 232, 0.28);
+  --ss-accent-text: #155fc4;
+  --ss-on-accent: #ffffff;
+
+  --ss-green: #15803d;
+  --ss-green-soft: rgba(21, 128, 61, 0.10);
+  --ss-green-border: rgba(21, 128, 61, 0.26);
+
+  --ss-warn-bg: #fef7e0;
+  --ss-warn-border: rgba(217, 119, 6, 0.35);
+  --ss-warn-text: #854d0e;
+
+  --ss-err-bg: #fef2f2;
+  --ss-err-border: rgba(220, 38, 38, 0.32);
+  --ss-err-text: #991b1b;
+
+  /* Editor & Stage */
+  --ss-stage: #eef0f4;
+  --ss-canvas-bg: #ffffff;
+  --ss-canvas-shadow: 0 12px 36px rgba(15, 18, 24, 0.16);
+  --ss-dock-bg: rgba(255, 255, 255, 0.96);
+  --ss-dock-shadow: 0 10px 28px rgba(15, 18, 24, 0.10), 0 1px 3px rgba(15, 18, 24, 0.06);
+  --ss-dialog-shadow: 0 24px 48px rgba(15, 18, 24, 0.24), 0 0 0 1px rgba(15, 18, 24, 0.06);
+  --ss-backdrop: rgba(10, 12, 16, 0.44);
+  --ss-keycap-bg: rgba(15, 18, 24, 0.05);
+  --ss-seg-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --ss-text-overlay-bg: rgba(20, 21, 24, 0.78);
+  --ss-redact-active-bg: #141518;
+  --ss-redact-active-fg: #ffffff;
+
+  /* Annotation Swatches */
+  --ss-swatch-red: #ef4444;
+  --ss-swatch-amber: #f59e0b;
+  --ss-swatch-green: #22c55e;
+  --ss-swatch-blue: #1a73e8;
+  --ss-swatch-white: #ffffff;
+  --ss-swatch-ring: rgba(15, 18, 24, 0.22);
+  --ss-custom-swatch: var(--ss-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --ss-bg: #1c1d20;
+    --ss-page-bg: #131416;
+    --ss-surface: #25262b;
+    --ss-surface-hover: #2f3137;
+    --ss-border: rgba(255, 255, 255, 0.08);
+    --ss-border-strong: rgba(255, 255, 255, 0.16);
+    --ss-text: #f3f4f6;
+    --ss-text-secondary: #a6abb6;
+    --ss-text-muted: #7c828f;
+
+    --ss-accent: #5b9df9;
+    --ss-accent-hover: #428bf7;
+    --ss-accent-soft: rgba(91, 157, 249, 0.14);
+    --ss-accent-border: rgba(91, 157, 249, 0.34);
+    --ss-accent-text: #82b5fd;
+    --ss-on-accent: #0d131f;
+
+    --ss-green: #4ade80;
+    --ss-green-soft: rgba(74, 222, 128, 0.13);
+    --ss-green-border: rgba(74, 222, 128, 0.30);
+
+    --ss-warn-bg: rgba(245, 158, 11, 0.14);
+    --ss-warn-border: rgba(245, 158, 11, 0.38);
+    --ss-warn-text: #fde68a;
+
+    --ss-err-bg: rgba(239, 68, 68, 0.14);
+    --ss-err-border: rgba(239, 68, 68, 0.38);
+    --ss-err-text: #fecaca;
+
+    --ss-stage: #131416;
+    --ss-canvas-shadow: 0 16px 42px rgba(0, 0, 0, 0.50);
+    --ss-dock-bg: rgba(34, 35, 40, 0.96);
+    --ss-dock-shadow: 0 14px 34px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 255, 255, 0.09);
+    --ss-dialog-shadow: 0 24px 52px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.10);
+    --ss-backdrop: rgba(0, 0, 0, 0.58);
+    --ss-keycap-bg: rgba(255, 255, 255, 0.07);
+    --ss-seg-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+    --ss-redact-active-bg: #f3f4f6;
+    --ss-redact-active-fg: #141518;
+    --ss-swatch-ring: rgba(255, 255, 255, 0.26);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ss-bg: #1c1d20;
+  --ss-page-bg: #131416;
+  --ss-surface: #25262b;
+  --ss-surface-hover: #2f3137;
+  --ss-border: rgba(255, 255, 255, 0.08);
+  --ss-border-strong: rgba(255, 255, 255, 0.16);
+  --ss-text: #f3f4f6;
+  --ss-text-secondary: #a6abb6;
+  --ss-text-muted: #7c828f;
+
+  --ss-accent: #5b9df9;
+  --ss-accent-hover: #428bf7;
+  --ss-accent-soft: rgba(91, 157, 249, 0.14);
+  --ss-accent-border: rgba(91, 157, 249, 0.34);
+  --ss-accent-text: #82b5fd;
+  --ss-on-accent: #0d131f;
+
+  --ss-green: #4ade80;
+  --ss-green-soft: rgba(74, 222, 128, 0.13);
+  --ss-green-border: rgba(74, 222, 128, 0.30);
+
+  --ss-warn-bg: rgba(245, 158, 11, 0.14);
+  --ss-warn-border: rgba(245, 158, 11, 0.38);
+  --ss-warn-text: #fde68a;
+
+  --ss-err-bg: rgba(239, 68, 68, 0.14);
+  --ss-err-border: rgba(239, 68, 68, 0.38);
+  --ss-err-text: #fecaca;
+
+  --ss-stage: #131416;
+  --ss-canvas-shadow: 0 16px 42px rgba(0, 0, 0, 0.50);
+  --ss-dock-bg: rgba(34, 35, 40, 0.96);
+  --ss-dock-shadow: 0 14px 34px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 255, 255, 0.09);
+  --ss-dialog-shadow: 0 24px 52px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.10);
+  --ss-backdrop: rgba(0, 0, 0, 0.58);
+  --ss-keycap-bg: rgba(255, 255, 255, 0.07);
+  --ss-seg-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --ss-redact-active-bg: #f3f4f6;
+  --ss-redact-active-fg: #141518;
+  --ss-swatch-ring: rgba(255, 255, 255, 0.26);
+}
+
+/* Base Reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  font-family: var(--ss-font-sans);
+  color: var(--ss-text);
+  background: var(--ss-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* =========================================================================
+   1. Unified Typography Scale
+   ========================================================================= */
+.ss-title-lg {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.022em;
+  color: var(--ss-text);
+}
+
+.ss-title-md {
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.02em;
+  color: var(--ss-text);
+}
+
+.ss-title-sm {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: -0.015em;
+  color: var(--ss-text);
+}
+
+.ss-body {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: -0.005em;
+  color: var(--ss-text);
+}
+
+.ss-body-regular {
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--ss-text-secondary);
+}
+
+.ss-meta {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--ss-text-muted);
+}
+
+.ss-colophon {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 14px;
+  letter-spacing: 0.005em;
+  color: var(--ss-text-muted);
+}
+
+/* =========================================================================
+   2. Unified Button System (32px height, 12.5px/18px font, 8px radius)
+   ========================================================================= */
+.ss-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--ss-radius-ctrl);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.ss-btn-lg {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+.ss-btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--ss-radius-sm);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.ss-btn-primary {
+  padding: 0 14px;
+  background: var(--ss-accent);
+  color: var(--ss-on-accent);
+}
+
+.ss-btn-primary:hover:not(:disabled) {
+  background: var(--ss-accent-hover);
+}
+
+.ss-btn-secondary {
+  background: var(--ss-bg);
+  border-color: var(--ss-border-strong);
+  color: var(--ss-text);
+}
+
+.ss-btn-secondary:hover:not(:disabled) {
+  background: var(--ss-surface);
+}
+
+.ss-btn-ghost {
+  padding: 0 11px;
+  background: transparent;
+  color: var(--ss-text-secondary);
+}
+
+.ss-btn-ghost:hover:not(:disabled) {
+  background: var(--ss-surface-hover);
+  color: var(--ss-text);
+}
+
+.ss-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+/* =========================================================================
+   3. Unified Inputs, Keycaps, Icon Buttons, & Segmented Controls
+   ========================================================================= */
+.ss-input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--ss-radius-ctrl);
+  border: 1px solid var(--ss-border-strong);
+  background: var(--ss-bg);
+  color: var(--ss-text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 18px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.ss-input:focus {
+  border-color: var(--ss-accent);
+}
+
+.ss-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--ss-radius-ctrl);
+  border: 1px solid var(--ss-border-strong);
+  background: var(--ss-bg);
+  color: var(--ss-text);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  outline: none;
+  resize: vertical;
+  transition: border-color 120ms ease;
+}
+
+.ss-textarea:focus {
+  border-color: var(--ss-accent);
+}
+
+.ss-kbd {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: var(--ss-radius-sm);
+  background: var(--ss-keycap-bg);
+  border: 1px solid var(--ss-border);
+  color: var(--ss-text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  display: inline-flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ss-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--ss-radius-ctrl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ss-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.ss-icon-btn:hover:not(:disabled),
+.ss-icon-btn.active {
+  background: var(--ss-surface-hover);
+  color: var(--ss-text);
+}
+
+.ss-icon-btn.copied {
+  color: var(--ss-green);
+}
+
+.ss-dock-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ss-radius-ctrl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ss-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 110ms ease, color 110ms ease, opacity 110ms ease;
+}
+
+.ss-dock-icon:hover:not(:disabled) {
+  background: var(--ss-surface-hover);
+  color: var(--ss-text);
+}
+
+.ss-dock-icon.active {
+  background: var(--ss-accent-soft);
+  color: var(--ss-accent-text);
+}
+
+.ss-dock-icon:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+.ss-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  height: 28px;
+  border-radius: var(--ss-radius-ctrl);
+  background: var(--ss-bg);
+  border: 1px solid var(--ss-border);
+}
+
+.ss-seg-item {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--ss-radius-sm);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ss-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.ss-seg-item:hover:not(.active) {
+  color: var(--ss-text);
+}
+
+.ss-seg-item.active {
+  background: var(--ss-surface-hover);
+  color: var(--ss-text);
+  box-shadow: var(--ss-seg-active-shadow);
+}
+
+.ss-author-link {
+  color: var(--ss-text-muted);
+  text-decoration: none;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  transition: color 120ms ease;
+}
+
+.ss-author-link:hover {
+  color: var(--ss-text);
+}
+
+/* Focus Accessibility Ring */
+.ss-btn:focus-visible,
+.ss-icon-btn:focus-visible,
+.ss-dock-icon:focus-visible,
+.ss-seg-item:focus-visible,
+.ss-author-link:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+}
+
+/* =========================================================================
+   4. Unified Spinner, Alerts, & Modal Dialog
+   ========================================================================= */
+.ss-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--ss-border-strong);
+  border-top-color: var(--ss-accent);
+  border-radius: 50%;
+  animation: ss-spin 700ms linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes ss-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ss-alert {
+  border-radius: var(--ss-radius-row);
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 17px;
+  border: 1px solid var(--ss-border);
+}
+
+.ss-alert.info {
+  background: var(--ss-accent-soft);
+  border-color: var(--ss-accent-border);
+  color: var(--ss-text);
+}
+
+.ss-alert.warning {
+  background: var(--ss-warn-bg);
+  border-color: var(--ss-warn-border);
+  color: var(--ss-warn-text);
+}
+
+.ss-alert.error {
+  background: var(--ss-err-bg);
+  border-color: var(--ss-err-border);
+  color: var(--ss-err-text);
+}
+
+.ss-dialog {
+  margin: auto;
+  border: 1px solid var(--ss-border-strong);
+  border-radius: var(--ss-radius-shell);
+  padding: 0;
+  background: var(--ss-bg);
+  color: var(--ss-text);
+  width: min(380px, calc(100vw - 32px));
+  box-shadow: var(--ss-dialog-shadow);
+}
+
+.ss-dialog::backdrop {
+  background: var(--ss-backdrop);
+  backdrop-filter: blur(3px);
+}
+
+.ss-dialog-card {
+  padding: 18px 20px;
+}
+
+.ss-dialog-desc {
+  margin-top: 5px;
+}
+
+.ss-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}

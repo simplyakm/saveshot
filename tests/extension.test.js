@@ -41,6 +41,7 @@ import {
   getAccountFolderCache,
   getRecentUploads,
   getSettings,
+  normalizeThemeSetting,
   pruneStorage,
   sanitizeFolderName,
   saveAccountFolderCache,
@@ -56,10 +57,19 @@ import {
   clampPoint,
   computeArrowGeometry,
   normalizeRect,
+  parseHexColorInput,
   renderAnnotation,
   sanitizeHexColor,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
+import {
+  applyDocumentTheme,
+  initThemeSync,
+  normalizeTheme,
+  safeHttpsUrl,
+  sendRuntimeMessage,
+  VALID_THEMES,
+} from '../lib/ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -93,13 +103,14 @@ function installChromeMock({
     onInstalled: [],
     onMessage: [],
     onCommand: [],
+    onStorageChanged: [],
   };
 
   globalThis.chrome = {
     runtime: {
       lastError: null,
       getManifest: () => ({
-        version: '1.1.0',
+        version: '1.1.1',
         homepage_url: 'https://github.com/simplyakm/saveshot',
         oauth2: { client_id: clientId },
       }),
@@ -109,6 +120,15 @@ function installChromeMock({
       },
       onMessage: {
         addListener: (fn) => listeners.onMessage.push(fn),
+      },
+      sendMessage: (payload, cb) => {
+        if (listeners.onMessage.length === 0) {
+          cb?.(undefined);
+          return;
+        }
+        for (const fn of listeners.onMessage) {
+          fn(payload, {}, (res) => cb?.(res));
+        }
       },
     },
     commands: {
@@ -152,6 +172,9 @@ function installChromeMock({
       },
     },
     storage: {
+      onChanged: {
+        addListener: (fn) => listeners.onStorageChanged.push(fn),
+      },
       local: {
         get: async (keys) => {
           if (keys === null || keys === undefined) return structuredClone(store);
@@ -165,8 +188,16 @@ function installChromeMock({
             remainingSetFailures -= 1;
             throw new Error('QUOTA_BYTES quota exceeded');
           }
+          const changes = {};
           for (const [k, v] of Object.entries(patch)) {
+            changes[k] = {
+              oldValue: structuredClone(store[k]),
+              newValue: structuredClone(v),
+            };
             store[k] = structuredClone(v);
+          }
+          for (const fn of listeners.onStorageChanged) {
+            fn(changes, 'local');
           }
         },
       },
@@ -1926,6 +1957,440 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     );
     assert.equal(blockedSaveAfterSignOut.ok, false);
     assert.equal(blockedSaveAfterSignOut.code, 'EDITOR_SESSION_EXPIRED');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('centralized design language, zero external dependencies, strict CSS/HTML hygiene, and icon consistency', () => {
+  // 1. Zero runtime or dev external dependencies in package.json
+  const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+  assert.equal(Object.keys(pkg.dependencies || {}).length, 0, 'Must have zero external dependencies');
+  assert.equal(Object.keys(pkg.devDependencies || {}).length, 0, 'Must have zero external devDependencies');
+
+  // 2. Centralized tokens.css defines light, prefers-color-scheme dark, and [data-theme="dark"] parity
+  const tokensPath = path.join(rootDir, 'styles/tokens.css');
+  assert.ok(fs.existsSync(tokensPath), 'styles/tokens.css must exist');
+  const tokensCss = fs.readFileSync(tokensPath, 'utf8');
+  assert.match(tokensCss, /:root,\s*:root\[data-theme="light"\]/);
+  assert.match(tokensCss, /@media\s*\(prefers-color-scheme:\s*dark\)/);
+  assert.match(tokensCss, /:root\[data-theme="dark"\]/);
+
+  const definedTokens = new Set(
+    Array.from(tokensCss.matchAll(/(--ss-[a-z0-9-]+)\s*:/g), (m) => m[1])
+  );
+  assert.ok(definedTokens.size >= 30, 'tokens.css should define centralized --ss-* design tokens');
+
+  // Verify auto-dark (@media) and manual-dark ([data-theme="dark"]) define the exact same --ss-* keys
+  const autoDarkBlock = tokensCss.split('@media (prefers-color-scheme: dark)')[1]?.split(':root[data-theme="dark"]')[0] || '';
+  const manualDarkBlock = tokensCss.split(':root[data-theme="dark"]')[1]?.split('/* Base Reset */')[0] || '';
+  const autoDarkVars = Array.from(autoDarkBlock.matchAll(/(--ss-[a-z0-9-]+)\s*:/g), (m) => m[1]).sort();
+  const manualDarkVars = Array.from(manualDarkBlock.matchAll(/(--ss-[a-z0-9-]+)\s*:/g), (m) => m[1]).sort();
+  assert.deepEqual(
+    autoDarkVars,
+    manualDarkVars,
+    'Auto dark media query and manual [data-theme="dark"] block must override identical token sets'
+  );
+
+  // 3. Every HTML page links tokens.css first, has zero inline styles/<style>/inline handlers/remote assets,
+  //    and all local asset paths exist on disk
+  const htmlFiles = ['popup/popup.html', 'pages/editor.html', 'pages/welcome.html'];
+  for (const rel of htmlFiles) {
+    const abs = path.join(rootDir, rel);
+    const html = fs.readFileSync(abs, 'utf8');
+    const htmlDir = path.dirname(abs);
+
+    assert.ok(!/\bstyle\s*=/i.test(html), `${rel} must not contain inline style= attributes`);
+    assert.ok(!/<style\b/i.test(html), `${rel} must not contain embedded <style> blocks`);
+    assert.ok(
+      !/\bon(?:click|change|input|keydown|keyup|load|error|submit|focus|blur)\s*=/i.test(html),
+      `${rel} must not contain inline JS event attributes`
+    );
+
+    const stylesheetLinks = Array.from(
+      html.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*href="([^"]+)"/gi),
+      (m) => m[1]
+    );
+    assert.ok(stylesheetLinks.length >= 2, `${rel} must link tokens.css and page stylesheet`);
+    assert.equal(
+      stylesheetLinks[0],
+      '../styles/tokens.css',
+      `${rel} must load ../styles/tokens.css before page styles`
+    );
+
+    const assetRefs = [
+      ...stylesheetLinks,
+      ...Array.from(html.matchAll(/<(?:script|img)\b[^>]*src="([^"]+)"/gi), (m) => m[1]),
+    ];
+    for (const ref of assetRefs) {
+      assert.ok(!/^https?:\/\//i.test(ref), `${rel} must not load remote asset: ${ref}`);
+      const resolved = path.resolve(htmlDir, ref);
+      assert.ok(fs.existsSync(resolved), `${rel} references missing asset: ${ref}`);
+      assert.ok(fs.statSync(resolved).size > 0, `${rel} references empty asset: ${ref}`);
+    }
+  }
+
+  // 4. Page stylesheets contain zero :root redefinitions, zero @import, zero loose #hex or rgb()/hsl() colors,
+  //    and every referenced var(--ss-*) exists in tokens.css
+  const allowedDynamicVars = new Set(['--tx', '--ty', '--tcolor', '--tsize']);
+  const pageCssFiles = ['popup/popup.css', 'pages/editor.css', 'pages/welcome.css'];
+  for (const rel of pageCssFiles) {
+    const rawCss = fs.readFileSync(path.join(rootDir, rel), 'utf8');
+    const cleanCss = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    assert.ok(!/:root\b/.test(cleanCss), `${rel} must not redefine :root tokens`);
+    assert.ok(!/@import\b/i.test(cleanCss), `${rel} must not use @import`);
+    assert.ok(!/url\(\s*['"]?https?:/i.test(cleanCss), `${rel} must not load remote CSS URLs`);
+
+    for (const blockMatch of cleanCss.matchAll(/\{([^{}]*)\}/g)) {
+      const declBody = blockMatch[1];
+      assert.ok(
+        !/#[0-9a-fA-F]{3,8}\b/.test(declBody),
+        `${rel} contains hardcoded hex color instead of centralized token: ${declBody.trim()}`
+      );
+      assert.ok(
+        !/\b(?:rgba?|hsla?)\s*\(/i.test(declBody),
+        `${rel} contains loose rgb()/hsl() color instead of centralized token: ${declBody.trim()}`
+      );
+    }
+
+    for (const varMatch of cleanCss.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {
+      const varName = varMatch[1];
+      assert.ok(
+        definedTokens.has(varName) || allowedDynamicVars.has(varName),
+        `${rel} references undefined CSS variable ${varName}`
+      );
+    }
+  }
+
+  // Also verify every var(--ss-*) inside tokens.css itself is defined
+  for (const varMatch of tokensCss.matchAll(/var\(\s*(--ss-[a-z0-9-]+)/gi)) {
+    assert.ok(definedTokens.has(varMatch[1]), `tokens.css references undefined ${varMatch[1]}`);
+  }
+
+  // 5. Extension UI JS modules contain zero innerHTML/eval/inline-style mutations
+  for (const rel of ['popup/popup.js', 'pages/editor.js', 'pages/welcome.js', 'lib/ui.js']) {
+    const js = fs.readFileSync(path.join(rootDir, rel), 'utf8');
+    assert.ok(!/\.(?:innerHTML|outerHTML)\b/.test(js), `${rel} must not use innerHTML/outerHTML`);
+    assert.ok(!/\binsertAdjacentHTML\b/.test(js), `${rel} must not use insertAdjacentHTML`);
+    assert.ok(!/\beval\s*\(|\bnew\s+Function\s*\(/.test(js), `${rel} must not use eval/Function`);
+    assert.ok(!/\.style\.cssText\b/.test(js), `${rel} must not assign .style.cssText`);
+    assert.ok(!/\.style\.[a-zA-Z]+\s*=/.test(js), `${rel} must not mutate inline .style.<prop> directly`);
+  }
+
+  // 6. Content script shadow templates use [hidden] & classes instead of inline HTML style="..."
+  const selectorJs = fs.readFileSync(path.join(rootDir, 'content/selector.js'), 'utf8');
+  assert.ok(!/\bstyle="/.test(selectorJs), 'content/selector.js shadow HTML must not use inline style="..."');
+  assert.ok(!/\.style\.flex\b/.test(selectorJs), 'content/selector.js toast buttons must use CSS classes instead of .style.flex');
+
+  // 7. Consistent box-arrow external-link icon across Popup, Recent list, Editor, and Welcome,
+  //    plus slim split footer order (version -> Report bug | @_simplyakm) with zero third-party logos
+  const boxArrowPath = 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6';
+  for (const rel of ['popup/popup.html', 'popup/popup.js', 'pages/editor.html', 'pages/welcome.html']) {
+    const content = fs.readFileSync(path.join(rootDir, rel), 'utf8');
+    assert.ok(content.includes(boxArrowPath), `${rel} must use the unified box-arrow external link icon`);
+  }
+
+  const popupHtml = fs.readFileSync(path.join(rootDir, 'popup/popup.html'), 'utf8');
+  assert.ok(
+    popupHtml.indexOf('id="capture-region-btn"') < popupHtml.indexOf('id="capture-visible-btn"'),
+    'Select area must appear before Visible tab in popup.html'
+  );
+  const footerChunk = popupHtml.split('<footer')[1] || '';
+  assert.ok(
+    footerChunk.indexOf('id="popup-version"') < footerChunk.indexOf('id="footer-bug-btn"'),
+    'Version must appear before Report bug in popup footer'
+  );
+  assert.ok(footerChunk.includes('https://x.com/_simplyakm'), 'Popup footer must link to @_simplyakm');
+  assert.ok(!/<svg\b/i.test(footerChunk), 'Popup footer must not include third-party SVG brand logos');
+});
+
+test('UI helpers, theme sync, custom hex color parser, and strict storage allowlist battle-tests', async () => {
+  // 1. Theme normalization & applyDocumentTheme
+  assert.deepEqual(VALID_THEMES, ['auto', 'light', 'dark']);
+  assert.equal(normalizeTheme('light'), 'light');
+  assert.equal(normalizeTheme('dark'), 'dark');
+  assert.equal(normalizeTheme('auto'), 'auto');
+  for (const bad of ['', 'DARK', 'solarized', null, undefined, {}, '__proto__', 'constructor']) {
+    assert.equal(normalizeTheme(bad), 'auto');
+    assert.equal(normalizeThemeSetting(bad), 'auto');
+  }
+
+  const fakeDoc = { documentElement: { dataset: {} } };
+  assert.equal(applyDocumentTheme('dark', fakeDoc), 'dark');
+  assert.equal(fakeDoc.documentElement.dataset.theme, 'dark');
+  assert.equal(applyDocumentTheme('light', fakeDoc), 'light');
+  assert.equal(fakeDoc.documentElement.dataset.theme, 'light');
+  assert.equal(applyDocumentTheme('auto', fakeDoc), 'auto');
+  assert.equal(fakeDoc.documentElement.dataset.theme, undefined);
+  assert.equal(applyDocumentTheme('dark', null), 'auto');
+
+  // 2. Live cross-tab theme sync via initThemeSync
+  const prevDoc = globalThis.document;
+  globalThis.document = { documentElement: { dataset: {} } };
+  try {
+    const mock = installChromeMock({
+      initialStore: { settings: { theme: 'dark', folderName: 'Shots' } },
+    });
+    const seenThemes = [];
+    initThemeSync((t) => seenThemes.push(t));
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(globalThis.document.documentElement.dataset.theme, 'dark');
+    assert.deepEqual(seenThemes, ['dark']);
+
+    // Ignore non-local storage area events
+    for (const fn of mock.listeners.onStorageChanged) {
+      fn({ settings: { newValue: { theme: 'light' } } }, 'session');
+    }
+    assert.equal(globalThis.document.documentElement.dataset.theme, 'dark');
+
+    // React immediately when settings.theme updates in chrome.storage.local
+    await updateSettings({ theme: 'light' });
+    assert.equal(globalThis.document.documentElement.dataset.theme, 'light');
+    await updateSettings({ theme: 'auto' });
+    assert.equal(globalThis.document.documentElement.dataset.theme, undefined);
+  } finally {
+    globalThis.document = prevDoc;
+  }
+
+  // 3. safeHttpsUrl blocks XSS / non-HTTPS schemes
+  assert.equal(safeHttpsUrl('https://drive.google.com/drive/folders/abc'), 'https://drive.google.com/drive/folders/abc');
+  for (const unsafe of [
+    'javascript:alert(1)',
+    'JAVASCRIPT:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'http://insecure.example.com/file',
+    'file:///etc/passwd',
+    'chrome-extension://abcdef/popup.html',
+    'not a url',
+    '',
+    null,
+    undefined,
+    123,
+  ]) {
+    assert.equal(
+      safeHttpsUrl(unsafe, 'https://drive.google.com/drive/my-drive'),
+      'https://drive.google.com/drive/my-drive',
+      `Must reject non-https URL: ${String(unsafe)}`
+    );
+    assert.equal(safeHttpsUrl(unsafe), '');
+  }
+
+  // 4. sendRuntimeMessage handles empty response and runtime.lastError cleanly
+  installChromeMock({});
+  await assert.rejects(() => sendRuntimeMessage({ type: 'PING' }), /No response/);
+  globalThis.chrome.runtime.sendMessage = (_payload, cb) => {
+    globalThis.chrome.runtime.lastError = { message: 'Extension context invalidated.' };
+    cb(undefined);
+    globalThis.chrome.runtime.lastError = null;
+  };
+  await assert.rejects(() => sendRuntimeMessage({ type: 'PING' }), /Extension context invalidated/);
+
+  // 5. parseHexColorInput supports 3-digit & 6-digit hex and blocks malformed/injection inputs
+  assert.equal(parseHexColorInput('#ff0066'), '#ff0066');
+  assert.equal(parseHexColorInput('  1A73E8 '), '#1a73e8');
+  assert.equal(parseHexColorInput('#f06'), '#ff0066');
+  assert.equal(parseHexColorInput('0aF'), '#00aaff');
+  for (const invalidHex of [
+    '',
+    '#',
+    '#12',
+    '#1234',
+    '#12345',
+    '#1234567',
+    '#12345678',
+    '#gggggg',
+    'red',
+    '#ff0066; color:red',
+    '<script>',
+    null,
+    undefined,
+    999,
+  ]) {
+    assert.equal(parseHexColorInput(invalidHex), null, `Should reject invalid hex: ${String(invalidHex)}`);
+  }
+
+  // 6. Strict getSettings() allowlist strips injected keys & preserves folder cache when updating theme
+  installChromeMock({
+    initialStore: {
+      settings: {
+        folderName: 'Design_Shots',
+        folderId: 'fid-123',
+        folderWebViewLink: 'https://drive.google.com/drive/folders/fid-123',
+        folderCacheByEmail: {},
+        autoCopyLink: false,
+        editBeforeUpload: true,
+        theme: 'dark',
+        rogueInjectedKey: 'evil',
+      },
+    },
+  });
+  const cleanSettings = await getSettings();
+  assert.equal(cleanSettings.theme, 'dark');
+  assert.equal(cleanSettings.rogueInjectedKey, undefined, 'getSettings must strip non-allowlisted properties');
+
+  const afterThemePatch = await updateSettings({ theme: 'light', extraRogue: 1 });
+  assert.equal(afterThemePatch.theme, 'light');
+  assert.equal(afterThemePatch.folderId, 'fid-123', 'Changing theme must not reset cached folderId');
+  assert.equal(afterThemePatch.extraRogue, undefined);
+});
+
+test('CAPTURE_VISIBLE_FROM_OVERLAY security gate: blocks uninitiated, cross-tab, and replayed requests while surviving SW idle restart', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    const tabs = [
+      {
+        id: 77,
+        windowId: 3,
+        active: true,
+        url: 'https://example.com/article',
+        title: 'Article',
+        incognito: false,
+      },
+      {
+        id: 88,
+        windowId: 4,
+        active: true,
+        url: 'https://other.example/page',
+        title: 'Other Page',
+        incognito: false,
+      },
+    ];
+
+    const mock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'u@example.com', name: 'User', verifiedAt: Date.now() },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'folder-ov-1',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/folder-ov-1',
+          folderCacheByEmail: {
+            'u@example.com': {
+              folderName: 'Chrome_SaveShot_ScreenShots',
+              folderId: 'folder-ov-1',
+              folderWebViewLink: 'https://drive.google.com/drive/folders/folder-ov-1',
+            },
+          },
+          autoCopyLink: true,
+          editBeforeUpload: false,
+          theme: 'dark',
+        },
+      },
+      tabs,
+    });
+
+    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
+      '../background/service-worker.js'
+    );
+    resetInMemoryWorkerStateForTests();
+    registerServiceWorkerListeners();
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.startsWith('data:image/')) return origFetch(url, opts);
+      if (u.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({ user: { displayName: 'User', emailAddress: 'u@example.com' } }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/drive/v3/files/folder-ov-1')) {
+        return new Response(
+          JSON.stringify({
+            id: 'folder-ov-1',
+            name: 'Chrome_SaveShot_ScreenShots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/folder-ov-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (opts.method === 'POST' && u.includes('/upload/drive/v3/files')) {
+        return new Response(
+          JSON.stringify({
+            id: 'overlay_full_1',
+            name: 'Screenshot_full.png',
+            webViewLink: 'https://drive.google.com/file/d/overlay_full_1/view',
+            createdTime: '2026-11-21T00:00:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unhandled fetch in overlay security test: ${u}`);
+    };
+
+    const tab77Sender = {
+      url: 'https://example.com/article',
+      tab: { id: 77, windowId: 3, url: 'https://example.com/article' },
+    };
+    const tab88Sender = {
+      url: 'https://other.example/page',
+      tab: { id: 88, windowId: 4, url: 'https://other.example/page' },
+    };
+
+    // 1. Uninitiated CAPTURE_VISIBLE_FROM_OVERLAY from webpage MUST fail
+    const uninitiated = await mock.dispatchMessage(
+      { type: 'CAPTURE_VISIBLE_FROM_OVERLAY' },
+      tab77Sender
+    );
+    assert.equal(uninitiated.ok, false);
+    assert.equal(uninitiated.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 2. Initiate region capture on tab 77 from trusted popup
+    const startRes = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 77 });
+    assert.equal(startRes.ok, true);
+
+    // 3. Cross-tab attempt from tab 88 MUST be rejected without consuming tab 77's session
+    const crossTab = await mock.dispatchMessage(
+      { type: 'CAPTURE_VISIBLE_FROM_OVERLAY' },
+      tab88Sender
+    );
+    assert.equal(crossTab.ok, false);
+    assert.equal(crossTab.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 4. Simulate MV3 service-worker idle RAM wipe while overlay is open, then press Enter on tab 77
+    resetInMemoryWorkerStateForTests();
+    const validCapture = await mock.dispatchMessage(
+      { type: 'CAPTURE_VISIBLE_FROM_OVERLAY' },
+      tab77Sender
+    );
+    assert.equal(validCapture.ok, true);
+
+    const successToast = mock.sentTabMessages.find(
+      (m) =>
+        m.tabId === 77 &&
+        m.message?.type === 'SHOW_TOAST' &&
+        m.message.payload?.status === 'success'
+    );
+    assert.ok(successToast, 'Full-tab capture from overlay must display success toast on tab');
+    assert.equal(
+      successToast.message.payload.theme,
+      'dark',
+      'Toast payload must inherit user theme setting'
+    );
+
+    // 5. Replay attempt on tab 77 MUST fail (single-use consumption)
+    const replayed = await mock.dispatchMessage(
+      { type: 'CAPTURE_VISIBLE_FROM_OVERLAY' },
+      tab77Sender
+    );
+    assert.equal(replayed.ok, false);
+    assert.equal(replayed.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 6. SIGN_OUT invalidates any pending region session
+    await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 77 });
+    await mock.dispatchMessage({ type: 'SIGN_OUT' });
+    const afterSignOut = await mock.dispatchMessage(
+      { type: 'CAPTURE_VISIBLE_FROM_OVERLAY' },
+      tab77Sender
+    );
+    assert.equal(afterSignOut.ok, false);
+    assert.equal(afterSignOut.code, 'NO_ACTIVE_REGION_SESSION');
   } finally {
     globalThis.fetch = origFetch;
   }
