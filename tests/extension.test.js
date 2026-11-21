@@ -2493,6 +2493,34 @@ test('all repository source, UI, and documentation files contain no em dashes or
     0,
     'store-assets/saveshot-v1.1.1-cws.zip must match current extension source files (run npm run pack)'
   );
+
+  // Verify centralized content source of truth stays 100% synced across Markdown, HTML, and metadata
+  const { SITE_COPY } = await import('../content-source/site-copy.mjs');
+  const { buildGeneratedFiles, inlineMarkdownToHtml } = await import('../scripts/sync-docs.mjs');
+
+  assert.equal(
+    inlineMarkdownToHtml('Use `<script>` & **Save** at [Site](https://example.com)'),
+    'Use <code>&lt;script&gt;</code> &amp; <strong>Save</strong> at <a href="https://example.com" target="_blank" rel="noopener noreferrer">Site</a>'
+  );
+
+  const expectedDocs = buildGeneratedFiles(SITE_COPY);
+  for (const [relPath, expectedContent] of Object.entries(expectedDocs)) {
+    const actualContent = fs.readFileSync(path.join(rootDir, relPath), 'utf8');
+    assert.equal(
+      actualContent,
+      expectedContent,
+      `${relPath} drifted from content-source/site-copy.mjs (run npm run sync:docs)`
+    );
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+  assert.equal(manifest.name, SITE_COPY.extensionTitle);
+  assert.equal(manifest.short_name, SITE_COPY.brandName);
+  assert.equal(manifest.version, SITE_COPY.version);
+  assert.equal(manifest.description, SITE_COPY.shortDescription);
+  assert.equal(pkg.version, SITE_COPY.version);
+  assert.equal(pkg.description, SITE_COPY.shortDescription);
 });
 
 test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 decode, session blob pruning, and Incognito post-upload editor isolation', async () => {

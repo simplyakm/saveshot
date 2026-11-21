@@ -75,7 +75,8 @@ async function launchChromiumWithExtension(initialUrl) {
       !src.includes(`${path.sep}tests`) &&
       !src.includes(`${path.sep}store-assets`) &&
       !src.includes(`${path.sep}scripts`) &&
-      !src.includes(`${path.sep}docs`),
+      !src.includes(`${path.sep}docs`) &&
+      !src.includes(`${path.sep}content-source`),
   });
 
   // Grant <all_urls> ONLY in this automated CDP harness so headless scripts can invoke

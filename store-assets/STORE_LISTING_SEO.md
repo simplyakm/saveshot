@@ -1,36 +1,33 @@
 # Chrome Web Store Listing & SEO Guide for SaveShot
 
-## 1. Recommended Title & Short Summary (`manifest.json`)
+> Generated from `content-source/site-copy.mjs`. Run `npm run sync:docs` after editing centralized copy.
 
-Chrome Web Store search weights your **Extension Name** and **Short Summary** (`manifest.json` `"name"` and `"description"`) heavily.
+## 1. Extension Name & Short Summary (`manifest.json`)
 
 - **Name (`36` chars)**:
   `SaveShot: Screenshot to Google Drive`
-  *(Targets exact-match searches for "screenshot to google drive", "save screenshot to google drive", and "google drive screenshot" while keeping your brand first.)*
-
 - **Short Description (`118` chars, limit `132`)**:
   `Capture and edit screenshots straight to your Google Drive. 100% local in Chrome with no external servers or tracking.`
 
 ---
 
-## 2. Recommended Category & Settings
+## 2. Recommended Category & Verified URLs
 
 - **Primary Category**: `Productivity` -> `Workflow & Planning` *(or `Tools`)*
 - **Language**: `English`
 - **Official URL / Homepage**: `https://simplyakm.github.io/saveshot/`
-- **Support URL**: `https://github.com/simplyakm/saveshot/issues`
 - **Privacy Policy URL**: `https://simplyakm.github.io/saveshot/privacy.html`
+- **Terms of Service URL**: `https://simplyakm.github.io/saveshot/terms.html`
+- **Support URL**: `https://github.com/simplyakm/saveshot/issues`
 
 ---
 
-## 3. Copy-Paste Full Store Description (SEO & Conversion Optimized)
-
-Paste the text below into the **Description** box on the **Store listing** tab:
+## 3. Copy-Paste Full Store Description
 
 ```text
-SaveShot is a fast, privacy-first Chrome extension to capture, annotate, redact, and save screenshots directly to your Google Drive in one click.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
 
-Every screenshot uploads straight from your Chrome browser to your own Google Drive account and copies the shareable Drive link automatically. There are no external servers, no accounts to create, no analytics, and no tracking.
+Every screenshot uploads straight from your Chrome browser to your own Google Drive account and copies the shareable Drive link automatically.
 
 KEY FEATURES
 
@@ -47,7 +44,7 @@ Annotate screenshots right in a new tab without leaving Chrome:
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link (or turn on "Open editor before uploading" in Settings to redact before initial upload)
 
 • Organized in Your Google Drive + Instant Link Sharing
-Screenshots save as crisp lossless PNGs inside a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). SaveShot copies the Google Drive link to your clipboard automatically and keeps your last 8 captures handy in the popup.
+Screenshots save as crisp lossless PNGs inside a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). SaveShot copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
 
 • Offline & Full-Drive Backup Protection
 If your internet drops or your Google Drive storage is full when taking a screenshot, SaveShot offers a one-click "Save PNG locally" fallback so you never lose a capture.
@@ -67,8 +64,6 @@ PRIVACY FIRST BY DESIGN
 ---
 
 ## 4. Store Visual Assets (Included in `store-assets/`)
-
-Upload screenshots in this order on the **Store listing** tab (all verified 24-bit RGB PNGs with no alpha channel):
 
 1. `screenshot-1-capture-1280x800.png` (`1280 x 800`) - Region & Tab Capture + Popup + Instant Drive Upload
 2. `screenshot-2-editor-1280x800.png` (`1280 x 800`) - Built-in Editor: Annotate, Redact, Rotate & Rename

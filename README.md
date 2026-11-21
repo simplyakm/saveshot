@@ -4,7 +4,7 @@
 
 # SaveShot
 
-SaveShot is a privacy-first, lightweight Chrome extension for capturing and editing screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
 
 ## What it does
 
@@ -20,9 +20,9 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing and edit
 
 Click the **?** icon or **Report bug** at the bottom of the popup to open the built-in feedback form for bug reports and feature requests. It lets you open a pre-filled GitHub issue with basic version and error info, or copy the report as plain text.
 
-## Privacy
+## Privacy & Terms
 
-SaveShot runs 100% locally in your browser. Screenshots upload directly from Chrome to Google's official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates. See [PRIVACY.md](PRIVACY.md) for details.
+SaveShot runs 100% locally in your browser. Screenshots upload directly from Chrome to Google's official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates. See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md) for details.
 
 ## License
 
