@@ -64,6 +64,7 @@ import {
 } from '../lib/editor-core.js';
 import {
   applyDocumentTheme,
+  formatShortcutDisplay,
   initThemeSync,
   normalizeTheme,
   safeHttpsUrl,
@@ -2468,4 +2469,152 @@ test('all repository source, UI, and documentation files contain no em dashes or
     }
   };
   walk(rootDir);
+});
+
+test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 decode, session blob pruning, and Incognito post-upload editor isolation', async () => {
+  // 1. formatShortcutDisplay handles spacing, empty strings, and non-string inputs
+  assert.equal(formatShortcutDisplay('Alt+Shift+S'), 'Alt + Shift + S');
+  assert.equal(formatShortcutDisplay('  Command + Shift + V  '), 'Command + Shift + V');
+  assert.equal(formatShortcutDisplay(''), '');
+  assert.equal(formatShortcutDisplay('   '), '');
+  assert.equal(formatShortcutDisplay(null), '');
+  assert.equal(formatShortcutDisplay(undefined), '');
+  assert.equal(formatShortcutDisplay(42), '');
+
+  // 2. dataUrlToBlob decodes base64 PNGs in-memory without invoking globalThis.fetch, and rejects corrupt/empty base64
+  const savedFetch = globalThis.fetch;
+  try {
+    let fetchCalled = false;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalled = true;
+      return savedFetch(url, opts);
+    };
+    const decoded = await dataUrlToBlob(TINY_PNG_DATA_URL);
+    assert.equal(fetchCalled, false, 'Base64 dataUrlToBlob must decode directly without fetch overhead');
+    assert.equal(decoded.type, 'image/png');
+    assert.ok(decoded.size > 0);
+
+    await assert.rejects(
+      () => dataUrlToBlob('data:image/png;base64,%%%corrupt%%%'),
+      (err) => err.code === 'EMPTY_CAPTURE'
+    );
+    await assert.rejects(
+      () => dataUrlToBlob('data:image/png;base64,'),
+      (err) => err.code === 'EMPTY_CAPTURE'
+    );
+
+    // Non-base64 SVG data URL gracefully falls back to fetch
+    const svgBlob = await dataUrlToBlob('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>');
+    assert.equal(fetchCalled, true);
+    assert.ok(svgBlob.size > 0);
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+
+  // 3. Pre-upload session storage keeps at most 2 preUploadPng_* blobs and Incognito post-upload opens Editor without writing local history
+  const origFetch = globalThis.fetch;
+  try {
+    const mock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'incog@example.com', name: 'Incog', verifiedAt: Date.now() },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'f-incog-1',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/f-incog-1',
+          folderCacheByEmail: {
+            'incog@example.com': {
+              folderName: 'Chrome_SaveShot_ScreenShots',
+              folderId: 'f-incog-1',
+              folderWebViewLink: 'https://drive.google.com/drive/folders/f-incog-1',
+            },
+          },
+          autoCopyLink: true,
+          editBeforeUpload: true,
+          theme: 'auto',
+        },
+      },
+      tabs: [
+        {
+          id: 91,
+          windowId: 7,
+          active: true,
+          url: 'https://secret.example/private',
+          title: 'Private Page',
+          incognito: true,
+        },
+      ],
+    });
+
+    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
+      '../background/service-worker.js'
+    );
+    resetInMemoryWorkerStateForTests();
+    registerServiceWorkerListeners();
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/drive/v3/files/f-incog-1')) {
+        return new Response(
+          JSON.stringify({
+            id: 'f-incog-1',
+            name: 'Chrome_SaveShot_ScreenShots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/f-incog-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (opts.method === 'POST' && u.includes('/upload/drive/v3/files')) {
+        return new Response(
+          JSON.stringify({
+            id: 'incog_file_1',
+            name: 'Screenshot_incognito.png',
+            webViewLink: 'https://drive.google.com/file/d/incog_file_1/view',
+            createdTime: '2026-11-21T00:00:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected fetch in optimization test: ${u}`);
+    };
+
+    // Capture 3 pre-upload sessions back-to-back (spaced >520ms handled by captureVisibleTabSafe)
+    const s1 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 91 });
+    const s2 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 91 });
+    const s3 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 91 });
+    assert.equal(s1.openedEditor, true);
+    assert.equal(s2.openedEditor, true);
+    assert.equal(s3.openedEditor, true);
+
+    const sessionSnapshot = await globalThis.chrome.storage.session.get(null);
+    const pngKeys = Object.keys(sessionSnapshot).filter((k) => k.startsWith('preUploadPng_'));
+    assert.equal(pngKeys.length, 2, 'Should retain at most 2 pre-upload PNG blobs in chrome.storage.session');
+    assert.ok(pngKeys.includes(`preUploadPng_${s2.sessionId}`));
+    assert.ok(pngKeys.includes(`preUploadPng_${s3.sessionId}`));
+
+    // Switch editBeforeUpload off and capture in Incognito -> opens post-upload Editor while keeping recentUploads empty
+    await mock.dispatchMessage({ type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: false } });
+    const incogCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 91 });
+    assert.equal(incogCap.ok, true);
+    assert.equal(incogCap.openedEditorAfterUpload, true);
+    assert.equal((await getRecentUploads()).length, 0, 'Incognito upload must never store local recentUploads');
+
+    const trustedSender = {
+      url: 'chrome-extension://testext/pages/editor.html',
+      tab: { id: 600, url: 'chrome-extension://testext/pages/editor.html' },
+    };
+    const incogEditor = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: incogCap.sessionId },
+      trustedSender
+    );
+    assert.equal(incogEditor.ok, true);
+    assert.equal(incogEditor.session.incognito, true);
+    assert.equal(incogEditor.session.justUploaded, true);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });

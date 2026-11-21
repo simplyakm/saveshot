@@ -275,13 +275,13 @@ async function persistEditorSessionMeta(session, { storePreUploadBlob = false } 
 
   if (storePreUploadBlob && session.mode === 'new' && session.pngBlob) {
     try {
-      // Keep at most 2 pre-upload PNGs in chrome.storage.session so 10MB quota is respected
-      const allSessionData = await sessionStoreGet(null);
-      const pngKeys = Object.keys(allSessionData).filter((k) =>
-        k.startsWith(PREUPLOAD_PNG_PREFIX)
+      // Keep at most 2 pre-upload PNGs in chrome.storage.session without reading existing blobs
+      const otherNewIds = Object.keys(existingMap).filter(
+        (id) => id !== session.sessionId && existingMap[id]?.mode === 'new'
       );
-      if (pngKeys.length >= 2) {
-        await sessionStoreRemove(pngKeys.slice(0, pngKeys.length - 1));
+      if (otherNewIds.length >= 2) {
+        const dropIds = otherNewIds.slice(0, otherNewIds.length - 1);
+        await sessionStoreRemove(dropIds.map((id) => `${PREUPLOAD_PNG_PREFIX}${id}`));
       }
       const dataUrl = await blobToDataUrl(session.pngBlob);
       await sessionStoreSet({
@@ -589,10 +589,11 @@ async function uploadCapturedBlob({
   mode,
   interactiveAuth = false,
   customFilename = '',
+  initialSettings = null,
 }) {
   clearFallbackCapture();
   const incognito = Boolean(tab?.incognito);
-  const settings = await getSettings();
+  const settings = initialSettings || (await getSettings());
   const defaultName = buildScreenshotFilename(tab?.url || '', new Date(), { incognito });
   const filename = customFilename
     ? sanitizeScreenshotFilename(customFilename, defaultName)
@@ -674,13 +675,12 @@ async function uploadCapturedBlob({
     incognito,
   });
 
-  if (!incognito) {
-    await addRecentUpload(record);
-  }
+  const recentUploads = incognito ? null : await addRecentUpload(record);
 
   return {
     upload: { ...record, previewThumbnail: thumbnailDataUrl },
     settings: latestSettings,
+    recentUploads,
   };
 }
 
@@ -768,6 +768,7 @@ async function captureVisibleTabFlow({
       tab: targetTab,
       mode: 'visible',
       interactiveAuth,
+      initialSettings: settings,
     });
 
     setBadge('✓', '#15803d', 3000);
@@ -917,6 +918,7 @@ async function handleRegionSelected(selection, senderTab) {
       tab: liveTab,
       mode: 'region',
       interactiveAuth: false,
+      initialSettings: settings,
     });
 
     setBadge('✓', '#15803d', 3000);
@@ -1075,6 +1077,7 @@ async function handleSaveEditedScreenshot(message) {
     mode: session.captureMode,
     interactiveAuth: false,
     customFilename: safeFilename,
+    initialSettings: settings,
   });
 
   // Transition session to existing file so any subsequent save updates this uploaded file
@@ -1185,8 +1188,7 @@ export function registerServiceWorkerListeners() {
               clearRecentCaptureCache();
               clearAllEditorSessions();
               pendingRegionTabIds.clear();
-              await Promise.all([clearSessionStorageArea(), clearRecentUploads()]);
-              await signOut();
+              await Promise.all([clearSessionStorageArea(), signOut()]);
               sendResponse({ ok: true });
               return;
             }
@@ -1218,7 +1220,7 @@ export function registerServiceWorkerListeners() {
                 });
                 return;
               }
-              const recentUploads = await getRecentUploads();
+              const recentUploads = result.recentUploads ?? (await getRecentUploads());
               sendResponse({
                 ok: true,
                 upload: result.upload,

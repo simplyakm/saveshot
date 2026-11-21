@@ -834,26 +834,28 @@
       copyBtn.className = 'btn btn-primary';
       copyBtn.textContent = defaultCopyLabel;
 
+      let copyResetTimer = null;
+      const flashCopyText = (label, ms) => {
+        if (copyResetTimer) clearTimeout(copyResetTimer);
+        copyBtn.textContent = label;
+        copyResetTimer = setTimeout(() => {
+          copyBtn.textContent = defaultCopyLabel;
+          copyResetTimer = null;
+        }, ms);
+      };
+
       // Best-effort auto-copy when page has focus and setting is enabled
       if (autoCopyLink && document.hasFocus() && navigator.clipboard?.writeText) {
         navigator.clipboard
           .writeText(safeHttpsLink)
-          .then(() => {
-            copyBtn.textContent = 'Link copied!';
-            setTimeout(() => {
-              copyBtn.textContent = defaultCopyLabel;
-            }, 2000);
-          })
+          .then(() => flashCopyText('Link copied!', 2000))
           .catch(() => {});
       }
 
       copyBtn.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(safeHttpsLink);
-          copyBtn.textContent = 'Copied!';
-          setTimeout(() => {
-            copyBtn.textContent = defaultCopyLabel;
-          }, 1800);
+          flashCopyText('Copied!', 1800);
         } catch {
           copyBtn.textContent = 'Copy failed';
         }

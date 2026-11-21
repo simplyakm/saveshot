@@ -1,4 +1,8 @@
-import { dataUrlToBlob, sanitizeScreenshotFilename } from '../lib/capture.js';
+import {
+  blobToDataUrl,
+  dataUrlToBlob,
+  sanitizeScreenshotFilename,
+} from '../lib/capture.js';
 import {
   FONT_SIZES,
   parseHexColorInput,
@@ -99,10 +103,22 @@ function syncFilenameDisplay(cleanFilename) {
 
 function hasUnsavedChanges() {
   if (!state.ready) return false;
-  return state.imageModifiedSinceSave || getDesiredFilename() !== state.savedFilename;
+  const hasPendingText =
+    !els.textOverlayInput.hidden && Boolean(els.textOverlayInput.value.trim());
+  return (
+    state.imageModifiedSinceSave ||
+    hasPendingText ||
+    getDesiredFilename() !== state.savedFilename
+  );
 }
 
+let statusPillTimer = null;
+
 function showStatusPill(kind, text, autoHideMs = 0) {
+  if (statusPillTimer) {
+    clearTimeout(statusPillTimer);
+    statusPillTimer = null;
+  }
   if (!text) {
     els.statusPill.hidden = true;
     return;
@@ -111,10 +127,11 @@ function showStatusPill(kind, text, autoHideMs = 0) {
   els.statusPill.className = `status-pill ${kind}`;
   els.statusPill.textContent = text;
   if (autoHideMs > 0) {
-    setTimeout(() => {
+    statusPillTimer = setTimeout(() => {
       if (els.statusPill.textContent === text) {
         els.statusPill.hidden = true;
       }
+      statusPillTimer = null;
     }, autoHideMs);
   }
 }
@@ -271,6 +288,7 @@ function cancelActiveText() {
   els.textOverlayInput.hidden = true;
   els.textOverlayInput.value = '';
   state.activeTextAnchor = null;
+  updateUiState();
 }
 
 function openTextOverlayAt(coords) {
@@ -366,17 +384,8 @@ function applyTransform(kind) {
   }
 
   return enqueueCanvasMutation(async () => {
-    const sourceBitmap = await createImageBitmap(els.baseCanvas);
-    state.undoStack.push({
-      bitmap: sourceBitmap,
-      isAtOriginalCapture: state.isAtOriginalCapture,
-      imageModifiedSinceSave: state.imageModifiedSinceSave,
-    });
-    while (state.undoStack.length > MAX_UNDO_STEPS) {
-      const evicted = state.undoStack.shift();
-      evicted?.bitmap?.close?.();
-    }
-
+    await pushUndoSnapshot();
+    const sourceBitmap = state.undoStack[state.undoStack.length - 1].bitmap;
     transformSourceToCanvas(sourceBitmap, kind, els.baseCanvas);
     syncPreviewCanvasSize();
     state.isAtOriginalCapture = false;
@@ -541,6 +550,8 @@ els.previewCanvas.addEventListener('pointercancel', () => {
   state.activeDrag = null;
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
 });
+
+els.textOverlayInput.addEventListener('input', () => updateUiState());
 
 els.textOverlayInput.addEventListener('keydown', async (event) => {
   if (event.key === 'Escape') {
@@ -713,13 +724,7 @@ async function exportCanvasDataUrl() {
       else reject(new Error('Could not encode PNG screenshot.'));
     }, 'image/png');
   });
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('Could not read encoded PNG.'));
-    reader.readAsDataURL(blob);
-  });
+  return blobToDataUrl(blob);
 }
 
 async function performSave(saveMode) {
@@ -841,6 +846,18 @@ els.confirmReplaceBtn.addEventListener('click', async () => {
 
 window.addEventListener('keydown', (event) => {
   if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    if (!els.filenameEditing.hidden) {
+      els.filenameInput.blur();
+    }
+    if (!els.saveDriveBtn.disabled) {
+      els.saveDriveBtn.click();
+    }
+    return;
+  }
+
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
@@ -875,13 +892,13 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (state.imageModifiedSinceSave) {
+  if (hasUnsavedChanges()) {
     event.preventDefault();
     event.returnValue = '';
   }
 });
 
-window.addEventListener('unload', () => {
+window.addEventListener('pagehide', () => {
   clearUndoStack();
   state.initialBitmap?.close?.();
 });

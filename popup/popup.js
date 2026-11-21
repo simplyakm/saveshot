@@ -1,5 +1,6 @@
 import {
   applyDocumentTheme,
+  formatShortcutDisplay,
   initThemeSync,
   normalizeTheme,
   safeHttpsUrl,
@@ -93,11 +94,6 @@ function createActionSvg(kind) {
     add('polyline', { points: '20 6 9 17 4 12' });
   }
   return svg;
-}
-
-function formatShortcutDisplay(raw) {
-  if (!raw) return '';
-  return String(raw).replace(/\+/g, ' + ');
 }
 
 function openHelpPage({ kind = '', errorCode = '', jumpToFeedback = false } = {}) {

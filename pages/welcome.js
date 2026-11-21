@@ -3,7 +3,12 @@ import {
   getEnvironmentSummary,
   getRepoUrl,
 } from '../lib/feedback.js';
-import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
+import {
+  formatShortcutDisplay,
+  initThemeSync,
+  safeHttpsUrl,
+  sendRuntimeMessage,
+} from '../lib/ui.js';
 
 const els = {
   extVersion: document.getElementById('ext-version'),
@@ -31,11 +36,6 @@ const els = {
 
 let feedbackKind = 'bug';
 let lastErrorCode = '';
-
-function formatShortcutDisplay(raw) {
-  if (!raw) return '';
-  return String(raw).replace(/\+/g, ' + ');
-}
 
 function setFeedbackKind(kind) {
   feedbackKind = kind === 'feature' ? 'feature' : 'bug';

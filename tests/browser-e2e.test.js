@@ -1473,6 +1473,127 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.match(autoEditorState.statusText, /Saved to Google Drive/);
     assert.equal(autoEditorState.unsavedHidden, true);
 
+    // Battle-test live Text draft unsaved state + Escape, Reset + Undo, beforeunload guard, and Ctrl+S shortcut
+    const editorEdgeAudit = await evalIn(
+      autoEditorSession,
+      `(async () => {
+        const unsavedPill = document.getElementById('unsaved-pill');
+        const saveBtn = document.getElementById('save-drive-btn');
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+
+        const cleanBeforeUnload = !window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+        // 1. Live Text overlay input shows unsaved pill while typing, and hides on Escape
+        document.querySelector('[data-tool="text"]').click();
+        await new Promise((r) => setTimeout(r, 15));
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 24, clientY: rect.top + 24 }));
+        await new Promise((r) => setTimeout(r, 15));
+        const txt = document.getElementById('text-overlay-input');
+        const emptyTextUnsavedHidden = unsavedPill.hidden;
+        txt.value = 'Draft note';
+        txt.dispatchEvent(new Event('input', { bubbles: true }));
+        const typingShowsUnsaved = !unsavedPill.hidden && !saveBtn.disabled;
+        txt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        const escHidesUnsaved = unsavedPill.hidden && saveBtn.disabled;
+
+        // 2. Draw box -> Reset hides unsaved pill -> Undo of Reset re-shows unsaved pill -> Reset again
+        document.querySelector('[data-tool="box"]').click();
+        await new Promise((r) => setTimeout(r, 15));
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 10, clientY: rect.top + 10 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, clientX: rect.left + 60, clientY: rect.top + 50 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: rect.left + 60, clientY: rect.top + 50 }));
+        await new Promise((r) => setTimeout(r, 35));
+        const dirtyAfterBox = !unsavedPill.hidden;
+
+        document.getElementById('reset-btn').click();
+        await new Promise((r) => setTimeout(r, 35));
+        const cleanAfterReset = unsavedPill.hidden && saveBtn.disabled;
+
+        document.getElementById('undo-btn').click();
+        await new Promise((r) => setTimeout(r, 35));
+        const dirtyAfterUndoReset = !unsavedPill.hidden && !saveBtn.disabled;
+
+        document.getElementById('undo-btn').click();
+        await new Promise((r) => setTimeout(r, 35));
+        const cleanAtStart = unsavedPill.hidden && saveBtn.disabled;
+
+        // 3. Rename-only change triggers beforeunload guard AND Ctrl+S opens Replace confirmation modal
+        document.getElementById('rename-pencil-btn').click();
+        const fnInput = document.getElementById('filename-input');
+        fnInput.value = 'Renamed_Guard_Check';
+        const dirtyBeforeUnload = !window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+        const ctrlSEvent = new KeyboardEvent('keydown', {
+          key: 's',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        window.dispatchEvent(ctrlSEvent);
+        await new Promise((r) => setTimeout(r, 25));
+        const dlg = document.getElementById('confirm-replace-dialog');
+        const ctrlSPrevented = ctrlSEvent.defaultPrevented;
+        const ctrlSOpenedModal = dlg.open;
+        document.getElementById('cancel-replace-btn').click();
+
+        return {
+          cleanBeforeUnload,
+          emptyTextUnsavedHidden,
+          typingShowsUnsaved,
+          escHidesUnsaved,
+          dirtyAfterBox,
+          cleanAfterReset,
+          dirtyAfterUndoReset,
+          cleanAtStart,
+          dirtyBeforeUnload,
+          ctrlSPrevented,
+          ctrlSOpenedModal,
+        };
+      })()`
+    );
+    assert.equal(editorEdgeAudit.cleanBeforeUnload, false, 'Clean editor must not trigger beforeunload prompt');
+    assert.equal(editorEdgeAudit.emptyTextUnsavedHidden, true);
+    assert.equal(editorEdgeAudit.typingShowsUnsaved, true, 'Typing text annotation must immediately show unsaved notification');
+    assert.equal(editorEdgeAudit.escHidesUnsaved, true, 'Pressing Escape on text annotation must hide unsaved notification');
+    assert.equal(editorEdgeAudit.dirtyAfterBox, true);
+    assert.equal(editorEdgeAudit.cleanAfterReset, true, 'Reset to original must clear unsaved notification');
+    assert.equal(editorEdgeAudit.dirtyAfterUndoReset, true, 'Undoing Reset must restore unsaved notification');
+    assert.equal(editorEdgeAudit.cleanAtStart, true);
+    assert.equal(editorEdgeAudit.dirtyBeforeUnload, true, 'Rename-only change must protect tab with beforeunload');
+    assert.equal(editorEdgeAudit.ctrlSPrevented, true, 'Ctrl+S must prevent native Save Webpage As dialog');
+    assert.equal(editorEdgeAudit.ctrlSOpenedModal, true, 'Ctrl+S must trigger Save action when dirty');
+
+    // Battle-test unassigned Chrome shortcuts fallback on Welcome page ("Not set" + hint visible)
+    await cdp.send('Page.enable', {}, welcomeSession);
+    await cdp.send(
+      'Page.addScriptToEvaluateOnNewDocument',
+      {
+        source: `
+          if (chrome?.commands) {
+            chrome.commands.getAll = (cb) => cb([
+              { name: 'capture-region', shortcut: '' },
+              { name: 'capture-visible', shortcut: '' },
+            ]);
+          }
+        `,
+      },
+      welcomeSession
+    );
+    await cdp.send('Page.reload', {}, welcomeSession);
+    await new Promise((r) => setTimeout(r, 250));
+    const unsetWelcomeAudit = await evalIn(
+      welcomeSession,
+      `(() => ({
+        regionText: document.getElementById('shortcut-region')?.textContent?.trim(),
+        visibleText: document.getElementById('shortcut-visible')?.textContent?.trim(),
+        hintVisible: !document.getElementById('shortcut-unset-hint')?.hidden,
+      }))()`
+    );
+    assert.equal(unsetWelcomeAudit.regionText, 'Not set');
+    assert.equal(unsetWelcomeAudit.visibleText, 'Not set');
+    assert.equal(unsetWelcomeAudit.hintVisible, true, 'Welcome page must reveal hint when shortcuts are unassigned');
+
     // Verify signing out from Popup clears Recent history from storage and UI
     const signOutAudit = await evalIn(
       extPageSession,
