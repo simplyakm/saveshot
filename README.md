@@ -4,17 +4,17 @@
 
 # SaveShot
 
-SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive. It signs in with the Google account you already use in Chrome, with no external dependencies or build step.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing and editing screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
 
 ## What it does
 
-- **Select area (`Alt+Shift+R`)**: Drag a box over any part of a page to crop and upload just that section, or press `Enter` to capture the full tab.
-- **Visible tab (`Alt+Shift+S`)**: Captures what is currently visible in the active tab.
-- **Saves to a Drive folder**: Uploads PNGs to a `Chrome_SaveShot_ScreenShots` folder in your Google Drive (you can rename the folder in Settings).
-- **Quick link sharing**: Copies the Drive link after upload and keeps your last 8 screenshots in the popup for quick access.
-- **Optional lightweight editor**: Click **Edit** after capture (or enable **Open editor before uploading** in Settings) to rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, and update the existing Drive file while keeping the same share link.
+- **Select area (`Alt+Shift+S`)**: Drag a box over any part of a page to crop and upload just that section, or press `Enter` to capture the full tab.
+- **Visible tab (`Alt+Shift+V`)**: Captures what is currently visible in the active tab.
+- **Saves straight to your Drive**: Uploads PNGs directly from Chrome to a `Chrome_SaveShot_ScreenShots` folder in your Google Drive (you can rename the folder in Settings) and copies the share link automatically.
+- **Built-in lightweight editor**: Opens automatically in a new tab after upload (or before uploading if you turn on **Open editor before uploading** in Settings) so you can rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, and press **Save** to update the Drive file while keeping the same share link.
+- **Recent history**: Keeps your last 8 screenshots in the popup for quick access, and clears them automatically when you sign out.
 - **Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.
-- **Narrow permissions**: Uses `activeTab` and `drive.file`. SaveShot can only access the folder and screenshots it creates, not the rest of your Google Drive.
+- **Strict privacy & narrow permissions**: Uses only `activeTab` and Google's narrow `drive.file` scope. SaveShot runs 100% locally in Chrome, sends zero requests to any private or third-party server, and cannot access any other files in your Google Drive.
 
 ## Reporting bugs or requesting features
 
@@ -22,7 +22,7 @@ Click the **?** icon or **Report bug** at the bottom of the popup to open the bu
 
 ## Privacy
 
-SaveShot has no backend server and does not collect or share user data. See [PRIVACY.md](PRIVACY.md) for details.
+SaveShot runs 100% locally in your browser. Screenshots upload directly from Chrome to Google's official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates. See [PRIVACY.md](PRIVACY.md) for details.
 
 ## License
 

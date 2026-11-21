@@ -97,8 +97,14 @@ code {
 
 .steps-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+@media (max-width: 540px) {
+  .steps-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .step-card {
@@ -152,6 +158,10 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.shortcut-hint {
+  line-height: 17px;
 }
 
 .faq-list {

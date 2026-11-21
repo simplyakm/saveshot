@@ -19,6 +19,7 @@ const els = {
   filenameInput: document.getElementById('filename-input'),
   dimLabel: document.getElementById('dim-label'),
   statusPill: document.getElementById('status-pill'),
+  unsavedPill: document.getElementById('unsaved-pill'),
   downloadBtn: document.getElementById('download-btn'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   openDriveLink: document.getElementById('open-drive-link'),
@@ -131,6 +132,11 @@ function updateDimensionsLabel() {
 function updateUiState() {
   const dirty = hasUnsavedChanges();
   const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
+
+  els.unsavedPill.hidden = !state.ready || state.saving || !dirty;
+  if (dirty && !state.saving && els.statusPill.classList.contains('ok')) {
+    els.statusPill.hidden = true;
+  }
 
   els.saveDriveBtn.textContent = 'Save';
   els.saveDriveBtn.disabled = !canSave;
@@ -419,7 +425,7 @@ function resetToOriginal() {
     syncPreviewCanvasSize();
 
     state.isAtOriginalCapture = true;
-    state.imageModifiedSinceSave = !state.driveMatchesInitial;
+    state.imageModifiedSinceSave = state.mode === 'existing' ? !state.driveMatchesInitial : false;
     updateUiState();
   });
 }
@@ -930,6 +936,24 @@ async function initEditor() {
     els.stageMessage.hidden = true;
     els.canvasWrap.hidden = false;
     updateUiState();
+
+    if (res.session.justUploaded) {
+      let copied = false;
+      const safeLink = safeHttpsUrl(state.webViewLink);
+      if (state.autoCopyLink && safeLink && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(safeLink);
+          copied = true;
+        } catch {
+          // Ignore clipboard error when tab is unfocused
+        }
+      }
+      showStatusPill(
+        'ok',
+        copied ? 'Saved to Google Drive \u00b7 Link copied' : 'Saved to Google Drive',
+        5000
+      );
+    }
   } catch (err) {
     els.stageSpinner.hidden = true;
     els.stageMessageText.textContent =

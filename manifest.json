@@ -5,7 +5,7 @@
   "version": "1.1.1",
   "incognito": "spanning",
   "homepage_url": "https://github.com/simplyakm/saveshot",
-  "description": "SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive.",
+  "description": "Capture and edit screenshots straight to your Google Drive. 100% local in Chrome with no external servers or tracking.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -43,19 +43,19 @@
     ]
   },
   "commands": {
-    "capture-visible": {
+    "capture-region": {
       "suggested_key": {
         "default": "Alt+Shift+S",
         "mac": "Alt+Shift+S"
       },
-      "description": "Capture visible tab and save to Google Drive"
+      "description": "Select a screen area and save to Google Drive"
     },
-    "capture-region": {
+    "capture-visible": {
       "suggested_key": {
-        "default": "Alt+Shift+R",
-        "mac": "Alt+Shift+R"
+        "default": "Alt+Shift+V",
+        "mac": "Alt+Shift+V"
       },
-      "description": "Select a screen region and save to Google Drive"
+      "description": "Capture visible tab and save to Google Drive"
     }
   }
 }

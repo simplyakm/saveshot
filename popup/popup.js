@@ -498,10 +498,14 @@ function initStaticMetadata() {
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {
       for (const cmd of commands || []) {
-        if (cmd.name === 'capture-region' && cmd.shortcut) {
-          els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
-        } else if (cmd.name === 'capture-visible' && cmd.shortcut) {
-          els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
+        if (cmd.name === 'capture-region') {
+          els.shortcutRegion.textContent = cmd.shortcut
+            ? formatShortcutDisplay(cmd.shortcut)
+            : 'Shortcut not set';
+        } else if (cmd.name === 'capture-visible') {
+          els.shortcutVisible.textContent = cmd.shortcut
+            ? formatShortcutDisplay(cmd.shortcut)
+            : 'Shortcut not set';
         }
       }
     });
@@ -531,6 +535,7 @@ async function loadState() {
     }
 
     if (!res.session?.signedIn) {
+      renderRecentUploads([]);
       els.setupBanner.hidden = !res.session?.needsSetup;
       els.authError.hidden = true;
       showView('signed-out');
@@ -587,6 +592,7 @@ els.signOutBtn.addEventListener('click', async () => {
     await sendRuntimeMessage({ type: 'SIGN_OUT' });
     els.settingsDrawer.hidden = true;
     els.settingsToggleBtn.classList.remove('active');
+    renderRecentUploads([]);
     await loadState();
   } finally {
     els.signOutBtn.disabled = false;
@@ -690,6 +696,11 @@ els.captureVisibleBtn.addEventListener('click', async () => {
       } catch {
         // Ignore clipboard error when popup loses focus
       }
+    }
+
+    if (res.openedEditorAfterUpload) {
+      window.close();
+      return;
     }
 
     showStatus('success', {

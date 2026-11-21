@@ -230,6 +230,7 @@ function serializeSessionMeta(session) {
     pageTitle: session.pageTitle || '',
     captureMode: session.captureMode === 'region' ? 'region' : 'visible',
     incognito: Boolean(session.incognito),
+    justUploaded: Boolean(session.justUploaded),
     updatedAt: Date.now(),
   };
 }
@@ -306,6 +307,7 @@ async function createEditorSession(data) {
     pageTitle: data.pageTitle || '',
     captureMode: data.captureMode === 'region' ? 'region' : 'visible',
     incognito: Boolean(data.incognito),
+    justUploaded: Boolean(data.justUploaded),
   };
 
   putRamEditorSession(session);
@@ -361,6 +363,7 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
       pageTitle: storedMeta.pageTitle || '',
       captureMode: storedMeta.captureMode === 'region' ? 'region' : 'visible',
       incognito: Boolean(storedMeta.incognito),
+      justUploaded: Boolean(storedMeta.justUploaded),
     };
     putRamEditorSession(rehydrated);
     return rehydrated;
@@ -782,7 +785,26 @@ async function captureVisibleTabFlow({
       });
     }
 
-    return result;
+    const postUploadSession = await createEditorSession({
+      mode: 'existing',
+      fileId: result.upload.id,
+      filename: result.upload.name,
+      folderName: result.upload.folderName,
+      webViewLink: result.upload.webViewLink,
+      pngBlob,
+      pageUrl: targetTab?.url || '',
+      pageTitle: targetTab?.title || '',
+      captureMode: 'visible',
+      incognito: Boolean(targetTab?.incognito),
+      justUploaded: true,
+    });
+    await openEditorTab(postUploadSession.sessionId, targetTab?.windowId);
+
+    return {
+      ...result,
+      openedEditorAfterUpload: true,
+      sessionId: postUploadSession.sessionId,
+    };
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
@@ -908,6 +930,21 @@ async function handleRegionSelected(selection, senderTab) {
       canEdit: true,
       theme: result.settings?.theme,
     });
+
+    const postUploadSession = await createEditorSession({
+      mode: 'existing',
+      fileId: result.upload.id,
+      filename: result.upload.name,
+      folderName: result.upload.folderName,
+      webViewLink: result.upload.webViewLink,
+      pngBlob: croppedBlob,
+      pageUrl: liveTab?.url || '',
+      pageTitle: liveTab?.title || '',
+      captureMode: 'region',
+      incognito: Boolean(liveTab?.incognito),
+      justUploaded: true,
+    });
+    await openEditorTab(postUploadSession.sessionId, liveTab?.windowId);
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
@@ -1105,7 +1142,7 @@ export function registerServiceWorkerListeners() {
                 ok: true,
                 session,
                 settings,
-                recentUploads,
+                recentUploads: session?.signedIn ? recentUploads : [],
                 capturable,
                 incognito: Boolean(activeTab?.incognito),
                 lastErrorCode,
@@ -1148,7 +1185,7 @@ export function registerServiceWorkerListeners() {
               clearRecentCaptureCache();
               clearAllEditorSessions();
               pendingRegionTabIds.clear();
-              await clearSessionStorageArea();
+              await Promise.all([clearSessionStorageArea(), clearRecentUploads()]);
               await signOut();
               sendResponse({ ok: true });
               return;
@@ -1187,6 +1224,8 @@ export function registerServiceWorkerListeners() {
                 upload: result.upload,
                 settings: result.settings,
                 recentUploads,
+                openedEditorAfterUpload: Boolean(result.openedEditorAfterUpload),
+                sessionId: result.sessionId || '',
               });
               return;
             }
@@ -1234,6 +1273,7 @@ export function registerServiceWorkerListeners() {
               sendResponse({
                 ok: true,
                 openedEditor: Boolean(result.openedEditor),
+                openedEditorAfterUpload: Boolean(result.openedEditorAfterUpload),
                 sessionId: result.sessionId || '',
               });
               return;
@@ -1360,6 +1400,12 @@ export function registerServiceWorkerListeners() {
                 );
               }
 
+              const justUploaded = Boolean(session.justUploaded);
+              if (justUploaded) {
+                session.justUploaded = false;
+                await persistEditorSessionMeta(session);
+              }
+
               const dataUrl = await blobToDataUrl(session.pngBlob);
               sendResponse({
                 ok: true,
@@ -1375,6 +1421,7 @@ export function registerServiceWorkerListeners() {
                   pageTitle: session.pageTitle || '',
                   incognito: Boolean(session.incognito),
                   autoCopyLink: Boolean(settings.autoCopyLink),
+                  justUploaded,
                 },
                 dataUrl,
               });

@@ -255,6 +255,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       extPageSession,
       `(() => ({
         signedOutVisible: !document.getElementById('signed-out-view').hidden,
+        signedOutCopy: document.querySelector('#signed-out-view .hero-copy p')?.textContent?.trim() || '',
         setupBannerVisible: !document.getElementById('setup-banner').hidden,
         hasHelpBtn: Boolean(document.getElementById('help-btn')),
         hasOpenDriveBtn: Boolean(document.getElementById('open-drive-btn')),
@@ -262,12 +263,14 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       }))()`
     );
     assert.equal(popupCheck.signedOutVisible, true);
+    assert.match(popupCheck.signedOutCopy, /directly from Chrome to your Google Drive/);
+    assert.match(popupCheck.signedOutCopy, /No external servers, no tracking/);
     assert.equal(popupCheck.setupBannerVisible, expectedNeedsSetup);
     assert.equal(popupCheck.hasHelpBtn, true);
     assert.equal(popupCheck.hasOpenDriveBtn, true);
     assert.equal(popupCheck.hasBugFooterBtn, true);
 
-    // Verify Welcome / Help page opened automatically on extension install and renders feedback form
+    // Verify Welcome / Help page opened automatically on extension install, binds both shortcuts, and shows 4 steps
     const { targetInfos: postInstallTargets } = await cdp.send('Target.getTargets');
     const welcomeTarget = postInstallTargets.find(
       (t) => t.type === 'page' && t.url.endsWith('/pages/welcome.html')
@@ -282,11 +285,22 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       welcomeSession,
       `(() => ({
         title: document.querySelector('h1')?.textContent,
+        subtitle: document.querySelector('.hero .subtitle')?.textContent?.trim() || '',
+        stepTitles: Array.from(document.querySelectorAll('.step-card h3'), (el) => el.textContent.trim()),
+        shortcutRegionText: document.getElementById('shortcut-region')?.textContent?.trim() || '',
+        shortcutVisibleText: document.getElementById('shortcut-visible')?.textContent?.trim() || '',
+        unsetHintHidden: document.getElementById('shortcut-unset-hint')?.hidden,
         hasFeedbackSection: Boolean(document.getElementById('feedback')),
         diagText: document.getElementById('diag-preview')?.textContent || '',
       }))()`
     );
     assert.equal(welcomeCheck.title, 'SaveShot');
+    assert.match(welcomeCheck.subtitle, /no external servers or tracking/i);
+    assert.equal(welcomeCheck.stepTitles.length, 4, 'Welcome How it works must show all 4 steps including Editing');
+    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or rename'));
+    assert.equal(welcomeCheck.shortcutRegionText, 'Alt + Shift + S');
+    assert.equal(welcomeCheck.shortcutVisibleText, 'Alt + Shift + V');
+    assert.equal(welcomeCheck.unsetHintHidden, true, 'Both default shortcuts must bind cleanly on fresh install');
     assert.equal(welcomeCheck.hasFeedbackSection, true);
     assert.match(welcomeCheck.diagText, /SaveShot version:/);
 
@@ -805,12 +819,15 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // 5A. Verify clean Save disabled state, Redact draw enabling Save, Undo re-disabling Save, and opaque redaction
+    // 5A. Verify SaveShot / Editor title, clean Save/unsaved-pill state, Redact enabling Save + unsaved notification, and Undo hiding it
     const redactCheck = await evalIn(
       editorSession,
       `(async () => {
         const saveBtn = document.getElementById('save-drive-btn');
+        const unsavedPill = document.getElementById('unsaved-pill');
+        const brandText = document.getElementById('editor-brand')?.textContent?.replace(/\\s+/g, ' ')?.trim() || '';
         const initialSaveDisabled = saveBtn.disabled;
+        const initialUnsavedHidden = unsavedPill.hidden;
         const initialSaveLabel = saveBtn.textContent.trim();
         const initialReadonlyVisible =
           !document.getElementById('filename-readonly').hidden &&
@@ -840,11 +857,14 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         await new Promise((r) => setTimeout(r, 40));
 
         const saveEnabledAfterDraw = !saveBtn.disabled;
+        const unsavedShownAfterDraw = !unsavedPill.hidden;
+        const unsavedText = unsavedPill.textContent.replace(/\\s+/g, ' ').trim();
 
-        // Undo back to clean initial state -> Save button must disable again
+        // Undo back to clean initial state -> Save button disables AND unsaved notification hides immediately
         document.getElementById('undo-btn').click();
         await new Promise((r) => setTimeout(r, 35));
         const saveDisabledAfterUndo = saveBtn.disabled;
+        const unsavedHiddenAfterUndo = unsavedPill.hidden;
 
         // Re-apply Redact permanently over the green secret region
         fire('pointerdown', 18, 18);
@@ -867,21 +887,31 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           }
         }
         return {
+          brandText,
           initialSaveDisabled,
+          initialUnsavedHidden,
           initialSaveLabel,
           initialReadonlyVisible,
           saveEnabledAfterDraw,
+          unsavedShownAfterDraw,
+          unsavedText,
           saveDisabledAfterUndo,
+          unsavedHiddenAfterUndo,
           styleDimmed: document.getElementById('style-group').classList.contains('dimmed'),
           nonBlackInSecret,
         };
       })()`
     );
+    assert.equal(redactCheck.brandText, 'SaveShot / Editor');
     assert.equal(redactCheck.initialSaveDisabled, true, 'Save must be disabled before any edits on existing file');
+    assert.equal(redactCheck.initialUnsavedHidden, true, 'Unsaved notification must be hidden initially');
     assert.equal(redactCheck.initialSaveLabel, 'Save');
     assert.equal(redactCheck.initialReadonlyVisible, true, 'Filename must start in read-only mode');
     assert.equal(redactCheck.saveEnabledAfterDraw, true, 'Save must activate once an edit is made');
+    assert.equal(redactCheck.unsavedShownAfterDraw, true, 'Unsaved notification must show once an edit is made');
+    assert.match(redactCheck.unsavedText, /Unsaved changes.*Click Save/);
     assert.equal(redactCheck.saveDisabledAfterUndo, true, 'Save must re-disable when Undo returns to clean state');
+    assert.equal(redactCheck.unsavedHiddenAfterUndo, true, 'Unsaved notification must hide when Undo returns to clean state');
     assert.equal(redactCheck.styleDimmed, true, 'Style swatches should dim while Redact is active');
     assert.equal(
       redactCheck.nonBlackInSecret,
@@ -1111,6 +1141,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               ok: true,
               pillText: pill.textContent,
               saveDisabledAfterSave: document.getElementById('save-drive-btn').disabled,
+              unsavedHiddenAfterSave: document.getElementById('unsaved-pill').hidden,
             };
           }
           await new Promise((r) => setTimeout(r, 80));
@@ -1123,6 +1154,11 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       confirmSaveCheck.saveDisabledAfterSave,
       true,
       'Save button must return to disabled once all changes are saved'
+    );
+    assert.equal(
+      confirmSaveCheck.unsavedHiddenAfterSave,
+      true,
+      'Unsaved changes notification must clear once changes are saved'
     );
 
     const swVerifyAfterReplace = await evalIn(
@@ -1395,6 +1431,71 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       'NO_ACTIVE_REGION_SESSION',
       'Real Chromium content-script world must not trigger CAPTURE_VISIBLE_FROM_OVERLAY without an active region session'
     );
+
+    // Verify a brand-new Editor tab also opened automatically right after upload with "Saved to Google Drive"
+    let autoOpenedEditorTarget = null;
+    for (let i = 0; i < 25; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      autoOpenedEditorTarget = targetInfos.find(
+        (t) =>
+          t.type === 'page' &&
+          t.url.includes('/pages/editor.html?session=') &&
+          t.targetId !== editorTarget.targetId
+      );
+      if (autoOpenedEditorTarget) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(autoOpenedEditorTarget, 'Editor tab must open automatically in a new tab right after upload');
+
+    const { sessionId: autoEditorSession } = await cdp.send('Target.attachToTarget', {
+      targetId: autoOpenedEditorTarget.targetId,
+      flatten: true,
+    });
+    let autoEditorState = null;
+    for (let i = 0; i < 25; i += 1) {
+      autoEditorState = await evalIn(
+        autoEditorSession,
+        `(() => {
+          const wrap = document.getElementById('canvas-wrap');
+          const status = document.getElementById('status-pill');
+          const unsaved = document.getElementById('unsaved-pill');
+          return {
+            ready: Boolean(wrap && !wrap.hidden),
+            statusText: status && !status.hidden ? status.textContent.trim() : '',
+            unsavedHidden: Boolean(unsaved && unsaved.hidden),
+          };
+        })()`
+      );
+      if (autoEditorState.ready && autoEditorState.statusText.includes('Saved to Google Drive')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(autoEditorState.ready, true);
+    assert.match(autoEditorState.statusText, /Saved to Google Drive/);
+    assert.equal(autoEditorState.unsavedHidden, true);
+
+    // Verify signing out from Popup clears Recent history from storage and UI
+    const signOutAudit = await evalIn(
+      extPageSession,
+      `(async () => {
+        document.getElementById('sign-out-btn').click();
+        for (let i = 0; i < 25; i += 1) {
+          const signedOutVisible = !document.getElementById('signed-out-view').hidden;
+          if (signedOutVisible) {
+            const { recentUploads } = await chrome.storage.local.get('recentUploads');
+            return {
+              signedOutVisible: true,
+              storedCount: (recentUploads || []).length,
+              domItems: document.getElementById('upload-list').children.length,
+            };
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return { signedOutVisible: false };
+      })()`
+    );
+    assert.equal(signOutAudit.signedOutVisible, true);
+    assert.equal(signOutAudit.storedCount, 0, 'Signing out must clear recentUploads in storage');
+    assert.equal(signOutAudit.domItems, 0, 'Signing out must clear rendered Recent items in popup');
   } finally {
     cleanup();
     server.closeAllConnections();

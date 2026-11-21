@@ -82,12 +82,27 @@ async function loadStatus() {
 
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {
+      let hasUnset = false;
       for (const cmd of commands || []) {
-        if (cmd.name === 'capture-visible' && cmd.shortcut) {
-          els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
-        } else if (cmd.name === 'capture-region' && cmd.shortcut) {
-          els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
+        if (cmd.name === 'capture-visible') {
+          if (cmd.shortcut) {
+            els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
+          } else {
+            els.shortcutVisible.textContent = 'Not set';
+            hasUnset = true;
+          }
+        } else if (cmd.name === 'capture-region') {
+          if (cmd.shortcut) {
+            els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
+          } else {
+            els.shortcutRegion.textContent = 'Not set';
+            hasUnset = true;
+          }
         }
+      }
+      const unsetHint = document.getElementById('shortcut-unset-hint');
+      if (unsetHint) {
+        unsetHint.hidden = !hasUnset;
       }
     });
   }
@@ -103,7 +118,7 @@ async function loadStatus() {
       els.accountDot.classList.remove('connected');
       els.accountHeading.textContent = 'Google Drive not connected yet';
       els.accountDetail.textContent =
-        'Approve one-time access to your Google Drive to start saving screenshots.';
+        'Connect once to save screenshots straight from Chrome to your own Google Drive.';
       els.signInBtn.hidden = false;
       els.openDriveBtn.hidden = true;
       els.devSetupNotice.hidden = !res.session?.needsSetup;

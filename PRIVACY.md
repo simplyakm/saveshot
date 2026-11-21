@@ -1,26 +1,26 @@
 # Privacy Policy for SaveShot
 
-**Last updated:** November 19, 2026
+**Last updated:** November 21, 2026
 
-SaveShot is a browser extension that lets you take screenshots in Chrome and save them to your own Google Drive. SaveShot has no backend server, no analytics, no ads, and does not sell or share your data with anyone.
+SaveShot is a browser extension that lets you capture and edit screenshots in Chrome and save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
 
 ## What data SaveShot accesses
 
 SaveShot only accesses data when you choose to sign in or take a screenshot:
 
-1. **Screenshots you capture**: When you click **Visible Tab**, click **Select Region**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop it (for region captures) and upload it to your Google Drive. SaveShot never captures your screen in the background.
+1. **Screenshots you capture**: When you click **Select area**, click **Visible tab**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it and upload it directly to your Google Drive. SaveShot never captures your screen in the background.
 2. **Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests the single, narrow `drive.file` permission. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete your other Google Drive files.
 
 ## Where your data goes
 
 - Screenshots are sent directly from your browser to Google's official API (`https://www.googleapis.com`) to be saved in your own Google Drive account.
-- SaveShot does not send your screenshots, browsing history, or account details to any developer server or third-party service.
+- SaveShot never sends your screenshots, browsing history, or account details to any private, developer, or third-party server.
 
 ## What is stored on your device
 
 SaveShot stores a small amount of data locally in Chrome (`chrome.storage.local`):
 
-- Your folder name preference and auto-copy setting.
+- Your folder name, theme, auto-copy, and pre-upload editor settings.
 - Your connected Google account display name, email, and avatar URL.
 - Your last 8 uploaded screenshot links and small preview thumbnails for quick access in the popup.
 
@@ -28,8 +28,8 @@ If you use SaveShot in an **Incognito** window, page URLs are left out of filena
 
 ## Removing your data and revoking access
 
-- Click **Clear list** in the popup to remove your local recent uploads list (your files remain in Google Drive).
-- Click the **Sign out** icon in the popup to revoke SaveShot's local token and clear cached account info.
+- Click **Clear** in the popup to remove your local recent uploads list (your files remain in Google Drive).
+- Click the **Sign out** icon in the popup to revoke SaveShot's local token and clear your cached account info and local recent uploads list.
 - You can also revoke SaveShot's access at any time from your [Google Account Third-Party Connections](https://myaccount.google.com/connections) page.
 - Uninstalling SaveShot from `chrome://extensions` removes all local data stored by the extension.
 

@@ -304,6 +304,9 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
   const readme = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
   assert.ok(readme.slice(0, 160).includes('src="icons/icon128.png"'), 'README.md top must render icons/icon128.png');
 
+  assert.ok(manifest.description.length > 0 && manifest.description.length <= 132, 'CWS description must be <= 132 chars');
+  assert.match(manifest.description, /no external servers or tracking/i);
+
   assert.deepEqual(manifest.permissions.sort(), [
     'activeTab',
     'identity',
@@ -311,8 +314,8 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
     'storage',
   ]);
   assert.ok(manifest.oauth2.scopes.includes('https://www.googleapis.com/auth/drive.file'));
-  assert.ok(manifest.commands['capture-visible']);
-  assert.ok(manifest.commands['capture-region']);
+  assert.equal(manifest.commands['capture-region'].suggested_key.default, 'Alt+Shift+S');
+  assert.equal(manifest.commands['capture-visible'].suggested_key.default, 'Alt+Shift+V');
 });
 
 test('isCapturableUrl handles normal pages, internal pages, file:// permissions, and data:/blob: URLs', () => {
@@ -1945,8 +1948,46 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     assert.equal(saveViaContextFallback.action, 'replaced');
     assert.equal(saveViaContextFallback.upload.name, 'Renamed_After_Reload.png');
 
-    // 11. SIGN_OUT wipes both RAM and chrome.storage.session and blocks context reconstruction
+    // 10B. Post-upload auto-open Editor flow (editBeforeUpload = false):
+    //      Uploads immediately to Drive AND opens Editor tab with single-use justUploaded = true
+    await mock.dispatchMessage(
+      { type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: false } },
+      trustedEditorSender
+    );
+    const tabsBeforePostUpload = mock.createdTabs.length;
+    const postUploadCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 77 });
+    assert.equal(postUploadCap.ok, true);
+    assert.equal(postUploadCap.openedEditorAfterUpload, true);
+    assert.ok(postUploadCap.sessionId);
+    assert.equal(mock.createdTabs.length, tabsBeforePostUpload + 1);
+    assert.match(
+      mock.createdTabs[mock.createdTabs.length - 1].url,
+      new RegExp(`pages/editor\\.html\\?session=${postUploadCap.sessionId}$`)
+    );
+
+    const firstPostUploadLoad = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: postUploadCap.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(firstPostUploadLoad.ok, true);
+    assert.equal(firstPostUploadLoad.session.mode, 'existing');
+    assert.equal(firstPostUploadLoad.session.justUploaded, true, 'First editor load after upload must flag justUploaded');
+
+    const secondPostUploadLoad = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: postUploadCap.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(secondPostUploadLoad.ok, true);
+    assert.equal(secondPostUploadLoad.session.justUploaded, false, 'Reloading editor tab must not re-fire justUploaded');
+
+    assert.ok((await getRecentUploads()).length > 0, 'Recent uploads should exist before sign-out');
+
+    // 11. SIGN_OUT wipes recentUploads, RAM, and chrome.storage.session, and blocks context reconstruction
     await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedEditorSender);
+    assert.equal((await getRecentUploads()).length, 0, 'SIGN_OUT must clear recentUploads in storage');
+    const signedOutState = await mock.dispatchMessage({ type: 'GET_STATE' }, trustedEditorSender);
+    assert.deepEqual(signedOutState.recentUploads, [], 'GET_STATE must return empty recentUploads when signed out');
+
     const afterSignOutSession = await mock.dispatchMessage(
       { type: 'GET_EDITOR_SESSION', sessionId: olderOpen.sessionId },
       trustedEditorSender

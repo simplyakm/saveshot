@@ -14,7 +14,9 @@
           <img src="../icons/icon48.png" alt="SaveShot" width="36" height="36" class="logo" />
           <div>
             <h1 class="ss-title-lg">SaveShot</h1>
-            <p class="ss-body-regular subtitle">Private screenshots straight to your Google Drive.</p>
+            <p class="ss-body-regular subtitle">
+              Uploads go directly from Chrome to your Google Drive, with no external servers or tracking.
+            </p>
           </div>
         </div>
         <span class="ss-kbd" id="ext-version">v1.1.1</span>
@@ -57,7 +59,7 @@
 
       <div class="ss-alert error" id="auth-error" hidden></div>
 
-      <!-- Quick Start Steps -->
+      <!-- Quick Start Steps (4-Step Flow) -->
       <section class="section">
         <h2 class="ss-meta section-title">How it works</h2>
         <div class="steps-grid">
@@ -73,15 +75,23 @@
             <span class="step-num tabular">2</span>
             <h3 class="ss-title-sm">Select area or tab</h3>
             <p class="ss-body-regular">
-              Drag across part of a page or capture the full visible tab from the popup or keyboard shortcuts.
+              Drag across part of a page (or press Enter for the full tab) or capture the visible tab in one click.
             </p>
           </div>
 
           <div class="welcome-card step-card">
             <span class="step-num tabular">3</span>
-            <h3 class="ss-title-sm">Saved to Google Drive</h3>
+            <h3 class="ss-title-sm">Saved straight to Drive</h3>
             <p class="ss-body-regular">
-              Screenshots go into <strong>Chrome_<wbr>SaveShot_<wbr>ScreenShots</strong> in your Drive and copy the link automatically.
+              Screenshots upload directly from Chrome to <strong>Chrome_<wbr>SaveShot_<wbr>ScreenShots</strong> in your Drive and copy the share link.
+            </p>
+          </div>
+
+          <div class="welcome-card step-card">
+            <span class="step-num tabular">4</span>
+            <h3 class="ss-title-sm">Edit, redact, or rename</h3>
+            <p class="ss-body-regular">
+              The editor opens automatically so you can add arrows, shapes, text, black-bar redactions, custom colors, rotate, or rename and click <strong>Save</strong>.
             </p>
           </div>
         </div>
@@ -96,13 +106,16 @@
         <div class="shortcut-rows">
           <div class="shortcut-row">
             <span class="ss-body">Select area</span>
-            <kbd class="ss-kbd" id="shortcut-region">Alt + Shift + R</kbd>
+            <kbd class="ss-kbd" id="shortcut-region">Alt + Shift + S</kbd>
           </div>
           <div class="shortcut-row">
             <span class="ss-body">Visible tab</span>
-            <kbd class="ss-kbd" id="shortcut-visible">Alt + Shift + S</kbd>
+            <kbd class="ss-kbd" id="shortcut-visible">Alt + Shift + V</kbd>
           </div>
         </div>
+        <p class="ss-meta shortcut-hint" id="shortcut-unset-hint" hidden>
+          One or more shortcuts are not assigned in Chrome yet (for example if another extension already uses those keys, or after loading unpacked). Click <strong>Change shortcuts</strong> to set them.
+        </p>
       </section>
 
       <!-- Good to Know / FAQ -->
@@ -110,15 +123,15 @@
         <h2 class="ss-meta section-title">Good to know</h2>
         <div class="welcome-card faq-list">
           <div class="faq-item">
-            <h3 class="ss-title-sm">Can I annotate, redact, rotate, or rename screenshots?</h3>
+            <h3 class="ss-title-sm">Does SaveShot use any external servers or track my data?</h3>
             <p class="ss-body-regular">
-              Yes. Click <strong>Edit</strong> after taking a screenshot (or on any item in Recent) to add arrows, shapes, text, black-bar redactions, custom hex colors, rotate or flip, rename the file, and update the file in Google Drive while keeping the same link. Turn on <strong>Open editor before uploading</strong> in Settings to redact before initial upload.
+              No. SaveShot runs 100% locally in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow <code>drive.file</code> scope, it cannot see any other files in your Drive.
             </p>
           </div>
           <div class="faq-item">
-            <h3 class="ss-title-sm">Can SaveShot see my other Google Drive files?</h3>
+            <h3 class="ss-title-sm">Can I redact sensitive details before the first upload?</h3>
             <p class="ss-body-regular">
-              No. SaveShot uses the narrow <code>drive.file</code> permission. It can only access the folder and screenshots that SaveShot creates itself.
+              Yes. By default, screenshots upload right away and open in the editor so your link is ready immediately. If you prefer to redact before anything is uploaded, turn on <strong>Open editor before uploading</strong> in Settings.
             </p>
           </div>
           <div class="faq-item">
@@ -136,7 +149,7 @@
           <div class="faq-item">
             <h3 class="ss-title-sm">How does Incognito mode work?</h3>
             <p class="ss-body-regular">
-              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload to your Google Drive while page URLs and local upload history are left out for privacy.
+              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload directly to your Google Drive while page URLs and local upload history are left out for privacy.
             </p>
           </div>
         </div>
@@ -209,7 +222,7 @@
       </section>
 
       <footer class="welcome-footer ss-meta">
-        <span>Privacy-first &middot; Zero tracking</span>
+        <span>100% local in Chrome &middot; No external servers or tracking</span>
         <a
           href="https://x.com/_simplyakm"
           target="_blank"
