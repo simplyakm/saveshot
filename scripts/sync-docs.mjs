@@ -137,7 +137,9 @@ const SHARED_DOC_CSS = `      :root {
 
 function renderPolicyHtml(doc, pageTitle, copy) {
   const bodyParts = [];
-  bodyParts.push(`      <a class="top-link" href="index.html">&larr; Back to ${escapeHtml(copy.brandName)}</a>`);
+  bodyParts.push(
+    `      <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to ${escapeHtml(copy.brandName)}</span></a>`
+  );
   bodyParts.push(`      <h1>${escapeHtml(doc.heading)}</h1>`);
   bodyParts.push(`      <p class="updated">Last updated: ${escapeHtml(copy.lastUpdated)}</p>`);
   bodyParts.push(`      <p>${inlineMarkdownToHtml(replacePlaceholders(doc.intro, 'html'))}</p>`);
@@ -177,6 +179,8 @@ function renderPolicyHtml(doc, pageTitle, copy) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>${escapeHtml(pageTitle)}</title>
     <style>
 ${SHARED_DOC_CSS}
@@ -223,9 +227,15 @@ ${SHARED_DOC_CSS}
         margin-top: 6px;
       }
       .top-link {
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
         font-size: 13px;
+        font-weight: 500;
         margin-bottom: 16px;
+      }
+      .top-link img {
+        display: block;
       }
     </style>
   </head>
@@ -254,6 +264,8 @@ function renderIndexHtml(copy) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>${escapeHtml(copy.extensionTitle)}</title>
     <meta name="description" content="${escapeHtml(copy.shortDescription)}" />
     <style>
@@ -279,14 +291,10 @@ ${SHARED_DOC_CSS}
         align-items: center;
         gap: 14px;
       }
-      .brand-badge {
+      .brand-logo {
         width: 48px;
         height: 48px;
-        border-radius: 12px;
-        background: linear-gradient(180deg, #1b6ef3 0%, #134ea8 100%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: block;
         flex-shrink: 0;
       }
       h1 {
@@ -308,7 +316,7 @@ ${SHARED_DOC_CSS}
       }
       .btn {
         height: 40px;
-        padding: 0 18px;
+        padding: 0 20px;
         border-radius: 9px;
         font-size: 14px;
         font-weight: 600;
@@ -331,11 +339,6 @@ ${SHARED_DOC_CSS}
       }
       .btn-primary:hover {
         background: var(--accent-hover);
-      }
-      .btn-secondary {
-        background: transparent;
-        color: var(--text);
-        border: 1px solid var(--border);
       }
       .grid {
         display: grid;
@@ -383,12 +386,7 @@ ${SHARED_DOC_CSS}
     <main class="wrap">
       <section class="hero">
         <div class="brand">
-          <div class="brand-badge" aria-hidden="true">
-            <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-              <path d="M7 11V8.5A1.5 1.5 0 0 1 8.5 7H11M21 7h2.5A1.5 1.5 0 0 1 25 8.5V11M25 21v2.5a1.5 1.5 0 0 1-1.5 1.5H21M11 25H8.5A1.5 1.5 0 0 1 7 23.5V21" stroke="#BFDBFE" stroke-width="2.2" stroke-linecap="round"/>
-              <path d="M16 21V11.5M12 15l4-4 4 4" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
+          <img class="brand-logo" src="icon128.png" alt="${escapeHtml(copy.brandName)}" width="48" height="48" />
           <div>
             <h1>${escapeHtml(copy.brandName)}</h1>
             <p class="lead">${escapeHtml(copy.tagline)}</p>
@@ -397,9 +395,6 @@ ${SHARED_DOC_CSS}
         <p class="lead">${inlineMarkdownToHtml(copy.overviewLead)}</p>
         <div class="actions">
           <a class="btn btn-primary" href="${escapeHtml(copy.urls.chromeWebStore)}">Add to Chrome</a>
-          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
-          <a class="btn btn-secondary" href="terms.html">Terms of Service</a>
-          <a class="btn btn-secondary" href="${escapeHtml(copy.urls.githubRepo)}">GitHub Source</a>
         </div>
       </section>
 
@@ -408,11 +403,10 @@ ${cardsHtml}
       </section>
 
       <footer>
-        <span>${escapeHtml(copy.brandName)} · Open Source (Apache 2.0)</span>
+        <span>${escapeHtml(copy.brandName)} · 100% local in Chrome · No external servers or tracking</span>
         <div>
           <a href="privacy.html">Privacy Policy</a> ·
           <a href="terms.html">Terms of Service</a> ·
-          <a href="${escapeHtml(copy.urls.githubIssues)}">Support</a> ·
           <a href="${escapeHtml(copy.urls.authorUrl)}">${escapeHtml(copy.urls.authorHandle)}</a>
         </div>
       </footer>
@@ -475,7 +469,7 @@ function renderStoreSeoMarkdown(copy) {
 - **Official URL / Homepage**: \`${copy.urls.homepage}\`
 - **Privacy Policy URL**: \`${copy.urls.privacyHtml}\`
 - **Terms of Service URL**: \`${copy.urls.termsHtml}\`
-- **Support URL**: \`${copy.urls.githubIssues}\`
+- **Support URL**: \`${copy.urls.homepage}\`
 
 ---
 
@@ -515,7 +509,7 @@ PRIVACY FIRST BY DESIGN
 • Narrow Google Drive Permission (drive.file): ${copy.brandName} can only access the screenshots and folder it creates itself. It cannot read, list, edit, or delete any other files in your Google Drive.
 • Active-Tab Only (activeTab): ${copy.brandName} never runs in the background and only captures when you click ${copy.brandName} or press its shortcut.
 • Incognito Ready: When allowed in Incognito, ${copy.brandName} leaves page URLs out of filenames and skips local device history.
-• 100% Open Source & Zero External Dependencies: Pure, auditable code with zero third-party libraries or trackers. Source code: ${copy.urls.githubRepo}
+• Zero External Dependencies: Lightweight vanilla code with zero third-party libraries, SDKs, analytics, or trackers.
 \`\`\`
 
 ---
@@ -569,6 +563,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const absPath = path.join(rootDir, relPath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     fs.writeFileSync(absPath, content, 'utf8');
+  }
+
+  // Copy canonical locked icons byte-for-byte into docs/ so GitHub Pages uses the exact extension icons
+  for (const iconFile of ['icon32.png', 'icon128.png']) {
+    fs.copyFileSync(
+      path.join(rootDir, 'icons', iconFile),
+      path.join(rootDir, 'docs', iconFile)
+    );
   }
 
   // Sync welcome.html footer and GitHub issue links from SITE_COPY.urls

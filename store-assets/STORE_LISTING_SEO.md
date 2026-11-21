@@ -18,7 +18,7 @@
 - **Official URL / Homepage**: `https://simplyakm.github.io/saveshot/`
 - **Privacy Policy URL**: `https://simplyakm.github.io/saveshot/privacy.html`
 - **Terms of Service URL**: `https://simplyakm.github.io/saveshot/terms.html`
-- **Support URL**: `https://github.com/simplyakm/saveshot/issues`
+- **Support URL**: `https://simplyakm.github.io/saveshot/`
 
 ---
 
@@ -58,7 +58,7 @@ PRIVACY FIRST BY DESIGN
 • Narrow Google Drive Permission (drive.file): SaveShot can only access the screenshots and folder it creates itself. It cannot read, list, edit, or delete any other files in your Google Drive.
 • Active-Tab Only (activeTab): SaveShot never runs in the background and only captures when you click SaveShot or press its shortcut.
 • Incognito Ready: When allowed in Incognito, SaveShot leaves page URLs out of filenames and skips local device history.
-• 100% Open Source & Zero External Dependencies: Pure, auditable code with zero third-party libraries or trackers. Source code: https://github.com/simplyakm/saveshot
+• Zero External Dependencies: Lightweight vanilla code with zero third-party libraries, SDKs, analytics, or trackers.
 ```
 
 ---

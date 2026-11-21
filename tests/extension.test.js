@@ -2533,6 +2533,80 @@ test('all repository source, UI, and documentation files contain no em dashes or
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.homepage}"`), 'welcome.html must link to centralized Website URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.privacyHtml}"`), 'welcome.html must link to centralized Privacy URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.termsHtml}"`), 'welcome.html must link to centralized Terms URL');
+
+  // Lock canonical SaveShot icons and verified store assets by SHA-256 so they are never regenerated or altered by mistake
+  const { createHash } = await import('node:crypto');
+  const sha256Of = (relPath) =>
+    createHash('sha256').update(fs.readFileSync(path.join(rootDir, relPath))).digest('hex');
+
+  const lockedIconHashes = {
+    'icons/icon16.png': '32293a125918477bc6f508b18ed445751848a77b772a0ecf65ac2141775a28af',
+    'icons/icon32.png': 'db38433443e058ba2490dc45441213177b44b61a62d572c9543584264ceac2af',
+    'icons/icon48.png': '0d32454dfea49e2f67072ab29f587ef8d0d046571d92bcf8c886f9c9141ce63c',
+    'icons/icon128.png': '7245aa8f1dfe2f99d6b89e812d2434b18f7fb60c8015d7f01245047075e70c91',
+  };
+  for (const [iconRel, expectedSha] of Object.entries(lockedIconHashes)) {
+    assert.equal(
+      sha256Of(iconRel),
+      expectedSha,
+      `Official SaveShot icon ${iconRel} is locked; do not regenerate or replace`
+    );
+  }
+
+  // Website icons in docs/ must match canonical icons/ byte-for-byte
+  assert.equal(
+    Buffer.compare(
+      fs.readFileSync(path.join(rootDir, 'docs/icon32.png')),
+      fs.readFileSync(path.join(rootDir, 'icons/icon32.png'))
+    ),
+    0,
+    'docs/icon32.png must match icons/icon32.png byte-for-byte'
+  );
+  assert.equal(
+    Buffer.compare(
+      fs.readFileSync(path.join(rootDir, 'docs/icon128.png')),
+      fs.readFileSync(path.join(rootDir, 'icons/icon128.png'))
+    ),
+    0,
+    'docs/icon128.png must match icons/icon128.png byte-for-byte'
+  );
+
+  const lockedStoreAssetHashes = {
+    'store-assets/promo-small-440x280.png':
+      'aa1ad5cdcf3e455a38a6cb48513c8c8737610d64d3a3b5b2733204090888979a',
+    'store-assets/promo-marquee-1400x560.png':
+      '9fddf39798e5f4d598a42c0ab5fd3b2323d5344f8ad4dcc057a5181a8dd42426',
+    'store-assets/screenshot-1-capture-1280x800.png':
+      'a8ad572a9507b9da665fdf495f5ad33218e8d318004a33a8f33ed19e37858684',
+    'store-assets/screenshot-2-editor-1280x800.png':
+      '1fc2737d6fa035f594705d5de34ddaa5f5700ebe65d6106ec73cb03bc0893faa',
+    'store-assets/screenshot-3-privacy-1280x800.png':
+      '2830b7d1455e43ca25a4c03d2d13aada720fcc8281ad68625529695d23bc2bad',
+    'store-assets/screenshot-4-themes-1280x800.png':
+      '84b462bcf8511f646980ff8566c31e4a031ac76aa8fbd8a4ce066d66048ad9b4',
+    'store-assets/screenshot-welcome-1280x800.png':
+      '70c5a10d5cdcb42d37b3b141280613a8b180b4952e79a8a0a294453fc0081539',
+  };
+  for (const [assetRel, expectedSha] of Object.entries(lockedStoreAssetHashes)) {
+    assert.equal(
+      sha256Of(assetRel),
+      expectedSha,
+      `Verified store asset ${assetRel} drifted unexpectedly`
+    );
+  }
+
+  // Website pages must use real icon PNGs (never fake inline SVG badges), omit GitHub source links, and keep legal links in footer only
+  const indexHtml = fs.readFileSync(path.join(rootDir, 'docs/index.html'), 'utf8');
+  assert.ok(indexHtml.includes('src="icon128.png"'), 'docs/index.html must render canonical icon128.png');
+  assert.ok(!indexHtml.includes('brand-badge'), 'docs/index.html must never use a hand-drawn SVG brand badge');
+  assert.equal((indexHtml.match(/href="privacy\.html"/g) || []).length, 1, 'privacy.html should appear once in docs/index.html footer');
+  assert.equal((indexHtml.match(/href="terms\.html"/g) || []).length, 1, 'terms.html should appear once in docs/index.html footer');
+
+  for (const webPage of ['docs/index.html', 'docs/privacy.html', 'docs/terms.html']) {
+    const html = fs.readFileSync(path.join(rootDir, webPage), 'utf8');
+    assert.ok(html.includes('href="icon32.png"'), `${webPage} must include official icon32.png favicon`);
+    assert.ok(!html.includes('github.com/simplyakm/saveshot'), `${webPage} must not include GitHub source/repo links`);
+  }
 });
 
 test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 decode, session blob pruning, and Incognito post-upload editor isolation', async () => {

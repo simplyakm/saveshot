@@ -6,7 +6,7 @@ By installing or using the SaveShot Chrome extension ("SaveShot"), you agree to 
 
 ## 1. What SaveShot Does
 
-SaveShot is a free, open-source browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, and upload them directly from your browser to your own Google Drive account using Google's official API. SaveShot does not operate external servers or user accounts.
+SaveShot is a free browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, and upload them directly from your browser to your own Google Drive account using Google's official API. SaveShot does not operate external servers or user accounts.
 
 ## 2. Your Responsibilities
 
@@ -14,9 +14,9 @@ SaveShot is a free, open-source browser extension that runs locally in Chrome to
 - Your uploaded screenshots are stored in your own Google Drive account and are subject to Google's Terms of Service, Google Drive storage limits, and policies.
 - SaveShot is not a backup service. You are responsible for managing and backing up files in your Google Drive.
 
-## 3. Open-Source License
+## 3. License
 
-SaveShot is open-source software licensed under the [Apache License, Version 2.0](LICENSE). Nothing in these Terms restricts your rights under the Apache 2.0 License.
+SaveShot grants you a personal, non-exclusive license to install and use the extension in accordance with these Terms and the Apache License 2.0 included with the software package. Nothing in these Terms restricts your rights under that license.
 
 ## 4. Privacy
 
@@ -32,4 +32,4 @@ To the maximum extent permitted by applicable law, the developer and contributor
 
 ## 7. Changes & Contact
 
-We may update these Terms from time to time by updating the date at the top of this page. For questions or bug reports, please open an issue on the [SaveShot GitHub repository](https://github.com/simplyakm/saveshot/issues).
+We may update these Terms from time to time by updating the date at the top of this page. For questions or bug reports, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).

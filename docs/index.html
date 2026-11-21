@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="ZyYQoDsqlo22U-Vpm9XZtIMK0I0vTFF3RJLMP6pkOpE" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>SaveShot: Screenshot to Google Drive</title>
     <meta name="description" content="Capture and edit screenshots straight to your Google Drive. 100% local in Chrome with no external servers or tracking." />
     <style>
@@ -80,14 +82,10 @@
         align-items: center;
         gap: 14px;
       }
-      .brand-badge {
+      .brand-logo {
         width: 48px;
         height: 48px;
-        border-radius: 12px;
-        background: linear-gradient(180deg, #1b6ef3 0%, #134ea8 100%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: block;
         flex-shrink: 0;
       }
       h1 {
@@ -109,7 +107,7 @@
       }
       .btn {
         height: 40px;
-        padding: 0 18px;
+        padding: 0 20px;
         border-radius: 9px;
         font-size: 14px;
         font-weight: 600;
@@ -132,11 +130,6 @@
       }
       .btn-primary:hover {
         background: var(--accent-hover);
-      }
-      .btn-secondary {
-        background: transparent;
-        color: var(--text);
-        border: 1px solid var(--border);
       }
       .grid {
         display: grid;
@@ -184,12 +177,7 @@
     <main class="wrap">
       <section class="hero">
         <div class="brand">
-          <div class="brand-badge" aria-hidden="true">
-            <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-              <path d="M7 11V8.5A1.5 1.5 0 0 1 8.5 7H11M21 7h2.5A1.5 1.5 0 0 1 25 8.5V11M25 21v2.5a1.5 1.5 0 0 1-1.5 1.5H21M11 25H8.5A1.5 1.5 0 0 1 7 23.5V21" stroke="#BFDBFE" stroke-width="2.2" stroke-linecap="round"/>
-              <path d="M16 21V11.5M12 15l4-4 4 4" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
+          <img class="brand-logo" src="icon128.png" alt="SaveShot" width="48" height="48" />
           <div>
             <h1>SaveShot</h1>
             <p class="lead">Private screenshots straight from Chrome to your Google Drive.</p>
@@ -198,9 +186,6 @@
         <p class="lead">SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.</p>
         <div class="actions">
           <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf">Add to Chrome</a>
-          <a class="btn btn-secondary" href="privacy.html">Privacy Policy</a>
-          <a class="btn btn-secondary" href="terms.html">Terms of Service</a>
-          <a class="btn btn-secondary" href="https://github.com/simplyakm/saveshot">GitHub Source</a>
         </div>
       </section>
 
@@ -224,11 +209,10 @@
       </section>
 
       <footer>
-        <span>SaveShot · Open Source (Apache 2.0)</span>
+        <span>SaveShot · 100% local in Chrome · No external servers or tracking</span>
         <div>
           <a href="privacy.html">Privacy Policy</a> ·
           <a href="terms.html">Terms of Service</a> ·
-          <a href="https://github.com/simplyakm/saveshot/issues">Support</a> ·
           <a href="https://x.com/_simplyakm">@_simplyakm</a>
         </div>
       </footer>

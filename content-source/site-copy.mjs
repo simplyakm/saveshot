@@ -154,7 +154,7 @@ export const SITE_COPY = {
       {
         heading: 'Contact',
         paragraphs: [
-          'If you have questions about this policy or want to report a privacy issue, please open an issue on the [SaveShot GitHub repository](https://github.com/simplyakm/saveshot/issues).',
+          'If you have questions about this policy or want to report a privacy issue, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).',
         ],
       },
     ],
@@ -169,7 +169,7 @@ export const SITE_COPY = {
       {
         heading: '1. What SaveShot Does',
         paragraphs: [
-          'SaveShot is a free, open-source browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, and upload them directly from your browser to your own Google Drive account using Google\'s official API. SaveShot does not operate external servers or user accounts.',
+          'SaveShot is a free browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, and upload them directly from your browser to your own Google Drive account using Google\'s official API. SaveShot does not operate external servers or user accounts.',
         ],
       },
       {
@@ -181,9 +181,9 @@ export const SITE_COPY = {
         ],
       },
       {
-        heading: '3. Open-Source License',
+        heading: '3. License',
         paragraphs: [
-          'SaveShot is open-source software licensed under the [Apache License, Version 2.0]({{LICENSE_LINK}}). Nothing in these Terms restricts your rights under the Apache 2.0 License.',
+          'SaveShot grants you a personal, non-exclusive license to install and use the extension in accordance with these Terms and the Apache License 2.0 included with the software package. Nothing in these Terms restricts your rights under that license.',
         ],
       },
       {
@@ -207,7 +207,7 @@ export const SITE_COPY = {
       {
         heading: '7. Changes & Contact',
         paragraphs: [
-          'We may update these Terms from time to time by updating the date at the top of this page. For questions or bug reports, please open an issue on the [SaveShot GitHub repository](https://github.com/simplyakm/saveshot/issues).',
+          'We may update these Terms from time to time by updating the date at the top of this page. For questions or bug reports, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).',
         ],
       },
     ],

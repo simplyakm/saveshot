@@ -39,4 +39,4 @@ SaveShot's use and transfer of information received from Google APIs adheres to 
 
 ## Contact
 
-If you have questions about this policy or want to report a privacy issue, please open an issue on the [SaveShot GitHub repository](https://github.com/simplyakm/saveshot/issues).
+If you have questions about this policy or want to report a privacy issue, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).

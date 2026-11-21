@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="ZyYQoDsqlo22U-Vpm9XZtIMK0I0vTFF3RJLMP6pkOpE" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>Privacy Policy - SaveShot</title>
     <style>
       :root {
@@ -101,15 +103,21 @@
         margin-top: 6px;
       }
       .top-link {
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
         font-size: 13px;
+        font-weight: 500;
         margin-bottom: 16px;
+      }
+      .top-link img {
+        display: block;
       }
     </style>
   </head>
   <body>
     <main class="wrap">
-      <a class="top-link" href="index.html">&larr; Back to SaveShot</a>
+      <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to SaveShot</span></a>
       <h1>Privacy Policy for SaveShot</h1>
       <p class="updated">Last updated: November 21, 2026</p>
       <p>SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser and save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.</p>
@@ -142,7 +150,7 @@
       <h2>Google API Services User Data Policy</h2>
       <p>SaveShot's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
       <h2>Contact</h2>
-      <p>If you have questions about this policy or want to report a privacy issue, please open an issue on the <a href="https://github.com/simplyakm/saveshot/issues" target="_blank" rel="noopener noreferrer">SaveShot GitHub repository</a>.</p>
+      <p>If you have questions about this policy or want to report a privacy issue, use the built-in <strong>Report bug</strong> form inside SaveShot or reach out via <a href="https://x.com/_simplyakm" target="_blank" rel="noopener noreferrer">@_simplyakm</a>.</p>
     </main>
   </body>
 </html>
