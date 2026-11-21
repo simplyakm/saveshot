@@ -532,6 +532,25 @@ PRIVACY FIRST BY DESIGN
 `;
 }
 
+export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
+  const linkMap = [
+    ['repo-issues-link', copy.urls.githubIssues],
+    ['welcome-site-link', copy.urls.homepage],
+    ['welcome-privacy-link', copy.urls.privacyHtml],
+    ['welcome-terms-link', copy.urls.termsHtml],
+    ['welcome-author-link', copy.urls.authorUrl],
+  ];
+
+  let nextHtml = String(welcomeHtml);
+  for (const [id, url] of linkMap) {
+    const anchorRe = new RegExp(`(<a\\b[^>]*\\bid="${id}"[^>]*>)`, 'm');
+    nextHtml = nextHtml.replace(anchorRe, (anchorTag) =>
+      anchorTag.replace(/href="[^"]*"/, `href="${escapeHtml(url)}"`)
+    );
+  }
+  return nextHtml;
+}
+
 export function buildGeneratedFiles(copy = SITE_COPY) {
   return {
     'README.md': renderReadmeMarkdown(copy),
@@ -551,6 +570,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     fs.writeFileSync(absPath, content, 'utf8');
   }
+
+  // Sync welcome.html footer and GitHub issue links from SITE_COPY.urls
+  const welcomePath = path.join(rootDir, 'pages/welcome.html');
+  const currentWelcome = fs.readFileSync(welcomePath, 'utf8');
+  fs.writeFileSync(welcomePath, syncWelcomeHtmlLinks(currentWelcome, SITE_COPY), 'utf8');
 
   // Also sync manifest.json and package.json shared metadata
   const manifestPath = path.join(rootDir, 'manifest.json');
@@ -574,5 +598,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   pkg.description = SITE_COPY.shortDescription;
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
 
-  console.log(`Synced ${Object.keys(generated).length} documentation/web files + manifest.json & package.json from content-source/site-copy.mjs`);
+  console.log(`Synced ${Object.keys(generated).length} documentation/web files + welcome.html, manifest.json & package.json from content-source/site-copy.mjs`);
 }

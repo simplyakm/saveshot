@@ -2496,7 +2496,9 @@ test('all repository source, UI, and documentation files contain no em dashes or
 
   // Verify centralized content source of truth stays 100% synced across Markdown, HTML, and metadata
   const { SITE_COPY } = await import('../content-source/site-copy.mjs');
-  const { buildGeneratedFiles, inlineMarkdownToHtml } = await import('../scripts/sync-docs.mjs');
+  const { buildGeneratedFiles, inlineMarkdownToHtml, syncWelcomeHtmlLinks } = await import(
+    '../scripts/sync-docs.mjs'
+  );
 
   assert.equal(
     inlineMarkdownToHtml('Use `<script>` & **Save** at [Site](https://example.com)'),
@@ -2521,6 +2523,16 @@ test('all repository source, UI, and documentation files contain no em dashes or
   assert.equal(manifest.description, SITE_COPY.shortDescription);
   assert.equal(pkg.version, SITE_COPY.version);
   assert.equal(pkg.description, SITE_COPY.shortDescription);
+
+  const welcomeHtml = fs.readFileSync(path.join(rootDir, 'pages/welcome.html'), 'utf8');
+  assert.equal(
+    welcomeHtml,
+    syncWelcomeHtmlLinks(welcomeHtml, SITE_COPY),
+    'welcome.html links drifted from content-source/site-copy.mjs (run npm run sync:docs)'
+  );
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.homepage}"`), 'welcome.html must link to centralized Website URL');
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.privacyHtml}"`), 'welcome.html must link to centralized Privacy URL');
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.termsHtml}"`), 'welcome.html must link to centralized Terms URL');
 });
 
 test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 decode, session blob pruning, and Incognito post-upload editor isolation', async () => {
