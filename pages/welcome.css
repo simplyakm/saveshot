@@ -26,7 +26,7 @@ body {
 }
 
 .logo {
-  border-radius: var(--ss-radius-ctrl);
+  display: block;
 }
 
 .subtitle {
@@ -102,6 +102,8 @@ code {
 }
 
 .step-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   gap: 6px;

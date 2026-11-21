@@ -797,7 +797,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         editorSession,
         `(() => {
           const c = document.getElementById('base-canvas');
-          return !document.getElementById('canvas-wrap').hidden && c.width === 160 && c.height === 100;
+          const wrap = document.getElementById('canvas-wrap');
+          return Boolean(c && wrap && !wrap.hidden && c.width === 160 && c.height === 100);
         })()`
       );
       if (ready) break;
@@ -1152,7 +1153,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     for (let i = 0; i < 25; i += 1) {
       const ready = await evalIn(
         extPageSession,
-        `!document.getElementById('main-view').hidden`
+        `Boolean(document.getElementById('main-view') && !document.getElementById('main-view').hidden)`
       );
       if (ready) break;
       await new Promise((r) => setTimeout(r, 100));

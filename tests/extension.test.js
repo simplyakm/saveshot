@@ -283,11 +283,26 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
   assert.ok(fs.existsSync(path.join(rootDir, manifest.background.service_worker)));
   assert.ok(fs.existsSync(path.join(rootDir, manifest.action.default_popup)));
 
-  for (const iconRelPath of Object.values(manifest.icons)) {
+  assert.deepEqual(manifest.action.default_icon, manifest.icons);
+
+  for (const [sizeKey, iconRelPath] of Object.entries(manifest.icons)) {
     const iconPath = path.join(rootDir, iconRelPath);
     assert.ok(fs.existsSync(iconPath), `Missing icon: ${iconRelPath}`);
-    assert.ok(fs.statSync(iconPath).size > 0, `Empty icon: ${iconRelPath}`);
+    const buf = fs.readFileSync(iconPath);
+    assert.equal(buf.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', `${iconRelPath} must be valid PNG`);
+    const pngW = buf.readUInt32BE(16);
+    const pngH = buf.readUInt32BE(20);
+    const expected = Number(sizeKey);
+    assert.equal(pngW, expected, `${iconRelPath} width must be ${expected}`);
+    assert.equal(pngH, expected, `${iconRelPath} height must be ${expected}`);
   }
+
+  const storeShot = fs.readFileSync(path.join(rootDir, 'store-assets/screenshot-welcome-1280x800.png'));
+  assert.equal(storeShot.readUInt32BE(16), 1280);
+  assert.equal(storeShot.readUInt32BE(20), 800);
+
+  const readme = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
+  assert.ok(readme.slice(0, 160).includes('src="icons/icon128.png"'), 'README.md top must render icons/icon128.png');
 
   assert.deepEqual(manifest.permissions.sort(), [
     'activeTab',

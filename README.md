@@ -1,3 +1,7 @@
+<p>
+  <img src="icons/icon128.png" alt="SaveShot" width="64" height="64" />
+</p>
+
 # SaveShot
 
 SaveShot is a privacy-first, lightweight Chrome extension for taking screenshots and saving them straight to your Google Drive. It signs in with the Google account you already use in Chrome, with no external dependencies or build step.

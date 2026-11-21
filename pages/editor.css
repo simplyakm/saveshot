@@ -41,7 +41,7 @@ body {
 }
 
 .brand-icon {
-  border-radius: var(--ss-radius-xs);
+  display: block;
 }
 
 /* Read-only Filename + Pencil Rename */
