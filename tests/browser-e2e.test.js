@@ -71,7 +71,10 @@ async function launchChromiumWithExtension(initialUrl) {
   const tmpExtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-ext-'));
   fs.cpSync(rootDir, tmpExtDir, {
     recursive: true,
-    filter: (src) => !src.includes(`${path.sep}tests`),
+    filter: (src) =>
+      !src.includes(`${path.sep}tests`) &&
+      !src.includes(`${path.sep}store-assets`) &&
+      !src.includes(`${path.sep}scripts`),
   });
 
   // Grant <all_urls> ONLY in this automated CDP harness so headless scripts can invoke

@@ -2,6 +2,7 @@ node_modules/
 *.pem
 *.crx
 *.zip
+!store-assets/saveshot-*-cws.zip
 .DS_Store
 Thumbs.db
 .env

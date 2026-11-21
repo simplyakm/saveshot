@@ -8,7 +8,7 @@ body:
       label: What happened?
       description: Explain what you did, what happened, and what you expected.
       placeholder: |
-        1. Clicked Select Region on ...
+        1. Clicked Select area on ...
         2. Dragged across the page
         3. Saw error ...
     validations:
@@ -22,4 +22,4 @@ body:
     id: version
     attributes:
       label: SaveShot version and error code (optional)
-      placeholder: v1.1.0, error code: NONE
+      placeholder: v1.1.1, error code: NONE

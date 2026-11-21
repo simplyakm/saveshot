@@ -2453,8 +2453,8 @@ test('CAPTURE_VISIBLE_FROM_OVERLAY security gate: blocks uninitiated, cross-tab,
   }
 });
 
-test('all repository source, UI, and documentation files contain no em dashes or en dashes', () => {
-  const textExts = new Set(['.js', '.json', '.html', '.css', '.md', '.yml']);
+test('all repository source, UI, and documentation files contain no em dashes or en dashes, and CWS zip is in sync', async () => {
+  const textExts = new Set(['.js', '.mjs', '.json', '.html', '.css', '.md', '.yml']);
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.git') || entry.name === 'node_modules') continue;
@@ -2469,6 +2469,18 @@ test('all repository source, UI, and documentation files contain no em dashes or
     }
   };
   walk(rootDir);
+
+  const { buildCwsZipBuffer } = await import('../scripts/pack-cws.mjs');
+  const { version, buffer } = buildCwsZipBuffer();
+  assert.equal(version, '1.1.1');
+  const zipOnDisk = fs.readFileSync(
+    path.join(rootDir, 'store-assets', `saveshot-v${version}-cws.zip`)
+  );
+  assert.equal(
+    Buffer.compare(buffer, zipOnDisk),
+    0,
+    'store-assets/saveshot-v1.1.1-cws.zip must match current extension source files (run npm run pack)'
+  );
 });
 
 test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 decode, session blob pruning, and Incognito post-upload editor isolation', async () => {
