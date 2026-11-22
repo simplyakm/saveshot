@@ -23,10 +23,13 @@ import {
   validateDriveFileId,
 } from '../lib/drive.js';
 import {
+  clearAllCachedTokens,
   fetchGoogleUserInfo,
   getSilentAuthSession,
   isClientIdConfigured,
   PLACEHOLDER_CLIENT_ID,
+  removeCachedToken,
+  resetAuthMemoryForTests,
   signIn,
   signOut,
   withAuthToken,
@@ -90,6 +93,7 @@ function installChromeMock({
   onTabSendMessage = null,
   onExecuteScript = null,
 } = {}) {
+  resetAuthMemoryForTests();
   const store = structuredClone(initialStore);
   const removedTokens = [];
   const createdTabs = [];
@@ -200,6 +204,10 @@ function installChromeMock({
           for (const fn of listeners.onStorageChanged) {
             fn(changes, 'local');
           }
+        },
+        remove: async (keys) => {
+          const list = Array.isArray(keys) ? keys : [keys];
+          for (const k of list) delete store[k];
         },
       },
       session: (() => {
@@ -2997,6 +3005,192 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
     assert.equal(reconnectRes.ok, true);
     assert.equal(reconnectRes.settings.folderId, 'alice-folder-99');
     assert.equal(folderCreates, 0, 'Seamless reconnect must reuse verified cached Drive folder');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('local token eviction resilience: API throws, runtime.lastError, wedged callbacks, failed silent lookup, mid-flight signIn/upload signOut races, and storage quota overflow', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    // 1. removeCachedAuthToken throws synchronously OR sets runtime.lastError -> clearAllCachedAuthTokens and signedOut=true still succeed
+    const { store: throwStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        recentUploads: [{ id: 'f1', name: 'a.png', webViewLink: 'https://drive.google.com/file/d/f1/view' }],
+      },
+    });
+    let clearAllCalls = 0;
+    globalThis.chrome.identity.removeCachedAuthToken = () => {
+      throw new Error('Extension context or identity cache internal error');
+    };
+    globalThis.chrome.identity.clearAllCachedAuthTokens = (cb) => {
+      clearAllCalls += 1;
+      cb();
+    };
+
+    assert.equal(await removeCachedToken('bad-tok'), false);
+    await signOut();
+    assert.equal(clearAllCalls, 1, 'clearAllCachedAuthTokens must still run when removeCachedAuthToken throws');
+    assert.equal(throwStore.signedOut, true);
+    assert.equal(throwStore.userProfile, null);
+    assert.deepEqual(throwStore.recentUploads, []);
+
+    // Also when removeCachedAuthToken sets chrome.runtime.lastError
+    globalThis.chrome.identity.removeCachedAuthToken = (_opts, cb) => {
+      globalThis.chrome.runtime.lastError = { message: 'Token not found in cache' };
+      cb();
+      globalThis.chrome.runtime.lastError = null;
+    };
+    assert.equal(await removeCachedToken('missing-tok'), false);
+
+    // 2. clearAllCachedAuthTokens throws synchronously or sets lastError -> removeCachedAuthToken still evicts token & signOut resolves cleanly
+    const { store: clearErrStore, removedTokens: clearErrRemoved } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+      },
+    });
+    globalThis.chrome.identity.clearAllCachedAuthTokens = () => {
+      throw new Error('clearAllCachedAuthTokens unavailable');
+    };
+    assert.equal(await clearAllCachedTokens(), false);
+    await signOut();
+    assert.deepEqual(clearErrRemoved, ['token-1']);
+    assert.equal(clearErrStore.signedOut, true);
+    assert.equal(clearErrStore.userProfile, null);
+
+    // 3. Browser without clearAllCachedAuthTokens AND silent getAuthToken fails during signOut -> lastKnownToken from earlier signIn is STILL evicted
+    let failSilentLookup = false;
+    const { removedTokens: fallbackRemoved, store: fallbackStore } = installChromeMock({
+      onGetAuthToken: ({ interactive }) => {
+        if (!interactive && failSilentLookup) {
+          return { error: 'Connection lost while checking cached token' };
+        }
+        return { token: 'active-session-token-77' };
+      },
+    });
+    delete globalThis.chrome.identity.clearAllCachedAuthTokens;
+    await signIn(async () =>
+      new Response(
+        JSON.stringify({ user: { displayName: 'Alice', emailAddress: 'alice@example.com' } }),
+        { status: 200 }
+      )
+    );
+    failSilentLookup = true;
+    await signOut();
+    assert.deepEqual(
+      fallbackRemoved,
+      ['active-session-token-77'],
+      'Must still evict lastKnownToken even when silent getAuthToken fails and clearAllCachedAuthTokens is unsupported'
+    );
+    assert.equal(fallbackStore.signedOut, true);
+    assert.equal(fallbackStore.userProfile, null);
+
+    // 4. Wedged chrome.identity callbacks (never invoke cb) -> signOut resolves within timeoutMs and still persists signedOut=true
+    const { store: hungStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        recentUploads: [{ id: 'f2', name: 'b.png', webViewLink: 'https://drive.google.com/file/d/f2/view' }],
+      },
+    });
+    globalThis.chrome.identity.getAuthToken = () => {
+      // Simulates hung Chrome Identity service that never invokes callback
+    };
+    globalThis.chrome.identity.removeCachedAuthToken = () => {};
+    globalThis.chrome.identity.clearAllCachedAuthTokens = () => {};
+
+    const t0 = Date.now();
+    await signOut({ timeoutMs: 35 });
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 1000, `signOut must not hang when chrome.identity wedges (took ${elapsed}ms)`);
+    assert.equal(hungStore.signedOut, true);
+    assert.equal(hungStore.userProfile, null);
+    assert.deepEqual(hungStore.recentUploads, []);
+
+    // 5. signOut called while interactive signIn is mid-flight -> newly minted token is immediately evicted and signedOut stays true
+    let finishInteractiveAbout;
+    const { store: midSignInStore, removedTokens: midSignInRemoved } = installChromeMock({
+      onGetAuthToken: () => ({ token: 'late-minted-token-99' }),
+    });
+    let midSignInClearedAll = 0;
+    globalThis.chrome.identity.clearAllCachedAuthTokens = (cb) => {
+      midSignInClearedAll += 1;
+      cb();
+    };
+    const pendingSignIn = signIn(
+      () =>
+        new Promise((resolve) => {
+          finishInteractiveAbout = () =>
+            resolve(
+              new Response(
+                JSON.stringify({ user: { displayName: 'Alice', emailAddress: 'alice@example.com' } }),
+                { status: 200 }
+              )
+            );
+        })
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    await signOut();
+    finishInteractiveAbout();
+    await assert.rejects(
+      () => pendingSignIn,
+      (err) => err.code === 'AUTH_CANCELLED'
+    );
+    assert.ok(
+      midSignInRemoved.includes('late-minted-token-99'),
+      'Token minted by superseded signIn must be evicted immediately'
+    );
+    assert.ok(midSignInClearedAll >= 2, 'clearAllCachedAuthTokens must also run when aborting superseded signIn');
+    assert.equal(midSignInStore.signedOut, true);
+    assert.equal(midSignInStore.userProfile, null);
+
+    // 6. signOut called mid-upload right before 401 token refresh -> refuses to mint/keep refreshed token and throws AUTH_REQUIRED
+    const { store: midUploadStore, removedTokens: midUploadRemoved } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+      },
+      onGetAuthToken: (_opts, count) => ({ token: `upload-tok-${count}` }),
+    });
+    let refreshTokenRequests = 0;
+    const origGetAuth = globalThis.chrome.identity.getAuthToken;
+    globalThis.chrome.identity.getAuthToken = (opts, cb) => {
+      refreshTokenRequests += 1;
+      return origGetAuth(opts, cb);
+    };
+
+    await assert.rejects(
+      () =>
+        withAuthToken(async () => {
+          await signOut();
+          const unauthorized = new Error('Expired token');
+          unauthorized.status = 401;
+          throw unauthorized;
+        }),
+      (err) => err.code === 'AUTH_REQUIRED'
+    );
+    // 1st call: initial upload token; 2nd call: signOut's silent lookup; NO 3rd call to refresh after signOut!
+    assert.equal(refreshTokenRequests, 2, 'Must not request a refreshed token on 401 after user already signed out');
+    assert.ok(midUploadRemoved.includes('upload-tok-1'));
+    assert.equal(midUploadStore.signedOut, true);
+
+    // 7. Storage quota exceeded on first chrome.storage.local.set during signOut -> frees profile/history and still persists signedOut=true
+    const { store: quotaStore, removedTokens: quotaRemoved } = installChromeMock({
+      failStorageSetOnce: true,
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        recentUploads: [{ id: 'f3', name: 'c.png', webViewLink: 'https://drive.google.com/file/d/f3/view' }],
+      },
+    });
+    await signOut();
+    assert.deepEqual(quotaRemoved, ['token-1']);
+    assert.equal(quotaStore.signedOut, true, 'signedOut=true must persist even when first storage.local.set hits quota');
+    assert.equal(quotaStore.userProfile, null);
+    assert.deepEqual(quotaStore.recentUploads, []);
   } finally {
     globalThis.fetch = origFetch;
   }
