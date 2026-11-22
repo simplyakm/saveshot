@@ -15,7 +15,7 @@ export const SITE_COPY = {
   shortDescription:
     'Capture and edit screenshots to Google Drive or download locally. 100% local in Chrome, no external servers or tracking.',
 
-  tagline: 'Private screenshots straight to Google Drive, or downloaded to your computer in one click.',
+  tagline: 'Private screenshots straight to Google Drive or your computer.',
 
   overviewLead:
     'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive, with one-click PNG download to your computer anytime. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.',
