@@ -738,6 +738,19 @@ async function captureVisibleTabFlow({
       const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
         incognito,
       });
+      const authSession = await getSilentAuthSession();
+      if (!authSession.signedIn) {
+        storeFallbackCapture(pngBlob, filename);
+        const authErr = new SaveShotError({
+          code: 'AUTH_REQUIRED',
+          userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
+          requiresReauth: true,
+          recoverableWithLocalSave: true,
+        });
+        authErr.hasFallback = true;
+        authErr.fallbackFilename = filename;
+        throw authErr;
+      }
       const session = await createEditorSession({
         mode: 'new',
         fileId: null,
@@ -889,6 +902,19 @@ async function handleRegionSelected(selection, senderTab) {
       const filename = buildScreenshotFilename(liveTab?.url || '', new Date(), {
         incognito,
       });
+      const authSession = await getSilentAuthSession();
+      if (!authSession.signedIn) {
+        storeFallbackCapture(croppedBlob, filename);
+        const authErr = new SaveShotError({
+          code: 'AUTH_REQUIRED',
+          userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
+          requiresReauth: true,
+          recoverableWithLocalSave: true,
+        });
+        authErr.hasFallback = true;
+        authErr.fallbackFilename = filename;
+        throw authErr;
+      }
       const session = await createEditorSession({
         mode: 'new',
         fileId: null,

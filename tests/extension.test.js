@@ -2789,3 +2789,215 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
     globalThis.fetch = origFetch;
   }
 });
+
+test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant reset, silent-session race protection, concurrent signIn deduplication, and signed-out editBeforeUpload fallback', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    // 1. Normal signOut clears local Chrome token + state WITHOUT calling oauth2.googleapis.com/revoke
+    let revokeCalls = 0;
+    const { store: s1Store, removedTokens: s1Removed } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        recentUploads: [{ id: 'f1', name: 'shot.png', webViewLink: 'https://drive.google.com/file/d/f1/view' }],
+      },
+    });
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('oauth2.googleapis.com/revoke')) {
+        revokeCalls += 1;
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected fetch during signOut: ${url}`);
+    };
+
+    await signOut();
+    assert.equal(revokeCalls, 0, 'Normal signOut must NOT revoke Google Account grant');
+    assert.equal(s1Store.signedOut, true);
+    assert.equal(s1Store.userProfile, null);
+    assert.deepEqual(s1Store.recentUploads, []);
+    assert.deepEqual(s1Removed, ['token-1']);
+
+    // While signed out, getSilentAuthSession never silently signs the user back in
+    const silentAfterSignOut = await getSilentAuthSession();
+    assert.equal(silentAfterSignOut.signedIn, false);
+
+    // 2. Incomplete granular scope (DRIVE_SCOPE_MISSING / 403) DOES call /revoke so next sign-in re-prompts checkbox
+    const { removedTokens: scopeRemoved } = installChromeMock({});
+    const revokedTokens = [];
+    const scopeFetch = async (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        revokedTokens.push(u);
+        return new Response('', { status: 200 });
+      }
+      return new Response('', { status: 403 });
+    };
+    await assert.rejects(
+      () => signIn(scopeFetch),
+      (err) => err.code === 'DRIVE_SCOPE_MISSING'
+    );
+    assert.deepEqual(scopeRemoved, ['token-1']);
+    assert.equal(revokedTokens.length, 1, 'Incomplete scope grant must be revoked at Google');
+    assert.match(revokedTokens[0], /token=token-1/);
+
+    await assert.rejects(
+      () =>
+        withAuthToken(
+          async () => {
+            throw classifyDriveHttpError(403, {
+              error: { errors: [{ reason: 'insufficientPermissions' }] },
+            });
+          },
+          { interactive: true, fetchImpl: scopeFetch }
+        ),
+      (err) => err.code === 'DRIVE_SCOPE_MISSING'
+    );
+    assert.equal(revokedTokens.length, 2, 'withAuthToken DRIVE_SCOPE_MISSING must also revoke incomplete grant');
+
+    // 3. In-flight getSilentAuthSession race vs signOut must NEVER resurrect signedOut=false
+    const { store: raceStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: 1 }, // stale verifiedAt forces /drive/v3/about check
+      },
+    });
+    let resolveAboutFetch;
+    const slowAboutFetch = () =>
+      new Promise((resolve) => {
+        resolveAboutFetch = () =>
+          resolve(
+            new Response(
+              JSON.stringify({
+                user: { displayName: 'Alice', emailAddress: 'alice@example.com' },
+              }),
+              { status: 200 }
+            )
+          );
+      });
+
+    const pendingSilent = getSilentAuthSession(slowAboutFetch);
+    await new Promise((r) => setTimeout(r, 15));
+    await signOut();
+    resolveAboutFetch();
+    const racedResult = await pendingSilent;
+    assert.equal(racedResult.signedIn, false, 'Stale silent check must resolve signedIn=false after signOut');
+    assert.equal(raceStore.signedOut, true, 'Stale silent check must never overwrite signedOut back to false');
+    assert.equal(raceStore.userProfile, null);
+
+    // 4. Concurrent double-clicked signIn() shares a single interactive getAuthToken call
+    let interactiveTokenCalls = 0;
+    installChromeMock({
+      onGetAuthToken: ({ interactive }) => {
+        if (interactive) interactiveTokenCalls += 1;
+        return { token: `tok-dedup-${interactiveTokenCalls}` };
+      },
+    });
+    globalThis.fetch = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      return new Response(
+        JSON.stringify({
+          user: { displayName: 'Alice', emailAddress: 'alice@example.com' },
+        }),
+        { status: 200 }
+      );
+    };
+    const [resA, resB] = await Promise.all([signIn(), signIn()]);
+    assert.equal(interactiveTokenCalls, 1, 'Concurrent signIn() calls must share one interactive token request');
+    assert.equal(resA.profile.email, 'alice@example.com');
+    assert.equal(resB.profile.email, 'alice@example.com');
+
+    // 5. End-to-end service-worker seamless SIGN_OUT -> SIGN_IN folder cache restoration + signed-out editBeforeUpload fallback
+    let swRevokeCalls = 0;
+    let folderCreates = 0;
+    const swMock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'alice-folder-99',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/alice-folder-99',
+          folderCacheByEmail: {
+            'alice@example.com': {
+              folderName: 'Chrome_SaveShot_ScreenShots',
+              folderId: 'alice-folder-99',
+              folderWebViewLink: 'https://drive.google.com/drive/folders/alice-folder-99',
+            },
+          },
+          autoCopyLink: true,
+          editBeforeUpload: true,
+          theme: 'auto',
+        },
+      },
+      tabs: [
+        {
+          id: 55,
+          windowId: 2,
+          active: true,
+          url: 'https://example.com/dashboard',
+          title: 'Dashboard',
+          incognito: false,
+        },
+      ],
+    });
+
+    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
+      '../background/service-worker.js'
+    );
+    resetInMemoryWorkerStateForTests();
+    registerServiceWorkerListeners();
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        swRevokeCalls += 1;
+        return new Response('', { status: 200 });
+      }
+      if (u.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({ user: { displayName: 'Alice', emailAddress: 'alice@example.com' } }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/drive/v3/files/alice-folder-99')) {
+        return new Response(
+          JSON.stringify({
+            id: 'alice-folder-99',
+            name: 'Chrome_SaveShot_ScreenShots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/alice-folder-99',
+          }),
+          { status: 200 }
+        );
+      }
+      if (opts.method === 'POST' && u.includes('/drive/v3/files')) {
+        folderCreates += 1;
+      }
+      throw new Error(`Unexpected SW fetch: ${u}`);
+    };
+
+    // Sign out -> must NOT call /revoke
+    const outRes = await swMock.dispatchMessage({ type: 'SIGN_OUT' });
+    assert.equal(outRes.ok, true);
+    assert.equal(swRevokeCalls, 0);
+
+    // Trigger CAPTURE_VISIBLE while signed out with editBeforeUpload=true -> must NOT open dead Editor tab, must return AUTH_REQUIRED + fallback PNG
+    const signedOutEditCap = await swMock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 55 });
+    assert.equal(signedOutEditCap.ok, false);
+    assert.equal(signedOutEditCap.code, 'AUTH_REQUIRED');
+    assert.equal(signedOutEditCap.hasFallback, true);
+    assert.equal(swMock.createdTabs.length, 0, 'Must not open pre-upload Editor tab while signed out');
+
+    const fallbackAfterAuthErr = await swMock.dispatchMessage({ type: 'GET_FALLBACK_PNG' });
+    assert.equal(fallbackAfterAuthErr.ok, true);
+    assert.ok(fallbackAfterAuthErr.dataUrl.startsWith('data:image/png;base64,'));
+
+    // Reconnect same account -> seamless sign-in restores cached alice-folder-99 with 0 duplicate folder creations
+    const reconnectRes = await swMock.dispatchMessage({ type: 'SIGN_IN' });
+    assert.equal(reconnectRes.ok, true);
+    assert.equal(reconnectRes.settings.folderId, 'alice-folder-99');
+    assert.equal(folderCreates, 0, 'Seamless reconnect must reuse verified cached Drive folder');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

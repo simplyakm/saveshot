@@ -253,9 +253,17 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       return r.result.value;
     };
 
-    // Verify Popup UI Boot & OAuth Setup Banner state
+    // Verify Popup UI Boot & OAuth Setup Banner state (poll until async GET_STATE settles)
     const prodManifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'));
     const expectedNeedsSetup = prodManifest.oauth2.client_id.includes('YOUR_CHROME_OAUTH');
+    for (let i = 0; i < 25; i += 1) {
+      const settled = await evalIn(
+        extPageSession,
+        `Boolean(document.getElementById('loading-view')?.hidden)`
+      );
+      if (settled) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     const popupCheck = await evalIn(
       extPageSession,
       `(() => ({
