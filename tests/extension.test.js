@@ -2803,7 +2803,7 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
   try {
     // 1. Normal signOut clears local Chrome token + state WITHOUT calling oauth2.googleapis.com/revoke
     let revokeCalls = 0;
-    const { store: s1Store, removedTokens: s1Removed } = installChromeMock({
+    const { store: s1Store, removedTokens: s1Removed, wasClearedAll: s1WasClearedAll } = installChromeMock({
       initialStore: {
         signedOut: false,
         userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
@@ -2820,6 +2820,7 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
 
     await signOut();
     assert.equal(revokeCalls, 0, 'Normal signOut must NOT revoke Google Account grant');
+    assert.equal(s1WasClearedAll(), false, 'Normal signOut must NOT call clearAllCachedAuthTokens when removeCachedAuthToken succeeds');
     assert.equal(s1Store.signedOut, true);
     assert.equal(s1Store.userProfile, null);
     assert.deepEqual(s1Store.recentUploads, []);
@@ -3143,7 +3144,7 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
       midSignInRemoved.includes('late-minted-token-99'),
       'Token minted by superseded signIn must be evicted immediately'
     );
-    assert.ok(midSignInClearedAll >= 2, 'clearAllCachedAuthTokens must also run when aborting superseded signIn');
+    assert.equal(midSignInClearedAll, 0, 'Must not call clearAllCachedAuthTokens when removeCachedAuthToken succeeds');
     assert.equal(midSignInStore.signedOut, true);
     assert.equal(midSignInStore.userProfile, null);
 
