@@ -380,8 +380,9 @@ function applyTransform(kind) {
   commitActiveTextIfNeeded();
   if (state.activeDrag) {
     state.activeDrag = null;
-    previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
   }
+  cancelPreviewRender();
+  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
 
   return enqueueCanvasMutation(async () => {
     await pushUndoSnapshot();
@@ -452,7 +453,17 @@ function buildDragOp(drag) {
   };
 }
 
+let previewRafId = 0;
+
+function cancelPreviewRender() {
+  if (previewRafId) {
+    cancelAnimationFrame(previewRafId);
+    previewRafId = 0;
+  }
+}
+
 function renderActiveDragPreview() {
+  previewRafId = 0;
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
   if (!state.activeDrag) return;
   renderAnnotation(
@@ -461,6 +472,11 @@ function renderActiveDragPreview() {
     els.previewCanvas.width,
     els.previewCanvas.height
   );
+}
+
+function schedulePreviewRender() {
+  if (previewRafId) return;
+  previewRafId = requestAnimationFrame(renderActiveDragPreview);
 }
 
 els.previewCanvas.addEventListener('pointerdown', (event) => {
@@ -497,7 +513,7 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
 });
 
 els.previewCanvas.addEventListener('pointermove', (event) => {
-  if (!state.activeDrag) return;
+  if (!state.activeDrag || event.pointerId !== state.activeDrag.pointerId) return;
   event.preventDefault();
   const coords = getCanvasCoordinates(event);
   state.activeDrag.currentX = coords.x;
@@ -508,11 +524,11 @@ els.previewCanvas.addEventListener('pointermove', (event) => {
       state.activeDrag.points.push({ x: coords.x, y: coords.y });
     }
   }
-  renderActiveDragPreview();
+  schedulePreviewRender();
 });
 
 function finishPointerDrag(event) {
-  if (!state.activeDrag) return;
+  if (!state.activeDrag || event.pointerId !== state.activeDrag.pointerId) return;
   event.preventDefault();
   const coords = getCanvasCoordinates(event);
   state.activeDrag.currentX = coords.x;
@@ -523,6 +539,7 @@ function finishPointerDrag(event) {
 
   const finishedDrag = state.activeDrag;
   state.activeDrag = null;
+  cancelPreviewRender();
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
 
   enqueueCanvasMutation(async () => {
@@ -546,8 +563,10 @@ function finishPointerDrag(event) {
 }
 
 els.previewCanvas.addEventListener('pointerup', finishPointerDrag);
-els.previewCanvas.addEventListener('pointercancel', () => {
+els.previewCanvas.addEventListener('pointercancel', (event) => {
+  if (state.activeDrag && event.pointerId !== state.activeDrag.pointerId) return;
   state.activeDrag = null;
+  cancelPreviewRender();
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
 });
 

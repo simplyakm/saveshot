@@ -655,6 +655,30 @@ test('auth module handles not-signed-in Chrome, granular scope eviction, stale t
   assert.equal(offlineSession.profile.email, 'alice@gmail.com');
   assert.equal(offlineStore.signedOut, false);
 
+  // Expired 1-hour cached token on wake from sleep rotates silently on 401 without signing out
+  const { store: rotatedStore, removedTokens: rotatedRemoved } = installChromeMock({
+    initialStore: {
+      signedOut: false,
+      userProfile: { email: 'alice@gmail.com', name: 'Alice', verifiedAt: 1 },
+    },
+  });
+  let silentAboutCalls = 0;
+  const rotatedSession = await getSilentAuthSession(async () => {
+    silentAboutCalls += 1;
+    if (silentAboutCalls === 1) return new Response('', { status: 401 });
+    return new Response(
+      JSON.stringify({
+        user: { displayName: 'Alice', emailAddress: 'alice@gmail.com' },
+      }),
+      { status: 200 }
+    );
+  });
+  assert.equal(rotatedSession.signedIn, true);
+  assert.equal(rotatedSession.profile.email, 'alice@gmail.com');
+  assert.equal(rotatedStore.signedOut, false);
+  assert.deepEqual(rotatedRemoved, ['token-1']);
+
+  // Genuinely revoked grant (401 on both initial and refreshed token) evicts both and marks signedOut
   const { store: revokedStore, removedTokens: revokedRemoved } = installChromeMock({
     initialStore: {
       signedOut: false,
@@ -666,7 +690,7 @@ test('auth module handles not-signed-in Chrome, granular scope eviction, stale t
   );
   assert.equal(revokedSession.signedIn, false);
   assert.equal(revokedStore.signedOut, true);
-  assert.deepEqual(revokedRemoved, ['token-1']);
+  assert.deepEqual(revokedRemoved, ['token-1', 'token-2']);
 
   // 4. Granular Drive scope unchecked (DRIVE_SCOPE_MISSING) evicts token and marks signedOut
   const { store: scopeStore, removedTokens: scopeRemoved } = installChromeMock({
@@ -2221,11 +2245,17 @@ test('UI helpers, theme sync, custom hex color parser, and strict storage allowl
     }
     assert.equal(globalThis.document.documentElement.dataset.theme, 'dark');
 
+    // Non-theme settings updates must not trigger redundant theme callbacks
+    await updateSettings({ autoCopyLink: false });
+    assert.deepEqual(seenThemes, ['dark']);
+
     // React immediately when settings.theme updates in chrome.storage.local
     await updateSettings({ theme: 'light' });
     assert.equal(globalThis.document.documentElement.dataset.theme, 'light');
+    assert.deepEqual(seenThemes, ['dark', 'light']);
     await updateSettings({ theme: 'auto' });
     assert.equal(globalThis.document.documentElement.dataset.theme, undefined);
+    assert.deepEqual(seenThemes, ['dark', 'light', 'auto']);
   } finally {
     globalThis.document = prevDoc;
   }
@@ -2675,6 +2705,25 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
     assert.equal(decoded.type, 'image/png');
     assert.ok(decoded.size > 0);
 
+    // Also verify legacy atob / btoa fallback path for pre-Chrome-140 browsers
+    const origFromB64 = Uint8Array.fromBase64;
+    const origToB64 = Uint8Array.prototype.toBase64;
+    try {
+      Uint8Array.fromBase64 = undefined;
+      Uint8Array.prototype.toBase64 = undefined;
+      const legacyBlob = await dataUrlToBlob(TINY_PNG_DATA_URL);
+      assert.equal(legacyBlob.size, decoded.size);
+      const legacyEncoded = await blobToDataUrl(legacyBlob);
+      assert.equal(legacyEncoded, TINY_PNG_DATA_URL);
+      await assert.rejects(
+        () => dataUrlToBlob('data:image/png;base64,%%%corrupt%%%'),
+        (err) => err.code === 'EMPTY_CAPTURE'
+      );
+    } finally {
+      Uint8Array.fromBase64 = origFromB64;
+      Uint8Array.prototype.toBase64 = origToB64;
+    }
+
     await assert.rejects(
       () => dataUrlToBlob('data:image/png;base64,%%%corrupt%%%'),
       (err) => err.code === 'EMPTY_CAPTURE'
@@ -2800,11 +2849,11 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
   }
 });
 
-test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant reset, silent-session race protection, concurrent signIn deduplication, and signed-out editBeforeUpload fallback', async () => {
+test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent-session race protection, concurrent signIn deduplication, and signed-out editBeforeUpload fallback', async () => {
   const origFetch = globalThis.fetch;
   try {
-    // 1. Normal signOut clears local Chrome token + state WITHOUT calling oauth2.googleapis.com/revoke
-    let revokeCalls = 0;
+    // 1. Normal signOut evicts local Chrome tokens, clears state, AND calls oauth2.googleapis.com/revoke so Account Chooser opens on reconnect
+    const revokedUrls = [];
     const { store: s1Store, removedTokens: s1Removed, wasClearedAll: s1WasClearedAll } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -2812,17 +2861,20 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
         recentUploads: [{ id: 'f1', name: 'shot.png', webViewLink: 'https://drive.google.com/file/d/f1/view' }],
       },
     });
-    globalThis.fetch = async (url) => {
-      if (String(url).includes('oauth2.googleapis.com/revoke')) {
-        revokeCalls += 1;
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        assert.equal(opts.method, 'POST');
+        revokedUrls.push(u);
         return new Response('', { status: 200 });
       }
       throw new Error(`Unexpected fetch during signOut: ${url}`);
     };
 
     await signOut();
-    assert.equal(revokeCalls, 0, 'Normal signOut must NOT revoke Google Account grant');
-    assert.equal(s1WasClearedAll(), true, 'Normal signOut must call clearAllCachedAuthTokens to clear remembered account preference');
+    assert.equal(revokedUrls.length, 1, 'signOut must revoke Google OAuth grant so Account Chooser opens on next sign-in');
+    assert.match(revokedUrls[0], /token=token-1/);
+    assert.equal(s1WasClearedAll(), true, 'signOut must call clearAllCachedAuthTokens');
     assert.equal(s1Store.signedOut, true);
     assert.equal(s1Store.userProfile, null);
     assert.deepEqual(s1Store.recentUploads, []);
@@ -2832,7 +2884,7 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
     const silentAfterSignOut = await getSilentAuthSession();
     assert.equal(silentAfterSignOut.signedIn, false);
 
-    // 2. Incomplete granular scope (DRIVE_SCOPE_MISSING / 403) DOES call /revoke so next sign-in re-prompts checkbox
+    // 2. Incomplete granular scope (DRIVE_SCOPE_MISSING / 403) also calls /revoke so next sign-in re-prompts checkbox
     const { removedTokens: scopeRemoved } = installChromeMock({});
     const revokedTokens = [];
     const scopeFetch = async (url) => {
@@ -2865,7 +2917,8 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
     );
     assert.equal(revokedTokens.length, 2, 'withAuthToken DRIVE_SCOPE_MISSING must also revoke incomplete grant');
 
-    // 3. In-flight getSilentAuthSession race vs signOut must NEVER resurrect signedOut=false
+    // 3. In-flight getSilentAuthSession race vs signOut must NEVER resurrect signedOut=false and must revoke stale token
+    const raceRevoked = [];
     const { store: raceStore } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -2873,8 +2926,13 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
       },
     });
     let resolveAboutFetch;
-    const slowAboutFetch = () =>
-      new Promise((resolve) => {
+    const slowAboutFetch = (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        raceRevoked.push(u);
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return new Promise((resolve) => {
         resolveAboutFetch = () =>
           resolve(
             new Response(
@@ -2885,6 +2943,16 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
             )
           );
       });
+    };
+
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        raceRevoked.push(u);
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected global fetch in silent race test: ${u}`);
+    };
 
     const pendingSilent = getSilentAuthSession(slowAboutFetch);
     await new Promise((r) => setTimeout(r, 15));
@@ -2894,16 +2962,27 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
     assert.equal(racedResult.signedIn, false, 'Stale silent check must resolve signedIn=false after signOut');
     assert.equal(raceStore.signedOut, true, 'Stale silent check must never overwrite signedOut back to false');
     assert.equal(raceStore.userProfile, null);
+    assert.ok(raceRevoked.length >= 1, 'Token from superseded silent session must be revoked');
 
-    // 4. Concurrent double-clicked signIn() shares a single interactive getAuthToken call
+    // 4. Concurrent double-clicked signIn() shares a single interactive getAuthToken call,
+    //    and superseding an in-flight silent session with signIn() does NOT revoke the active grant!
     let interactiveTokenCalls = 0;
+    let falseRevokesDuringSignIn = 0;
     installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: 1 },
+      },
       onGetAuthToken: ({ interactive }) => {
         if (interactive) interactiveTokenCalls += 1;
-        return { token: `tok-dedup-${interactiveTokenCalls}` };
+        return { token: interactive ? `tok-dedup-${interactiveTokenCalls}` : 'tok-silent-pre' };
       },
     });
-    globalThis.fetch = async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('oauth2.googleapis.com/revoke')) {
+        falseRevokesDuringSignIn += 1;
+        return new Response('', { status: 200 });
+      }
       await new Promise((r) => setTimeout(r, 20));
       return new Response(
         JSON.stringify({
@@ -2912,12 +2991,15 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
         { status: 200 }
       );
     };
+    const silentBeforeSignIn = getSilentAuthSession();
     const [resA, resB] = await Promise.all([signIn(), signIn()]);
+    await silentBeforeSignIn;
     assert.equal(interactiveTokenCalls, 1, 'Concurrent signIn() calls must share one interactive token request');
+    assert.equal(falseRevokesDuringSignIn, 0, 'signIn superseding silent check must NOT revoke grant');
     assert.equal(resA.profile.email, 'alice@example.com');
     assert.equal(resB.profile.email, 'alice@example.com');
 
-    // 5. End-to-end service-worker seamless SIGN_OUT -> SIGN_IN folder cache restoration + signed-out editBeforeUpload fallback
+    // 5. End-to-end service-worker SIGN_OUT revokes grant, clears error/badge, guards editBeforeUpload, and restores folder cache on reconnect
     let swRevokeCalls = 0;
     let folderCreates = 0;
     const swMock = installChromeMock({
@@ -2987,10 +3069,10 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
       throw new Error(`Unexpected SW fetch: ${u}`);
     };
 
-    // Sign out -> must NOT call /revoke
+    // Sign out -> MUST call /revoke so Google re-opens Account Chooser on next Connect
     const outRes = await swMock.dispatchMessage({ type: 'SIGN_OUT' });
     assert.equal(outRes.ok, true);
-    assert.equal(swRevokeCalls, 0);
+    assert.equal(swRevokeCalls, 1, 'Service worker SIGN_OUT must revoke Google OAuth token');
 
     // Trigger CAPTURE_VISIBLE while signed out with editBeforeUpload=true -> must NOT open dead Editor tab, must return AUTH_REQUIRED + fallback PNG
     const signedOutEditCap = await swMock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 55 });
@@ -3003,20 +3085,34 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
     assert.equal(fallbackAfterAuthErr.ok, true);
     assert.ok(fallbackAfterAuthErr.dataUrl.startsWith('data:image/png;base64,'));
 
-    // Reconnect same account -> seamless sign-in restores cached alice-folder-99 with 0 duplicate folder creations
+    // Reconnect same account -> sign-in restores cached alice-folder-99 with 0 duplicate folder creations
     const reconnectRes = await swMock.dispatchMessage({ type: 'SIGN_IN' });
     assert.equal(reconnectRes.ok, true);
     assert.equal(reconnectRes.settings.folderId, 'alice-folder-99');
-    assert.equal(folderCreates, 0, 'Seamless reconnect must reuse verified cached Drive folder');
+    assert.equal(folderCreates, 0, 'Reconnecting same account must reuse verified cached Drive folder');
   } finally {
     globalThis.fetch = origFetch;
   }
 });
 
-test('local token eviction resilience: API throws, runtime.lastError, wedged callbacks, failed silent lookup, mid-flight signIn/upload signOut races, and storage quota overflow', async () => {
+test('token eviction and revocation resilience: API throws, offline revoke failure, wedged callbacks, failed silent lookup, mid-flight signIn/upload signOut races, and storage quota overflow', async () => {
   const origFetch = globalThis.fetch;
   try {
-    // 1. removeCachedAuthToken throws synchronously OR sets runtime.lastError -> clearAllCachedAuthTokens and signedOut=true still succeed
+    let revokedTokens = [];
+    let failRevokeNetwork = false;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        if (failRevokeNetwork) {
+          throw new TypeError('Failed to fetch (offline)');
+        }
+        revokedTokens.push(u);
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unexpected fetch in eviction resilience test: ${u}`);
+    };
+
+    // 1. removeCachedAuthToken throws synchronously OR sets runtime.lastError -> clearAllCachedAuthTokens, /revoke, and signedOut=true still succeed
     const { store: throwStore } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -3036,6 +3132,7 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     assert.equal(await removeCachedToken('bad-tok'), false);
     await signOut();
     assert.equal(clearAllCalls, 1, 'clearAllCachedAuthTokens must still run when removeCachedAuthToken throws');
+    assert.equal(revokedTokens.length, 1, 'Google /revoke must still run when removeCachedAuthToken throws');
     assert.equal(throwStore.signedOut, true);
     assert.equal(throwStore.userProfile, null);
     assert.deepEqual(throwStore.recentUploads, []);
@@ -3048,7 +3145,8 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     };
     assert.equal(await removeCachedToken('missing-tok'), false);
 
-    // 2. clearAllCachedAuthTokens throws synchronously or sets lastError -> removeCachedAuthToken still evicts token & signOut resolves cleanly
+    // 2. Offline / failed /revoke AND clearAllCachedAuthTokens throws -> removeCachedAuthToken still evicts token & signOut resolves cleanly
+    failRevokeNetwork = true;
     const { store: clearErrStore, removedTokens: clearErrRemoved } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -3063,8 +3161,10 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     assert.deepEqual(clearErrRemoved, ['token-1']);
     assert.equal(clearErrStore.signedOut, true);
     assert.equal(clearErrStore.userProfile, null);
+    failRevokeNetwork = false;
 
-    // 3. Browser without clearAllCachedAuthTokens AND silent getAuthToken fails during signOut -> lastKnownToken from earlier signIn is STILL evicted
+    // 3. Browser without clearAllCachedAuthTokens AND silent getAuthToken fails during signOut -> knownTokens from earlier signIn is STILL evicted AND revoked at Google
+    revokedTokens = [];
     let failSilentLookup = false;
     const { removedTokens: fallbackRemoved, store: fallbackStore } = installChromeMock({
       onGetAuthToken: ({ interactive }) => {
@@ -3086,12 +3186,14 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     assert.deepEqual(
       fallbackRemoved,
       ['active-session-token-77'],
-      'Must still evict lastKnownToken even when silent getAuthToken fails and clearAllCachedAuthTokens is unsupported'
+      'Must still evict known token locally when silent getAuthToken fails and clearAllCachedAuthTokens is unsupported'
     );
+    assert.equal(revokedTokens.length, 1, 'Must also revoke known token at Google even when silent getAuthToken fails');
+    assert.match(revokedTokens[0], /token=active-session-token-77/);
     assert.equal(fallbackStore.signedOut, true);
     assert.equal(fallbackStore.userProfile, null);
 
-    // 4. Wedged chrome.identity callbacks (never invoke cb) -> signOut resolves within timeoutMs and still persists signedOut=true
+    // 4. Wedged chrome.identity callbacks AND hung network fetch -> signOut resolves within timeoutMs and still persists signedOut=true
     const { store: hungStore } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -3099,21 +3201,26 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
         recentUploads: [{ id: 'f2', name: 'b.png', webViewLink: 'https://drive.google.com/file/d/f2/view' }],
       },
     });
-    globalThis.chrome.identity.getAuthToken = () => {
-      // Simulates hung Chrome Identity service that never invokes callback
-    };
+    globalThis.chrome.identity.getAuthToken = () => {};
     globalThis.chrome.identity.removeCachedAuthToken = () => {};
     globalThis.chrome.identity.clearAllCachedAuthTokens = () => {};
 
     const t0 = Date.now();
-    await signOut({ timeoutMs: 35 });
+    await signOut({
+      timeoutMs: 35,
+      fetchImpl: (_url, { signal }) =>
+        new Promise((_res, rej) => {
+          signal.addEventListener('abort', () => rej(new Error('Aborted')));
+        }),
+    });
     const elapsed = Date.now() - t0;
-    assert.ok(elapsed < 1000, `signOut must not hang when chrome.identity wedges (took ${elapsed}ms)`);
+    assert.ok(elapsed < 1000, `signOut must not hang when chrome.identity or network wedges (took ${elapsed}ms)`);
     assert.equal(hungStore.signedOut, true);
     assert.equal(hungStore.userProfile, null);
     assert.deepEqual(hungStore.recentUploads, []);
 
-    // 5. signOut called while interactive signIn is mid-flight -> newly minted token is immediately evicted and signedOut stays true
+    // 5. signOut called while interactive signIn is mid-flight -> newly minted token is immediately evicted AND revoked at Google
+    revokedTokens = [];
     let finishInteractiveAbout;
     const { store: midSignInStore, removedTokens: midSignInRemoved } = installChromeMock({
       onGetAuthToken: () => ({ token: 'late-minted-token-99' }),
@@ -3123,18 +3230,22 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
       midSignInClearedAll += 1;
       cb();
     };
-    const pendingSignIn = signIn(
-      () =>
-        new Promise((resolve) => {
-          finishInteractiveAbout = () =>
-            resolve(
-              new Response(
-                JSON.stringify({ user: { displayName: 'Alice', emailAddress: 'alice@example.com' } }),
-                { status: 200 }
-              )
-            );
-        })
-    );
+    const pendingSignIn = signIn((url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        revokedTokens.push(u);
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return new Promise((resolve) => {
+        finishInteractiveAbout = () =>
+          resolve(
+            new Response(
+              JSON.stringify({ user: { displayName: 'Alice', emailAddress: 'alice@example.com' } }),
+              { status: 200 }
+            )
+          );
+      });
+    });
     await new Promise((r) => setTimeout(r, 15));
     await signOut();
     finishInteractiveAbout();
@@ -3146,11 +3257,16 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
       midSignInRemoved.includes('late-minted-token-99'),
       'Token minted by superseded signIn must be evicted immediately'
     );
+    assert.ok(
+      revokedTokens.some((u) => u.includes('token=late-minted-token-99')),
+      'Token minted by superseded signIn must also be revoked at Google'
+    );
     assert.ok(midSignInClearedAll >= 2, 'clearAllCachedAuthTokens must run during signOut and superseded signIn');
     assert.equal(midSignInStore.signedOut, true);
     assert.equal(midSignInStore.userProfile, null);
 
     // 6. signOut called mid-upload right before 401 token refresh -> refuses to mint/keep refreshed token and throws AUTH_REQUIRED
+    revokedTokens = [];
     const { store: midUploadStore, removedTokens: midUploadRemoved } = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -3178,14 +3294,21 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     // 1st call: initial upload token; 2nd call: signOut's silent lookup; NO 3rd call to refresh after signOut!
     assert.equal(refreshTokenRequests, 2, 'Must not request a refreshed token on 401 after user already signed out');
     assert.ok(midUploadRemoved.includes('upload-tok-1'));
+    assert.ok(revokedTokens.some((u) => u.includes('token=upload-tok-1')));
     assert.equal(midUploadStore.signedOut, true);
 
-    // 7. Storage quota exceeded on first chrome.storage.local.set during signOut -> frees profile/history and still persists signedOut=true
+    // 7. Storage quota exceeded on first chrome.storage.local.set during signOut -> frees profile/history, clears folderId, and persists signedOut=true
     const { store: quotaStore, removedTokens: quotaRemoved } = installChromeMock({
       failStorageSetOnce: true,
       initialStore: {
         signedOut: false,
         userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'alice-f1',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/alice-f1',
+          folderCacheByEmail: {},
+        },
         recentUploads: [{ id: 'f3', name: 'c.png', webViewLink: 'https://drive.google.com/file/d/f3/view' }],
       },
     });
@@ -3193,9 +3316,11 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     assert.deepEqual(quotaRemoved, ['token-1']);
     assert.equal(quotaStore.signedOut, true, 'signedOut=true must persist even when first storage.local.set hits quota');
     assert.equal(quotaStore.userProfile, null);
+    assert.equal(quotaStore.settings.folderId, null, 'Active folderId must also clear during quota fallback');
     assert.deepEqual(quotaStore.recentUploads, []);
 
-    // 8. Normal logged-in 401 token expiry refreshes silently via removeCachedAuthToken WITHOUT calling clearAllCachedAuthTokens or signing out
+    // 8. Normal logged-in 401 token expiry refreshes silently via removeCachedAuthToken WITHOUT calling clearAllCachedAuthTokens, /revoke, or signing out
+    revokedTokens = [];
     const {
       store: refreshStore,
       removedTokens: refreshRemoved,
@@ -3218,6 +3343,7 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     });
     assert.equal(uploadResult, 'ok-token-2');
     assert.deepEqual(refreshRemoved, ['token-1']);
+    assert.equal(revokedTokens.length, 0, 'Background 401 refresh must NOT call /revoke');
     assert.equal(refreshWasClearedAll(), false, 'Background 401 refresh must NOT call clearAllCachedAuthTokens');
     assert.equal(refreshStore.signedOut, false, 'Logged-in user must stay signed in across token rotation');
   } finally {

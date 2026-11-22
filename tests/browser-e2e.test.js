@@ -1609,7 +1609,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(unsetWelcomeAudit.visibleText, 'Not set');
     assert.equal(unsetWelcomeAudit.hintVisible, true, 'Welcome page must reveal hint when shortcuts are unassigned');
 
-    // Verify signing out from Popup clears Recent history from storage and UI
+    // Verify signing out from Popup revokes Google OAuth grant, clears Recent history, and live-syncs open Welcome tab
     const signOutAudit = await evalIn(
       extPageSession,
       `(async () => {
@@ -1632,6 +1632,27 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(signOutAudit.signedOutVisible, true);
     assert.equal(signOutAudit.storedCount, 0, 'Signing out must clear recentUploads in storage');
     assert.equal(signOutAudit.domItems, 0, 'Signing out must clear rendered Recent items in popup');
+
+    const e2eRevoked = await evalIn(
+      swSession,
+      `globalThis.__e2eDriveCalls.some((c) => c.method === 'POST' && c.url.includes('oauth2.googleapis.com/revoke?token=e2e-mock-token'))`
+    );
+    assert.equal(e2eRevoked, true, 'Signing out in Chromium must revoke OAuth token at oauth2.googleapis.com/revoke');
+
+    let welcomeSignedOutHeading = '';
+    for (let i = 0; i < 20; i += 1) {
+      welcomeSignedOutHeading = await evalIn(
+        welcomeSession,
+        `document.getElementById('account-heading')?.textContent?.trim() || ''`
+      );
+      if (welcomeSignedOutHeading === 'Google Drive not connected yet') break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(
+      welcomeSignedOutHeading,
+      'Google Drive not connected yet',
+      'Open Welcome tab must live-sync to disconnected state after popup Sign out'
+    );
   } finally {
     cleanup();
     server.closeAllConnections();

@@ -219,5 +219,13 @@ els.copyReportBtn.addEventListener('click', async () => {
   }
 });
 
+if (chrome?.storage?.onChanged?.addListener) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && (changes.signedOut || changes.userProfile)) {
+      loadStatus();
+    }
+  });
+}
+
 initThemeSync();
 loadStatus();

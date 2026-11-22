@@ -700,11 +700,18 @@ async function resolveDriveFolderLink({ prewarmOnly = false } = {}) {
         cachedFolderId: accountCache.folderId,
         accountKey: accountEmail,
       });
-      await saveAccountFolderCache(accountEmail, {
-        folderName: folder.name,
-        folderId: folder.id,
-        folderWebViewLink: folder.webViewLink,
-      });
+      if (
+        folder.id !== accountCache.folderId ||
+        folder.webViewLink !== accountCache.folderWebViewLink ||
+        folder.id !== settings.folderId ||
+        folder.webViewLink !== settings.folderWebViewLink
+      ) {
+        await saveAccountFolderCache(accountEmail, {
+          folderName: folder.name,
+          folderId: folder.id,
+          folderWebViewLink: folder.webViewLink,
+        });
+      }
       return folder.webViewLink;
     },
     { interactive: false }
@@ -730,8 +737,10 @@ async function captureVisibleTabFlow({
   try {
     await hidePageUiBeforeCapture(targetTab.id);
     const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
-    const pngBlob = await dataUrlToBlob(dataUrl);
-    const settings = await getSettings();
+    const [pngBlob, settings] = await Promise.all([
+      dataUrlToBlob(dataUrl),
+      getSettings(),
+    ]);
 
     if (settings.editBeforeUpload) {
       const incognito = Boolean(targetTab?.incognito);
@@ -894,8 +903,10 @@ async function handleRegionSelected(selection, senderTab) {
     }
 
     const dataUrl = await captureVisibleTabSafe(liveTab.windowId);
-    const croppedBlob = await cropPngDataUrl(dataUrl, selection);
-    const settings = await getSettings();
+    const [croppedBlob, settings] = await Promise.all([
+      cropPngDataUrl(dataUrl, selection),
+      getSettings(),
+    ]);
 
     if (settings.editBeforeUpload) {
       const incognito = Boolean(liveTab?.incognito);
@@ -1002,8 +1013,10 @@ async function parseEditedPngDataUrl(dataUrl) {
 }
 
 async function handleSaveEditedScreenshot(message) {
-  const session = await resolveEditorSession(message.sessionId, message.sessionContext);
-  const settings = await getSettings();
+  const [session, settings] = await Promise.all([
+    resolveEditorSession(message.sessionId, message.sessionContext),
+    getSettings(),
+  ]);
   const saveMode = message.saveMode === 'new' ? 'new' : 'replace';
   const imageModified = Boolean(message.imageModified);
   const safeFilename = sanitizeScreenshotFilename(
@@ -1157,13 +1170,19 @@ export function registerServiceWorkerListeners() {
 
           switch (message.type) {
             case 'GET_STATE': {
-              const activeTab = await resolveTargetTab(message.tabId);
-              const [session, settings, recentUploads, capturable] = await Promise.all([
-                getSilentAuthSession(),
-                getSettings(),
-                getRecentUploads(),
-                checkTabCapturable(activeTab),
-              ]);
+              const tabCheckPromise = resolveTargetTab(message.tabId).then(
+                async (tab) => ({
+                  activeTab: tab,
+                  capturable: await checkTabCapturable(tab),
+                })
+              );
+              const [session, settings, recentUploads, { activeTab, capturable }] =
+                await Promise.all([
+                  getSilentAuthSession(),
+                  getSettings(),
+                  getRecentUploads(),
+                  tabCheckPromise,
+                ]);
               if (session?.signedIn && !settings?.folderWebViewLink) {
                 resolveDriveFolderLink({ prewarmOnly: true }).catch(() => {});
               }
@@ -1191,11 +1210,18 @@ export function registerServiceWorkerListeners() {
                   cachedFolderId: accountCache.folderId,
                   accountKey: email,
                 });
-                settings = await saveAccountFolderCache(email, {
-                  folderName: folder.name,
-                  folderId: folder.id,
-                  folderWebViewLink: folder.webViewLink,
-                });
+                if (
+                  folder.id !== accountCache.folderId ||
+                  folder.webViewLink !== accountCache.folderWebViewLink ||
+                  folder.id !== settings.folderId ||
+                  folder.webViewLink !== settings.folderWebViewLink
+                ) {
+                  settings = await saveAccountFolderCache(email, {
+                    folderName: folder.name,
+                    folderId: folder.id,
+                    folderWebViewLink: folder.webViewLink,
+                  });
+                }
               } catch {
                 // Non-fatal if network drops right after consent; upload or OPEN_DRIVE_FOLDER will retry
               }
@@ -1214,6 +1240,8 @@ export function registerServiceWorkerListeners() {
               clearRecentCaptureCache();
               clearAllEditorSessions();
               pendingRegionTabIds.clear();
+              lastErrorCode = '';
+              setBadge('', '');
               await Promise.all([clearSessionStorageArea(), signOut()]);
               sendResponse({ ok: true });
               return;
@@ -1412,8 +1440,10 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_EDITOR_SESSION': {
-              const session = await resolveEditorSession(message.sessionId);
-              const settings = await getSettings();
+              const [session, settings] = await Promise.all([
+                resolveEditorSession(message.sessionId),
+                getSettings(),
+              ]);
 
               if (!session.pngBlob) {
                 if (!session.fileId) {

@@ -589,7 +589,10 @@ els.signOutBtn.addEventListener('click', async () => {
     els.settingsDrawer.hidden = true;
     els.settingsToggleBtn.classList.remove('active');
     renderRecentUploads([]);
-    await loadState();
+    els.setupBanner.hidden = true;
+    els.authError.hidden = true;
+    hideStatus();
+    showView('signed-out');
   } finally {
     els.signOutBtn.disabled = false;
   }

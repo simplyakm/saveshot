@@ -144,7 +144,7 @@ export const SITE_COPY = {
         heading: 'Removing your data and revoking access',
         unorderedList: [
           'Click **Clear** in the popup to remove your local recent uploads list (your files remain in Google Drive).',
-          'Click the **Sign out** icon in the popup to revoke SaveShot\'s local token and clear your cached account info and local recent uploads list.',
+          'Click the **Sign out** icon in the popup to disconnect Google Drive, revoke SaveShot\'s OAuth token, and clear your cached account info and local recent uploads list.',
           'Revoke SaveShot\'s access at any time from your [Google Account Third-Party Connections](https://myaccount.google.com/connections) page.',
           'Uninstalling SaveShot from `chrome://extensions` removes all local data stored by the extension.',
         ],
