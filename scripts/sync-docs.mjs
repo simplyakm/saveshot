@@ -405,6 +405,209 @@ ${cardsHtml}
       <footer>
         <span>${escapeHtml(copy.brandName)} · 100% local in Chrome · No external servers or tracking</span>
         <div>
+          <a href="thanks.html">Say thanks</a> ·
+          <a href="privacy.html">Privacy Policy</a> ·
+          <a href="terms.html">Terms of Service</a> ·
+          <a href="${escapeHtml(copy.urls.authorUrl)}">${escapeHtml(copy.urls.authorHandle)}</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>
+`;
+}
+
+function renderThanksHtml(copy) {
+  const t = copy.thanks;
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
+    <title>${escapeHtml(t.pageTitle)}</title>
+    <meta name="description" content="${escapeHtml(t.lead)}" />
+    <style>
+${SHARED_DOC_CSS}
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .top-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 500;
+        align-self: flex-start;
+      }
+      .top-link img {
+        display: block;
+      }
+      .hero {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 28px 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      h1 {
+        font-size: 25px;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        line-height: 1.24;
+      }
+      .lead {
+        font-size: 15px;
+        color: var(--sub);
+        line-height: 1.58;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      @media (max-width: 600px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .card-top {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .card-meta {
+        align-self: flex-start;
+        font-size: 11.5px;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 6px;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .card-meta.neutral {
+        background: rgba(120, 126, 140, 0.12);
+        color: var(--sub);
+      }
+      .card h2 {
+        font-size: 17px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+      .card p {
+        font-size: 14px;
+        color: var(--sub);
+        line-height: 1.56;
+      }
+      .btn {
+        height: 40px;
+        padding: 0 18px;
+        border-radius: 9px;
+        font-size: 13.5px;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        align-self: flex-start;
+      }
+      .btn:hover {
+        text-decoration: none;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        .btn-primary {
+          color: #0d131f;
+        }
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+      .btn-secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .btn-secondary:hover {
+        background: rgba(120, 126, 140, 0.08);
+      }
+      .note {
+        font-size: 13px;
+        color: var(--muted);
+        text-align: center;
+        padding-top: 2px;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+      footer a {
+        color: var(--sub);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to ${escapeHtml(copy.brandName)}</span></a>
+
+      <section class="hero">
+        <h1>${escapeHtml(t.heading)}</h1>
+        <p class="lead">${inlineMarkdownToHtml(t.lead)}</p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-meta">${escapeHtml(t.reviewCard.meta)}</span>
+            <h2>${escapeHtml(t.reviewCard.heading)}</h2>
+            <p>${inlineMarkdownToHtml(t.reviewCard.body)}</p>
+          </div>
+          <a class="btn btn-primary" href="${escapeHtml(copy.urls.chromeWebStoreReviews)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.reviewCard.cta)}</a>
+        </div>
+
+        <div class="card">
+          <div class="card-top">
+            <span class="card-meta neutral">${escapeHtml(t.thankYouCard.meta)}</span>
+            <h2>${escapeHtml(t.thankYouCard.heading)}</h2>
+            <p>${inlineMarkdownToHtml(t.thankYouCard.body)}</p>
+          </div>
+          <a class="btn btn-secondary" href="${escapeHtml(copy.urls.topmateThanks)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.thankYouCard.cta)}</a>
+        </div>
+      </section>
+
+      <p class="note">${inlineMarkdownToHtml(t.feedbackNote)}</p>
+
+      <footer>
+        <span>${escapeHtml(copy.brandName)} · 100% local in Chrome · No external servers or tracking</span>
+        <div>
+          <a href="index.html">Website</a> ·
           <a href="privacy.html">Privacy Policy</a> ·
           <a href="terms.html">Terms of Service</a> ·
           <a href="${escapeHtml(copy.urls.authorUrl)}">${escapeHtml(copy.urls.authorHandle)}</a>
@@ -526,16 +729,8 @@ PRIVACY FIRST BY DESIGN
 `;
 }
 
-export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
-  const linkMap = [
-    ['repo-issues-link', copy.urls.githubIssues],
-    ['welcome-site-link', copy.urls.homepage],
-    ['welcome-privacy-link', copy.urls.privacyHtml],
-    ['welcome-terms-link', copy.urls.termsHtml],
-    ['welcome-author-link', copy.urls.authorUrl],
-  ];
-
-  let nextHtml = String(welcomeHtml);
+function syncAnchorHrefs(rawHtml, linkMap) {
+  let nextHtml = String(rawHtml);
   for (const [id, url] of linkMap) {
     const anchorRe = new RegExp(`(<a\\b[^>]*\\bid="${id}"[^>]*>)`, 'm');
     nextHtml = nextHtml.replace(anchorRe, (anchorTag) =>
@@ -545,12 +740,31 @@ export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
   return nextHtml;
 }
 
+export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
+  return syncAnchorHrefs(welcomeHtml, [
+    ['repo-issues-link', copy.urls.githubIssues],
+    ['welcome-site-link', copy.urls.homepage],
+    ['welcome-thanks-link', copy.urls.thanksHtml],
+    ['welcome-privacy-link', copy.urls.privacyHtml],
+    ['welcome-terms-link', copy.urls.termsHtml],
+    ['welcome-author-link', copy.urls.authorUrl],
+  ]);
+}
+
+export function syncPopupHtmlLinks(popupHtml, copy = SITE_COPY) {
+  return syncAnchorHrefs(popupHtml, [
+    ['footer-thanks-link', copy.urls.thanksHtml],
+    ['footer-author-link', copy.urls.authorUrl],
+  ]);
+}
+
 export function buildGeneratedFiles(copy = SITE_COPY) {
   return {
     'README.md': renderReadmeMarkdown(copy),
     'PRIVACY.md': renderPolicyMarkdown(copy.privacy, copy),
     'TERMS.md': renderPolicyMarkdown(copy.terms, copy),
     'docs/index.html': renderIndexHtml(copy),
+    'docs/thanks.html': renderThanksHtml(copy),
     'docs/privacy.html': renderPolicyHtml(copy.privacy, `Privacy Policy - ${copy.brandName}`, copy),
     'docs/terms.html': renderPolicyHtml(copy.terms, `Terms of Service - ${copy.brandName}`, copy),
     'store-assets/STORE_LISTING_SEO.md': renderStoreSeoMarkdown(copy),
@@ -573,10 +787,20 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     );
   }
 
-  // Sync welcome.html footer and GitHub issue links from SITE_COPY.urls
+  // Sync welcome.html and popup.html footer links from SITE_COPY.urls
   const welcomePath = path.join(rootDir, 'pages/welcome.html');
-  const currentWelcome = fs.readFileSync(welcomePath, 'utf8');
-  fs.writeFileSync(welcomePath, syncWelcomeHtmlLinks(currentWelcome, SITE_COPY), 'utf8');
+  fs.writeFileSync(
+    welcomePath,
+    syncWelcomeHtmlLinks(fs.readFileSync(welcomePath, 'utf8'), SITE_COPY),
+    'utf8'
+  );
+
+  const popupPath = path.join(rootDir, 'popup/popup.html');
+  fs.writeFileSync(
+    popupPath,
+    syncPopupHtmlLinks(fs.readFileSync(popupPath, 'utf8'), SITE_COPY),
+    'utf8'
+  );
 
   // Also sync manifest.json and package.json shared metadata
   const manifestPath = path.join(rootDir, 'manifest.json');

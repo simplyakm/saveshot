@@ -2496,9 +2496,12 @@ test('all repository source, UI, and documentation files contain no em dashes or
 
   // Verify centralized content source of truth stays 100% synced across Markdown, HTML, and metadata
   const { SITE_COPY } = await import('../content-source/site-copy.mjs');
-  const { buildGeneratedFiles, inlineMarkdownToHtml, syncWelcomeHtmlLinks } = await import(
-    '../scripts/sync-docs.mjs'
-  );
+  const {
+    buildGeneratedFiles,
+    inlineMarkdownToHtml,
+    syncPopupHtmlLinks,
+    syncWelcomeHtmlLinks,
+  } = await import('../scripts/sync-docs.mjs');
 
   assert.equal(
     inlineMarkdownToHtml('Use `<script>` & **Save** at [Site](https://example.com)'),
@@ -2531,8 +2534,17 @@ test('all repository source, UI, and documentation files contain no em dashes or
     'welcome.html links drifted from content-source/site-copy.mjs (run npm run sync:docs)'
   );
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.homepage}"`), 'welcome.html must link to centralized Website URL');
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.thanksHtml}"`), 'welcome.html must link to centralized Say thanks URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.privacyHtml}"`), 'welcome.html must link to centralized Privacy URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.termsHtml}"`), 'welcome.html must link to centralized Terms URL');
+
+  const popupHtml = fs.readFileSync(path.join(rootDir, 'popup/popup.html'), 'utf8');
+  assert.equal(
+    popupHtml,
+    syncPopupHtmlLinks(popupHtml, SITE_COPY),
+    'popup.html links drifted from content-source/site-copy.mjs (run npm run sync:docs)'
+  );
+  assert.ok(popupHtml.includes(`href="${SITE_COPY.urls.thanksHtml}"`), 'popup.html footer must link to centralized Say thanks URL');
 
   // Lock canonical SaveShot icons and verified store assets by SHA-256 so they are never regenerated or altered by mistake
   const { createHash } = await import('node:crypto');
@@ -2603,10 +2615,21 @@ test('all repository source, UI, and documentation files contain no em dashes or
   const indexHtml = fs.readFileSync(path.join(rootDir, 'docs/index.html'), 'utf8');
   assert.ok(indexHtml.includes('src="icon128.png"'), 'docs/index.html must render canonical icon128.png');
   assert.ok(!indexHtml.includes('brand-badge'), 'docs/index.html must never use a hand-drawn SVG brand badge');
+  assert.equal((indexHtml.match(/href="thanks\.html"/g) || []).length, 1, 'thanks.html should appear once in docs/index.html footer');
   assert.equal((indexHtml.match(/href="privacy\.html"/g) || []).length, 1, 'privacy.html should appear once in docs/index.html footer');
   assert.equal((indexHtml.match(/href="terms\.html"/g) || []).length, 1, 'terms.html should appear once in docs/index.html footer');
 
-  for (const webPage of ['docs/index.html', 'docs/privacy.html', 'docs/terms.html']) {
+  const thanksHtml = fs.readFileSync(path.join(rootDir, 'docs/thanks.html'), 'utf8');
+  assert.ok(
+    thanksHtml.includes(`href="${SITE_COPY.urls.chromeWebStoreReviews}"`),
+    'docs/thanks.html must link directly to Chrome Web Store reviews tab'
+  );
+  assert.ok(
+    thanksHtml.includes(`href="${SITE_COPY.urls.topmateThanks}"`),
+    'docs/thanks.html must link to Topmate thank-you page'
+  );
+
+  for (const webPage of ['docs/index.html', 'docs/thanks.html', 'docs/privacy.html', 'docs/terms.html']) {
     const html = fs.readFileSync(path.join(rootDir, webPage), 'utf8');
     assert.ok(html.includes('href="icon32.png"'), `${webPage} must include official icon32.png favicon`);
     assert.ok(!html.includes('github.com/simplyakm/saveshot'), `${webPage} must not include GitHub source/repo links`);

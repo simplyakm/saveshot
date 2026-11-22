@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google-site-verification" content="ZyYQoDsqlo22U-Vpm9XZtIMK0I0vTFF3RJLMP6pkOpE" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
+    <title>Say Thanks - SaveShot</title>
+    <meta name="description" content="SaveShot is free, ad-free, and runs 100% locally in Chrome with no subscriptions or tracking. If it helps in your daily work, here are two simple ways to support it." />
+    <style>
+      :root {
+        --bg: #f5f6f8;
+        --card: #ffffff;
+        --text: #141518;
+        --sub: #525866;
+        --muted: #767c89;
+        --border: rgba(15, 18, 24, 0.09);
+        --accent: #1a73e8;
+        --accent-hover: #155fc4;
+        --accent-soft: rgba(26, 115, 232, 0.09);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131416;
+          --card: #1c1d20;
+          --text: #f3f4f6;
+          --sub: #a6abb6;
+          --muted: #7c828f;
+          --border: rgba(255, 255, 255, 0.09);
+          --accent: #5b9df9;
+          --accent-hover: #428bf7;
+          --accent-soft: rgba(91, 157, 249, 0.14);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.65;
+        padding: 44px 20px 64px;
+        -webkit-font-smoothing: antialiased;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12.5px;
+        background: var(--accent-soft);
+        color: var(--text);
+        padding: 2px 5px;
+        border-radius: 4px;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .top-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 500;
+        align-self: flex-start;
+      }
+      .top-link img {
+        display: block;
+      }
+      .hero {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 28px 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      h1 {
+        font-size: 25px;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        line-height: 1.24;
+      }
+      .lead {
+        font-size: 15px;
+        color: var(--sub);
+        line-height: 1.58;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      @media (max-width: 600px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .card-top {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .card-meta {
+        align-self: flex-start;
+        font-size: 11.5px;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 6px;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .card-meta.neutral {
+        background: rgba(120, 126, 140, 0.12);
+        color: var(--sub);
+      }
+      .card h2 {
+        font-size: 17px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+      .card p {
+        font-size: 14px;
+        color: var(--sub);
+        line-height: 1.56;
+      }
+      .btn {
+        height: 40px;
+        padding: 0 18px;
+        border-radius: 9px;
+        font-size: 13.5px;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        align-self: flex-start;
+      }
+      .btn:hover {
+        text-decoration: none;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        .btn-primary {
+          color: #0d131f;
+        }
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+      .btn-secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .btn-secondary:hover {
+        background: rgba(120, 126, 140, 0.08);
+      }
+      .note {
+        font-size: 13px;
+        color: var(--muted);
+        text-align: center;
+        padding-top: 2px;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+      footer a {
+        color: var(--sub);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to SaveShot</span></a>
+
+      <section class="hero">
+        <h1>Glad SaveShot saves you time.</h1>
+        <p class="lead">SaveShot is free, ad-free, and runs 100% locally in Chrome with no subscriptions or tracking. If it helps in your daily work, here are two simple ways to support it.</p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-meta">Free · 15 seconds</span>
+            <h2>Leave a quick review</h2>
+            <p>Honest ratings and reviews on the Chrome Web Store are the biggest help for a small independent extension to get discovered by more people.</p>
+          </div>
+          <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/reviews" target="_blank" rel="noopener noreferrer">Rate on Chrome Web Store</a>
+        </div>
+
+        <div class="card">
+          <div class="card-top">
+            <span class="card-meta neutral">Optional · One-time</span>
+            <h2>Send a thank-you</h2>
+            <p>Never expected, always appreciated. If you want to back independent, privacy-first tools, you can send a small thank-you (and a note on how you use SaveShot).</p>
+          </div>
+          <a class="btn btn-secondary" href="https://topmate.io/simplyakm/2420618" target="_blank" rel="noopener noreferrer">Send a thank-you</a>
+        </div>
+      </section>
+
+      <p class="note">Found a bug or want a feature instead? Use <strong>Report bug</strong> inside the SaveShot popup or message <a href="https://x.com/_simplyakm" target="_blank" rel="noopener noreferrer">@_simplyakm</a>.</p>
+
+      <footer>
+        <span>SaveShot · 100% local in Chrome · No external servers or tracking</span>
+        <div>
+          <a href="index.html">Website</a> ·
+          <a href="privacy.html">Privacy Policy</a> ·
+          <a href="terms.html">Terms of Service</a> ·
+          <a href="https://x.com/_simplyakm">@_simplyakm</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>
