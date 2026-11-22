@@ -285,17 +285,25 @@ function stageRealExtensionFiles(stageDir) {
         }
 
         document.getElementById('loading-view').hidden = true;
+        document.getElementById('main-view').hidden = false;
+        document.getElementById('settings-toggle-btn').hidden = false;
         document.getElementById('popup-version').textContent = ${JSON.stringify(`v${SITE_COPY.version}`)};
         document.getElementById('footer-author-link').textContent = ${JSON.stringify(SITE_COPY.urls.authorHandle)};
         document.getElementById('popup-shortcut-region').textContent = ${JSON.stringify(SITE_COPY.shortcuts.region.display)};
         document.getElementById('popup-shortcut-visible').textContent = ${JSON.stringify(SITE_COPY.shortcuts.visible.display)};
 
         if (${JSON.stringify(isSignedOut)}) {
+          document.getElementById('open-drive-btn').hidden = true;
+          document.getElementById('sign-out-btn').hidden = true;
           document.getElementById('signed-out-view').hidden = false;
+          document.getElementById('account-folder-card').hidden = true;
+          document.getElementById('recent-section').hidden = true;
         } else {
-          document.getElementById('main-view').hidden = false;
-          document.getElementById('header-actions').hidden = false;
+          document.getElementById('open-drive-btn').hidden = false;
           document.getElementById('sign-out-btn').hidden = false;
+          document.getElementById('signed-out-view').hidden = true;
+          document.getElementById('account-folder-card').hidden = false;
+          document.getElementById('recent-section').hidden = false;
           document.getElementById('user-avatar').textContent = 'A';
           document.getElementById('user-email').textContent = 'alex@workspace.io';
           document.getElementById('folder-chip-name').textContent = ${JSON.stringify(SITE_COPY.defaultFolderName)};

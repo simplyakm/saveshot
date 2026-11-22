@@ -25,7 +25,7 @@
 ## 3. Copy-Paste Full Store Description
 
 ```text
-SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive, with one-click PNG download to your computer anytime. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs locally in Chrome with no external servers, no tracking, and no external dependencies.
 
 Every screenshot uploads straight from your Chrome browser to your own Google Drive account (with the shareable link copied automatically), and you can download a PNG copy to your computer in one click anytime.
 

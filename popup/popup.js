@@ -11,7 +11,6 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const els = {
   helpBtn: document.getElementById('help-btn'),
-  headerActions: document.getElementById('header-actions'),
   openDriveBtn: document.getElementById('open-drive-btn'),
   settingsToggleBtn: document.getElementById('settings-toggle-btn'),
   signOutBtn: document.getElementById('sign-out-btn'),
@@ -21,11 +20,14 @@ const els = {
   signInBtn: document.getElementById('sign-in-btn'),
   authError: document.getElementById('auth-error'),
   mainView: document.getElementById('main-view'),
+  accountFolderCard: document.getElementById('account-folder-card'),
   userAvatar: document.getElementById('user-avatar'),
   userEmail: document.getElementById('user-email'),
   folderChip: document.getElementById('folder-chip'),
   folderChipName: document.getElementById('folder-chip-name'),
   settingsDrawer: document.getElementById('settings-drawer'),
+  driveFolderField: document.getElementById('drive-folder-field'),
+  driveOptionsGroup: document.getElementById('drive-options-group'),
   folderNameInput: document.getElementById('folder-name-input'),
   saveFolderBtn: document.getElementById('save-folder-btn'),
   themeSegmented: document.getElementById('theme-segmented'),
@@ -38,6 +40,7 @@ const els = {
   shortcutRegion: document.getElementById('popup-shortcut-region'),
   shortcutVisible: document.getElementById('popup-shortcut-visible'),
   statusBanner: document.getElementById('status-banner'),
+  recentSection: document.getElementById('recent-section'),
   clearHistoryBtn: document.getElementById('clear-history-btn'),
   emptyHistory: document.getElementById('empty-history'),
   uploadList: document.getElementById('upload-list'),
@@ -45,7 +48,10 @@ const els = {
   footerBugBtn: document.getElementById('footer-bug-btn'),
 };
 
+let authActionInFlight = false;
+
 let currentState = {
+  signedIn: false,
   activeTabId: undefined,
   incognito: false,
   lastErrorCode: '',
@@ -463,7 +469,7 @@ function updateCaptureAvailability() {
   els.captureVisibleBtn.disabled = currentState.busy || !canVisible;
   els.captureRegionBtn.disabled = currentState.busy || !canRegion;
 
-  els.incognitoNotice.hidden = !currentState.incognito;
+  els.incognitoNotice.hidden = !(currentState.signedIn && currentState.incognito);
 
   const warningMsg = !canVisible
     ? cap.reason
@@ -479,12 +485,27 @@ function updateCaptureAvailability() {
   }
 }
 
-function showView(viewName) {
-  els.loadingView.hidden = viewName !== 'loading';
-  els.signedOutView.hidden = viewName !== 'signed-out';
-  els.mainView.hidden = viewName !== 'main';
-  els.headerActions.hidden = viewName !== 'main';
-  els.signOutBtn.hidden = viewName !== 'main';
+function showView(viewName, { signedIn = false, needsSetup = false } = {}) {
+  if (viewName === 'loading') {
+    els.loadingView.hidden = false;
+    els.mainView.hidden = true;
+    els.openDriveBtn.hidden = true;
+    els.settingsToggleBtn.hidden = true;
+    els.signOutBtn.hidden = true;
+    return;
+  }
+
+  els.loadingView.hidden = true;
+  els.mainView.hidden = false;
+  els.settingsToggleBtn.hidden = false;
+  els.openDriveBtn.hidden = !signedIn;
+  els.signOutBtn.hidden = !signedIn;
+  els.signedOutView.hidden = signedIn;
+  els.accountFolderCard.hidden = !signedIn;
+  els.recentSection.hidden = !signedIn;
+  els.driveFolderField.hidden = !signedIn;
+  els.driveOptionsGroup.hidden = !signedIn;
+  els.setupBanner.hidden = signedIn || !needsSetup;
 }
 
 function initStaticMetadata() {
@@ -508,8 +529,10 @@ function initStaticMetadata() {
   }
 }
 
-async function loadState() {
-  showView('loading');
+async function loadState({ showSpinner = true } = {}) {
+  if (showSpinner) {
+    showView('loading');
+  }
   try {
     currentState.activeTabId = await getPopupWindowTabId();
     const res = await sendRuntimeMessage({
@@ -527,28 +550,35 @@ async function loadState() {
     currentState.lastErrorCode = res.lastErrorCode || '';
 
     if (res.settings) {
-      renderThemeButtons(res.settings.theme);
+      renderSettings(res.settings);
     }
 
     if (!res.session?.signedIn) {
+      currentState.signedIn = false;
       renderRecentUploads([]);
-      els.setupBanner.hidden = !res.session?.needsSetup;
       els.authError.hidden = true;
-      showView('signed-out');
+      updateCaptureAvailability();
+      hideStatus();
+      showView('main', {
+        signedIn: false,
+        needsSetup: Boolean(res.session?.needsSetup),
+      });
       return;
     }
 
+    currentState.signedIn = true;
     renderProfile(res.session.profile);
-    renderSettings(res.settings);
     renderRecentUploads(res.recentUploads);
     updateCaptureAvailability();
     hideStatus();
-    showView('main');
+    showView('main', { signedIn: true, needsSetup: false });
   } catch (err) {
+    currentState.signedIn = false;
     els.authError.textContent = err.message || 'Could not load SaveShot.';
     els.authError.className = 'ss-alert error';
     els.authError.hidden = false;
-    showView('signed-out');
+    updateCaptureAvailability();
+    showView('main', { signedIn: false, needsSetup: false });
   }
 }
 
@@ -564,6 +594,7 @@ els.footerBugBtn.addEventListener('click', () =>
 els.signInBtn.addEventListener('click', async () => {
   els.signInBtn.disabled = true;
   els.authError.hidden = true;
+  authActionInFlight = true;
   try {
     const res = await sendRuntimeMessage({ type: 'SIGN_IN' });
     if (!res.ok) {
@@ -571,29 +602,33 @@ els.signInBtn.addEventListener('click', async () => {
       err.code = res.code;
       throw err;
     }
-    await loadState();
+    await loadState({ showSpinner: false });
   } catch (err) {
     els.authError.textContent = err.message || 'Google sign-in failed.';
     els.authError.className =
       err.code === 'AUTH_CANCELLED' ? 'ss-alert warning' : 'ss-alert error';
     els.authError.hidden = false;
   } finally {
+    authActionInFlight = false;
     els.signInBtn.disabled = false;
   }
 });
 
 els.signOutBtn.addEventListener('click', async () => {
   els.signOutBtn.disabled = true;
+  authActionInFlight = true;
   try {
     await sendRuntimeMessage({ type: 'SIGN_OUT' });
+    currentState.signedIn = false;
     els.settingsDrawer.hidden = true;
     els.settingsToggleBtn.classList.remove('active');
     renderRecentUploads([]);
-    els.setupBanner.hidden = true;
     els.authError.hidden = true;
     hideStatus();
-    showView('signed-out');
+    updateCaptureAvailability();
+    showView('main', { signedIn: false, needsSetup: false });
   } finally {
+    authActionInFlight = false;
     els.signOutBtn.disabled = false;
   }
 });
@@ -656,7 +691,8 @@ els.captureVisibleBtn.addEventListener('click', async () => {
   currentState.busy = true;
   updateCaptureAvailability();
   const folderName = currentState.settings?.folderName || 'Chrome_SaveShot_ScreenShots';
-  const willOpenEditor = Boolean(currentState.settings?.editBeforeUpload);
+  const willOpenEditor =
+    !currentState.signedIn || Boolean(currentState.settings?.editBeforeUpload);
   showStatus(
     'loading',
     willOpenEditor ? 'Opening screenshot editor...' : `Uploading to "${folderName}"...`
@@ -792,6 +828,19 @@ els.clearHistoryBtn.addEventListener('click', async () => {
   const res = await sendRuntimeMessage({ type: 'CLEAR_HISTORY' });
   if (res.ok) renderRecentUploads([]);
 });
+
+if (chrome?.storage?.onChanged?.addListener) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || authActionInFlight) return;
+    if (changes.signedOut || changes.userProfile) {
+      loadState({ showSpinner: false });
+      return;
+    }
+    if (changes.recentUploads && currentState.signedIn) {
+      renderRecentUploads(changes.recentUploads.newValue || []);
+    }
+  });
+}
 
 initThemeSync();
 initStaticMetadata();

@@ -370,32 +370,30 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
   }
 
   if (fallbackContext && typeof fallbackContext === 'object') {
-    const auth = await getAuthState();
-    if (!auth.signedOut) {
-      const mode = fallbackContext.mode === 'new' ? 'new' : 'existing';
-      const fileId =
-        mode === 'existing' && fallbackContext.fileId
-          ? validateDriveFileId(fallbackContext.fileId)
-          : null;
+    const mode = fallbackContext.mode === 'new' ? 'new' : 'existing';
+    const auth = mode === 'existing' ? await getAuthState() : null;
+    const fileId =
+      mode === 'existing' && !auth?.signedOut && fallbackContext.fileId
+        ? validateDriveFileId(fallbackContext.fileId)
+        : null;
 
-      if (mode === 'new' || fileId) {
-        const reconstructed = {
-          sessionId,
-          mode,
-          fileId,
-          filename: sanitizeScreenshotFilename(fallbackContext.filename || 'Screenshot.png'),
-          folderName: fallbackContext.folderName || 'Chrome_SaveShot_ScreenShots',
-          webViewLink: typeof fallbackContext.webViewLink === 'string' ? fallbackContext.webViewLink : '',
-          pngBlob: null,
-          pageUrl: typeof fallbackContext.pageUrl === 'string' ? fallbackContext.pageUrl : '',
-          pageTitle: typeof fallbackContext.pageTitle === 'string' ? fallbackContext.pageTitle : '',
-          captureMode: fallbackContext.captureMode === 'region' ? 'region' : 'visible',
-          incognito: Boolean(fallbackContext.incognito),
-        };
-        putRamEditorSession(reconstructed);
-        await persistEditorSessionMeta(reconstructed);
-        return reconstructed;
-      }
+    if (mode === 'new' || fileId) {
+      const reconstructed = {
+        sessionId,
+        mode,
+        fileId,
+        filename: sanitizeScreenshotFilename(fallbackContext.filename || 'Screenshot.png'),
+        folderName: fallbackContext.folderName || 'Chrome_SaveShot_ScreenShots',
+        webViewLink: typeof fallbackContext.webViewLink === 'string' ? fallbackContext.webViewLink : '',
+        pngBlob: null,
+        pageUrl: typeof fallbackContext.pageUrl === 'string' ? fallbackContext.pageUrl : '',
+        pageTitle: typeof fallbackContext.pageTitle === 'string' ? fallbackContext.pageTitle : '',
+        captureMode: fallbackContext.captureMode === 'region' ? 'region' : 'visible',
+        incognito: Boolean(fallbackContext.incognito),
+      };
+      putRamEditorSession(reconstructed);
+      await persistEditorSessionMeta(reconstructed);
+      return reconstructed;
     }
   }
 
@@ -737,29 +735,17 @@ async function captureVisibleTabFlow({
   try {
     await hidePageUiBeforeCapture(targetTab.id);
     const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
-    const [pngBlob, settings] = await Promise.all([
+    const [pngBlob, settings, authSession] = await Promise.all([
       dataUrlToBlob(dataUrl),
       getSettings(),
+      getSilentAuthSession(),
     ]);
 
-    if (settings.editBeforeUpload) {
+    if (settings.editBeforeUpload || !authSession.signedIn) {
       const incognito = Boolean(targetTab?.incognito);
       const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
         incognito,
       });
-      const authSession = await getSilentAuthSession();
-      if (!authSession.signedIn) {
-        storeFallbackCapture(pngBlob, filename);
-        const authErr = new SaveShotError({
-          code: 'AUTH_REQUIRED',
-          userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
-          requiresReauth: true,
-          recoverableWithLocalSave: true,
-        });
-        authErr.hasFallback = true;
-        authErr.fallbackFilename = filename;
-        throw authErr;
-      }
       const session = await createEditorSession({
         mode: 'new',
         fileId: null,
@@ -863,15 +849,6 @@ async function startRegionCaptureFlow({ tab, tabId } = {}) {
     });
   }
 
-  const session = await getSilentAuthSession();
-  if (!session.signedIn) {
-    throw new SaveShotError({
-      code: 'AUTH_REQUIRED',
-      userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
-      requiresReauth: true,
-    });
-  }
-
   const response = await sendMessageToContentScript(targetTab.id, {
     type: 'START_REGION_SELECT',
   });
@@ -903,29 +880,17 @@ async function handleRegionSelected(selection, senderTab) {
     }
 
     const dataUrl = await captureVisibleTabSafe(liveTab.windowId);
-    const [croppedBlob, settings] = await Promise.all([
+    const [croppedBlob, settings, authSession] = await Promise.all([
       cropPngDataUrl(dataUrl, selection),
       getSettings(),
+      getSilentAuthSession(),
     ]);
 
-    if (settings.editBeforeUpload) {
+    if (settings.editBeforeUpload || !authSession.signedIn) {
       const incognito = Boolean(liveTab?.incognito);
       const filename = buildScreenshotFilename(liveTab?.url || '', new Date(), {
         incognito,
       });
-      const authSession = await getSilentAuthSession();
-      if (!authSession.signedIn) {
-        storeFallbackCapture(croppedBlob, filename);
-        const authErr = new SaveShotError({
-          code: 'AUTH_REQUIRED',
-          userMessage: 'Connect Google Drive first by clicking the SaveShot icon in Chrome.',
-          requiresReauth: true,
-          recoverableWithLocalSave: true,
-        });
-        authErr.hasFallback = true;
-        authErr.fallbackFilename = filename;
-        throw authErr;
-      }
       const session = await createEditorSession({
         mode: 'new',
         fileId: null,
@@ -1090,6 +1055,7 @@ async function handleSaveEditedScreenshot(message) {
     return {
       ok: true,
       action: 'replaced',
+      signedIn: true,
       upload: {
         id: updatedFile.id,
         name: updatedFile.name,
@@ -1106,6 +1072,14 @@ async function handleSaveEditedScreenshot(message) {
       ? await parseEditedPngDataUrl(message.dataUrl)
       : session.pngBlob;
 
+  const authSession = await getSilentAuthSession();
+  let activeSettings = settings;
+  if (!authSession.signedIn) {
+    await signIn();
+    lastErrorCode = '';
+    activeSettings = await getSettings();
+  }
+
   const result = await uploadCapturedBlob({
     pngBlob: uploadBlob,
     tab: {
@@ -1116,8 +1090,10 @@ async function handleSaveEditedScreenshot(message) {
     mode: session.captureMode,
     interactiveAuth: false,
     customFilename: safeFilename,
-    initialSettings: settings,
+    initialSettings: activeSettings,
   });
+
+  setBadge('✓', '#15803d', 3000);
 
   // Transition session to existing file so any subsequent save updates this uploaded file
   session.mode = 'existing';
@@ -1132,6 +1108,7 @@ async function handleSaveEditedScreenshot(message) {
   return {
     ok: true,
     action: 'created',
+    signedIn: true,
     upload: {
       id: result.upload.id,
       name: result.upload.name,
@@ -1440,9 +1417,10 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_EDITOR_SESSION': {
-              const [session, settings] = await Promise.all([
+              const [session, settings, authSession] = await Promise.all([
                 resolveEditorSession(message.sessionId),
                 getSettings(),
+                getSilentAuthSession(),
               ]);
 
               if (!session.pngBlob) {
@@ -1470,6 +1448,7 @@ export function registerServiceWorkerListeners() {
                 session: {
                   sessionId: session.sessionId,
                   mode: session.mode,
+                  signedIn: Boolean(authSession?.signedIn),
                   fileId: session.fileId,
                   filename: session.filename,
                   folderName: session.folderName || settings.folderName,

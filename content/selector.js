@@ -967,9 +967,23 @@
       }
       clearActiveOverlay();
       removeHostElement(TOAST_HOST_ID);
+      if (document.hidden) {
+        sendResponse({ ok: true, removed: true });
+        return;
+      }
+      let responded = false;
+      const done = () => {
+        if (responded) return;
+        responded = true;
+        sendResponse({ ok: true, removed: true });
+      };
+      const fallbackTimer = setTimeout(done, 120);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          setTimeout(() => sendResponse({ ok: true, removed: true }), 20);
+          setTimeout(() => {
+            clearTimeout(fallbackTimer);
+            done();
+          }, 20);
         });
       });
       return true;

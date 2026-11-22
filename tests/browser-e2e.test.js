@@ -33,7 +33,8 @@ function connectCdp(wsUrl) {
             const msgId = ++id;
             const timer = setTimeout(() => {
               pending.delete(msgId);
-              rej(new Error(`CDP timeout on ${method}`));
+              const detail = params?.expression ? ` (${String(params.expression).slice(0, 120)})` : '';
+              rej(new Error(`CDP timeout on ${method}${detail}`));
             }, 10000);
             pending.set(msgId, {
               res: (v) => {
@@ -266,20 +267,55 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     }
     const popupCheck = await evalIn(
       extPageSession,
-      `(() => ({
-        signedOutVisible: !document.getElementById('signed-out-view').hidden,
-        signedOutCopy: document.querySelector('#signed-out-view .hero-copy p')?.textContent?.trim() || '',
-        setupBannerVisible: !document.getElementById('setup-banner').hidden,
-        hasHelpBtn: Boolean(document.getElementById('help-btn')),
-        hasOpenDriveBtn: Boolean(document.getElementById('open-drive-btn')),
-        hasBugFooterBtn: Boolean(document.getElementById('footer-bug-btn')),
-      }))()`
+      `(() => {
+        const gridRect = document.querySelector('.capture-grid').getBoundingClientRect();
+        const cardRect = document.getElementById('signed-out-view').getBoundingClientRect();
+        document.getElementById('settings-toggle-btn').click();
+        const drawerVisible = !document.getElementById('settings-drawer').hidden;
+        const themeVisible = !document.getElementById('theme-segmented').hidden;
+        const driveFolderHidden = document.getElementById('drive-folder-field').hidden;
+        const driveOptsHidden = document.getElementById('drive-options-group').hidden;
+        document.getElementById('settings-toggle-btn').click();
+        return {
+          mainVisible: !document.getElementById('main-view').hidden,
+          signedOutVisible: !document.getElementById('signed-out-view').hidden,
+          accountCardHidden: document.getElementById('account-folder-card').hidden,
+          recentHidden: document.getElementById('recent-section').hidden,
+          captureAboveCard: gridRect.bottom <= cardRect.top,
+          signedOutHeading: document.querySelector('#signed-out-view h2')?.textContent?.trim() || '',
+          signedOutCopy: document.querySelector('#signed-out-view .connect-desc')?.textContent?.trim() || '',
+          setupBannerVisible: !document.getElementById('setup-banner').hidden,
+          settingsBtnVisible: !document.getElementById('settings-toggle-btn').hidden,
+          openDriveHidden: document.getElementById('open-drive-btn').hidden,
+          signOutHidden: document.getElementById('sign-out-btn').hidden,
+          drawerVisible,
+          themeVisible,
+          driveFolderHidden,
+          driveOptsHidden,
+          hasHelpBtn: Boolean(document.getElementById('help-btn')),
+          hasOpenDriveBtn: Boolean(document.getElementById('open-drive-btn')),
+          hasBugFooterBtn: Boolean(document.getElementById('footer-bug-btn')),
+        };
+      })()`
     );
+    assert.equal(popupCheck.mainVisible, true);
     assert.equal(popupCheck.signedOutVisible, true);
-    assert.match(popupCheck.signedOutCopy, /directly from Chrome to your Google Drive/);
-    assert.match(popupCheck.signedOutCopy, /download to your computer in one click/);
-    assert.match(popupCheck.signedOutCopy, /No external servers, no tracking/);
+    assert.equal(popupCheck.accountCardHidden, true);
+    assert.equal(popupCheck.recentHidden, true);
+    assert.equal(popupCheck.captureAboveCard, true, 'Capture tiles must sit above Connect Google Drive card');
+    assert.equal(popupCheck.signedOutHeading, 'Autosave to your Google Drive');
+    assert.equal(
+      popupCheck.signedOutCopy,
+      'Never lose a shot, with easy download and link sharing. Privacy-first, no external servers or tracking.'
+    );
     assert.equal(popupCheck.setupBannerVisible, expectedNeedsSetup);
+    assert.equal(popupCheck.settingsBtnVisible, true, 'Settings gear must be accessible when signed out');
+    assert.equal(popupCheck.openDriveHidden, true);
+    assert.equal(popupCheck.signOutHidden, true);
+    assert.equal(popupCheck.drawerVisible, true);
+    assert.equal(popupCheck.themeVisible, true);
+    assert.equal(popupCheck.driveFolderHidden, true, 'Drive folder setting must hide when signed out');
+    assert.equal(popupCheck.driveOptsHidden, true, 'Drive upload checkboxes must hide when signed out');
     assert.equal(popupCheck.hasHelpBtn, true);
     assert.equal(popupCheck.hasOpenDriveBtn, true);
     assert.equal(popupCheck.hasBugFooterBtn, true);
@@ -582,6 +618,20 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       'Releasing drag must never click underlying page buttons'
     );
 
+    // Dragging a region while signed out opens the local Editor tab directly; verify and close it before Section 3
+    let hostileLocalEditor = null;
+    for (let i = 0; i < 20; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      hostileLocalEditor = targetInfos.find(
+        (t) => t.type === 'page' && t.url.includes('/pages/editor.html?session=')
+      );
+      if (hostileLocalEditor) break;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    assert.ok(hostileLocalEditor, 'Signed-out region drag must open local Editor tab');
+    await cdp.send('Target.closeTarget', { targetId: hostileLocalEditor.targetId });
+    await evalIn(swSession, `chrome.tabs.update(${testTabInfo.tabId}, { active: true })`);
+
     // -------------------------------------------------------------------------
     // 3. Strict Bank-Grade CSP + Zero-Data-Loss Local Save Fallback Toast
     // -------------------------------------------------------------------------
@@ -808,7 +858,9 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     for (let i = 0; i < 20; i += 1) {
       const { targetInfos } = await cdp.send('Target.getTargets');
       editorTarget = targetInfos.find(
-        (t) => t.type === 'page' && t.url.includes('/pages/editor.html?session=')
+        (t) =>
+          t.type === 'page' &&
+          t.url.includes(`/pages/editor.html?session=${openEditorRes.sessionId}`)
       );
       if (editorTarget) break;
       await new Promise((r) => setTimeout(r, 120));
@@ -1068,11 +1120,17 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           });
 
         const topbarBtns = measureBtns([
+          'editor-help-btn',
           'download-btn',
           'copy-link-btn',
-          'open-drive-link',
           'save-drive-btn',
         ]);
+        const pencilRect = document.getElementById('rename-pencil-btn').getBoundingClientRect();
+        const openDriveRect = document.getElementById('open-drive-link').getBoundingClientRect();
+        const unsavedEl = document.getElementById('unsaved-pill');
+        const unsavedRect = unsavedEl.getBoundingClientRect();
+        const unsavedInLeft = Boolean(document.querySelector('.topbar-left #unsaved-pill'));
+
         const dlgBtns = measureBtns([
           'cancel-replace-btn',
           'save-new-copy-btn',
@@ -1095,6 +1153,18 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           dialogOpenOnSave,
           dialogHeading,
           topbarBtns,
+          openIconBesidePencil: {
+            pencilW: Math.round(pencilRect.width),
+            pencilH: Math.round(pencilRect.height),
+            openW: Math.round(openDriveRect.width),
+            openH: Math.round(openDriveRect.height),
+            topDiff: Math.abs(pencilRect.top - openDriveRect.top),
+            rightOfPencil: openDriveRect.left >= pencilRect.right - 0.5,
+          },
+          leftUnsavedMetrics: {
+            inLeft: unsavedInLeft,
+            height: Math.round(unsavedRect.height),
+          },
           dlgBtns,
           closedAfterCancel,
         };
@@ -1112,10 +1182,20 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(dialogAndXssCheck.dialogOpenOnSave, true, 'Must warn before replacing existing Drive file');
     assert.equal(dialogAndXssCheck.dialogHeading, 'Replace existing file?');
 
-    // Verify all 4 Editor topbar buttons (Download, Copy link, Open, Save) share exact 32px height and 0px vertical drift
-    const [dlBtnMetrics, copyBtnMetrics, openBtnMetrics, saveBtnMetrics] = dialogAndXssCheck.topbarBtns;
-    assert.equal(openBtnMetrics.text, 'Open');
-    for (const m of [dlBtnMetrics, copyBtnMetrics, openBtnMetrics, saveBtnMetrics]) {
+    // Verify Open in Google Drive sits right next to Pencil as a matching 28x28 icon button, and unsaved pill is 24px in topbar-left
+    assert.equal(dialogAndXssCheck.openIconBesidePencil.pencilW, 28);
+    assert.equal(dialogAndXssCheck.openIconBesidePencil.pencilH, 28);
+    assert.equal(dialogAndXssCheck.openIconBesidePencil.openW, 28);
+    assert.equal(dialogAndXssCheck.openIconBesidePencil.openH, 28);
+    assert.ok(dialogAndXssCheck.openIconBesidePencil.topDiff <= 0.5, 'Open icon must align vertically with Pencil icon');
+    assert.equal(dialogAndXssCheck.openIconBesidePencil.rightOfPencil, true, 'Open icon must sit directly to the right of Pencil icon');
+    assert.equal(dialogAndXssCheck.leftUnsavedMetrics.inLeft, true, 'Unsaved changes pill must render inside .topbar-left');
+    assert.equal(dialogAndXssCheck.leftUnsavedMetrics.height, 24, 'Left unsaved pill must match 24px status pill height');
+
+    // Verify all 4 Editor topbar-right buttons (Help, Download, Copy link, Save) share exact 32px height and 0px vertical drift
+    const [helpBtnMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics] = dialogAndXssCheck.topbarBtns;
+    assert.equal(helpBtnMetrics.text, 'Help');
+    for (const m of [helpBtnMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics]) {
       assert.equal(m.height, 32, `${m.id} must be 32px tall`);
       assert.equal(m.fontSize, '12.5px', `${m.id} must use 12.5px font-size`);
       assert.equal(m.lineHeight, '18px', `${m.id} must use 18px line-height`);
@@ -1653,6 +1733,165 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       'Google Drive not connected yet',
       'Open Welcome tab must live-sync to disconnected state after popup Sign out'
     );
+
+    // 5F. Signed-Out Editor Live Sync, Logged-Out Unsaved Warning Suppression, Help Button, & Local Capture -> Save to Google Drive Upgrade
+    let signedOutEditorSync = null;
+    for (let i = 0; i < 20; i += 1) {
+      signedOutEditorSync = await evalIn(
+        autoEditorSession,
+        `(() => {
+          const saveBtn = document.getElementById('save-drive-btn');
+          return {
+            saveLabel: saveBtn.textContent.trim(),
+            saveDisabled: saveBtn.disabled,
+            unsavedHidden: document.getElementById('unsaved-pill').hidden,
+            openHidden: document.getElementById('open-drive-link').hidden,
+            copyHidden: document.getElementById('copy-link-btn').hidden,
+            beforeUnloadBlocked: !window.dispatchEvent(new Event('beforeunload', { cancelable: true })),
+          };
+        })()`
+      );
+      if (signedOutEditorSync.saveLabel === 'Save to Google Drive') break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(
+      signedOutEditorSync.saveLabel,
+      'Save to Google Drive',
+      'Open Editor tab must live-sync button to Save to Google Drive on Sign out'
+    );
+    assert.equal(signedOutEditorSync.saveDisabled, false, 'Save to Google Drive must stay enabled while signed out');
+    assert.equal(signedOutEditorSync.unsavedHidden, true, 'Unsaved changes pill must stay hidden when signed out');
+    assert.equal(signedOutEditorSync.openHidden, true, 'Open in Drive icon must hide when signed out');
+    assert.equal(signedOutEditorSync.copyHidden, true, 'Copy link button must hide when signed out');
+    assert.equal(
+      signedOutEditorSync.beforeUnloadBlocked,
+      false,
+      'Tab close beforeunload prompt must NEVER fire when signed out'
+    );
+
+    // Clicking Help in Editor opens pages/welcome.html in a new tab
+    const welcomeCountBefore = (await cdp.send('Target.getTargets')).targetInfos.filter(
+      (t) => t.type === 'page' && t.url.endsWith('/pages/welcome.html')
+    ).length;
+    await evalIn(autoEditorSession, `document.getElementById('editor-help-btn').click()`);
+    let welcomeCountAfter = welcomeCountBefore;
+    for (let i = 0; i < 20; i += 1) {
+      welcomeCountAfter = (await cdp.send('Target.getTargets')).targetInfos.filter(
+        (t) => t.type === 'page' && t.url.endsWith('/pages/welcome.html')
+      ).length;
+      if (welcomeCountAfter > welcomeCountBefore) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(welcomeCountAfter, welcomeCountBefore + 1, 'Editor Help button must open pages/welcome.html');
+
+    // Capture Visible Tab while signed out -> opens brand-new local Editor tab -> click Save to Google Drive -> signs in, uploads, and live-syncs Popup!
+    await evalIn(swSession, `chrome.tabs.update(${testTabInfo.tabId}, { active: true })`);
+    const knownEditorIds = new Set(
+      (await cdp.send('Target.getTargets')).targetInfos
+        .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+        .map((t) => t.targetId)
+    );
+    const localCapRes = await evalIn(
+      extPageSession,
+      `new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve);
+      })`
+    );
+    assert.equal(localCapRes.ok, true);
+    assert.equal(localCapRes.openedEditor, true, 'Capturing while signed out must open local Editor directly');
+
+    let localEditorTarget = null;
+    for (let i = 0; i < 25; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      localEditorTarget = targetInfos.find(
+        (t) =>
+          t.type === 'page' &&
+          t.url.includes(`/pages/editor.html?session=${localCapRes.sessionId}`) &&
+          !knownEditorIds.has(t.targetId)
+      );
+      if (localEditorTarget) break;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    assert.ok(localEditorTarget, 'Signed-out local capture must open Editor tab');
+
+    const { sessionId: localEditorSession } = await cdp.send('Target.attachToTarget', {
+      targetId: localEditorTarget.targetId,
+      flatten: true,
+    });
+    for (let i = 0; i < 25; i += 1) {
+      const ready = await evalIn(
+        localEditorSession,
+        `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+      );
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+
+    const upgradedFromEditor = await evalIn(
+      localEditorSession,
+      `(async () => {
+        const saveBtn = document.getElementById('save-drive-btn');
+        const initialLabel = saveBtn.textContent.trim();
+        const initialEnabled = !saveBtn.disabled;
+
+        // Draw an arrow while signed out -> verify unsaved-pill STILL stays hidden
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: rect.left + 15, clientY: rect.top + 15 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 1, clientX: rect.left + 70, clientY: rect.top + 55 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1, clientX: rect.left + 70, clientY: rect.top + 55 }));
+        await new Promise((r) => setTimeout(r, 35));
+        const unsavedWhileSignedOut = !document.getElementById('unsaved-pill').hidden;
+
+        // Click Save to Google Drive -> triggers signIn + upload
+        saveBtn.click();
+        for (let i = 0; i < 30; i += 1) {
+          const pill = document.getElementById('status-pill');
+          if (!pill.hidden && pill.textContent.includes('Saved to Google Drive')) {
+            return {
+              ok: true,
+              initialLabel,
+              initialEnabled,
+              unsavedWhileSignedOut,
+              afterLabel: saveBtn.textContent.trim(),
+              afterDisabled: saveBtn.disabled,
+              openVisible: !document.getElementById('open-drive-link').hidden,
+              copyVisible: !document.getElementById('copy-link-btn').hidden,
+            };
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return { ok: false, pillText: document.getElementById('status-pill').textContent };
+      })()`
+    );
+    assert.equal(upgradedFromEditor.ok, true, `Expected Saved to Google Drive after Editor upgrade, got: ${upgradedFromEditor.pillText}`);
+    assert.equal(upgradedFromEditor.initialLabel, 'Save to Google Drive');
+    assert.equal(upgradedFromEditor.initialEnabled, true);
+    assert.equal(upgradedFromEditor.unsavedWhileSignedOut, false, 'Drawing while signed out must never show unsaved warning');
+    assert.equal(upgradedFromEditor.afterLabel, 'Save', 'Primary button must become Save once connected and uploaded');
+    assert.equal(upgradedFromEditor.afterDisabled, true, 'Save must disable until next edit once uploaded');
+    assert.equal(upgradedFromEditor.openVisible, true, 'Open in Google Drive icon must appear beside pencil after upload');
+    assert.equal(upgradedFromEditor.copyVisible, true, 'Copy link button must appear after upload');
+
+    // Open Popup tab also live-synced to Signed-In view with Account card + Recent upload!
+    let popupLiveSignedIn = null;
+    for (let i = 0; i < 20; i += 1) {
+      popupLiveSignedIn = await evalIn(
+        extPageSession,
+        `(() => ({
+          signedOutHidden: document.getElementById('signed-out-view').hidden,
+          accountVisible: !document.getElementById('account-folder-card').hidden,
+          recentVisible: !document.getElementById('recent-section').hidden,
+          recentItems: document.getElementById('upload-list').children.length,
+        }))()`
+      );
+      if (popupLiveSignedIn.accountVisible && popupLiveSignedIn.recentItems > 0) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(popupLiveSignedIn.signedOutHidden, true);
+    assert.equal(popupLiveSignedIn.accountVisible, true, 'Popup must live-sync to signed-in Account card after Editor sign-in');
+    assert.equal(popupLiveSignedIn.recentVisible, true, 'Popup must reveal Recent section after Editor sign-in');
+    assert.equal(popupLiveSignedIn.recentItems, 1, 'Upgraded screenshot must appear in Popup Recent list');
   } finally {
     cleanup();
     server.closeAllConnections();

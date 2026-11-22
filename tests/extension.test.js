@@ -2197,6 +2197,24 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
     popupHtml.indexOf('id="capture-region-btn"') < popupHtml.indexOf('id="capture-visible-btn"'),
     'Select area must appear before Visible tab in popup.html'
   );
+  assert.ok(
+    popupHtml.indexOf('id="capture-visible-btn"') < popupHtml.indexOf('id="signed-out-view"'),
+    'Capture tiles must sit above the signed-out Connect Google Drive card'
+  );
+  assert.ok(
+    popupHtml.indexOf('id="capture-visible-btn"') < popupHtml.indexOf('id="account-folder-card"'),
+    'Capture tiles must sit above the signed-in Account + Folder card'
+  );
+  assert.ok(
+    popupHtml.includes('Autosave to your Google Drive'),
+    'Signed-out popup card must display Autosave to your Google Drive heading'
+  );
+  assert.ok(
+    popupHtml.includes(
+      'Never lose a shot, with easy download and link sharing. Privacy-first, no external servers or tracking.'
+    ),
+    'Signed-out popup card must display refined privacy-first copy'
+  );
   const footerChunk = popupHtml.split('<footer')[1] || '';
   assert.ok(
     footerChunk.indexOf('id="popup-version"') < footerChunk.indexOf('id="footer-bug-btn"'),
@@ -2204,6 +2222,22 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
   );
   assert.ok(footerChunk.includes('https://x.com/_simplyakm'), 'Popup footer must link to @_simplyakm');
   assert.ok(!/<svg\b/i.test(footerChunk), 'Popup footer must not include third-party SVG brand logos');
+
+  const editorHtml = fs.readFileSync(path.join(rootDir, 'pages/editor.html'), 'utf8');
+  const topbarLeftChunk = editorHtml.split('<div class="topbar-right">')[0] || '';
+  const topbarRightChunk = editorHtml.split('<div class="topbar-right">')[1]?.split('</header>')[0] || '';
+  assert.ok(
+    topbarLeftChunk.indexOf('id="rename-pencil-btn"') < topbarLeftChunk.indexOf('id="open-drive-link"'),
+    'Open in Google Drive icon must sit beside the pencil rename button on topbar-left'
+  );
+  assert.ok(
+    topbarLeftChunk.includes('id="unsaved-pill"') && !topbarRightChunk.includes('id="unsaved-pill"'),
+    'Unsaved changes pill must live in topbar-left status slot so right-side buttons never shift'
+  );
+  assert.ok(
+    topbarRightChunk.indexOf('id="editor-help-btn"') < topbarRightChunk.indexOf('id="download-btn"'),
+    'Help button must appear before Download in editor topbar-right'
+  );
 });
 
 test('UI helpers, theme sync, custom hex color parser, and strict storage allowlist battle-tests', async () => {
@@ -2999,9 +3033,11 @@ test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent
     assert.equal(resA.profile.email, 'alice@example.com');
     assert.equal(resB.profile.email, 'alice@example.com');
 
-    // 5. End-to-end service-worker SIGN_OUT revokes grant, clears error/badge, guards editBeforeUpload, and restores folder cache on reconnect
+    // 5. End-to-end service-worker SIGN_OUT revokes grant, signed-out captures open local Editor with zero Drive calls,
+    //    and clicking Save to Google Drive inside Editor runs OAuth + reuses cached folder + uploads PNG seamlessly!
     let swRevokeCalls = 0;
     let folderCreates = 0;
+    let cancelNextInteractiveAuth = false;
     const swMock = installChromeMock({
       initialStore: {
         signedOut: false,
@@ -3018,9 +3054,16 @@ test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent
             },
           },
           autoCopyLink: true,
-          editBeforeUpload: true,
+          editBeforeUpload: false,
           theme: 'auto',
         },
+      },
+      onGetAuthToken: ({ interactive }) => {
+        if (interactive && cancelNextInteractiveAuth) {
+          cancelNextInteractiveAuth = false;
+          return { error: 'The user did not approve access.' };
+        }
+        return { token: interactive ? 'tok-editor-signin' : 'tok-cached' };
       },
       tabs: [
         {
@@ -3042,6 +3085,9 @@ test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent
 
     globalThis.fetch = async (url, opts = {}) => {
       const u = String(url);
+      if (u.startsWith('data:image/')) {
+        return origFetch(url, opts);
+      }
       if (u.includes('oauth2.googleapis.com/revoke')) {
         swRevokeCalls += 1;
         return new Response('', { status: 200 });
@@ -3063,6 +3109,17 @@ test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent
           { status: 200 }
         );
       }
+      if (opts.method === 'POST' && u.includes('/upload/drive/v3/files')) {
+        return new Response(
+          JSON.stringify({
+            id: 'editor_upgraded_file_1',
+            name: 'Local_Shot_Upgraded.png',
+            webViewLink: 'https://drive.google.com/file/d/editor_upgraded_file_1/view',
+            createdTime: '2026-11-22T12:00:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
       if (opts.method === 'POST' && u.includes('/drive/v3/files')) {
         folderCreates += 1;
       }
@@ -3074,22 +3131,69 @@ test('OAuth grant revocation on signOut, DRIVE_SCOPE_MISSING grant reset, silent
     assert.equal(outRes.ok, true);
     assert.equal(swRevokeCalls, 1, 'Service worker SIGN_OUT must revoke Google OAuth token');
 
-    // Trigger CAPTURE_VISIBLE while signed out with editBeforeUpload=true -> must NOT open dead Editor tab, must return AUTH_REQUIRED + fallback PNG
-    const signedOutEditCap = await swMock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 55 });
-    assert.equal(signedOutEditCap.ok, false);
-    assert.equal(signedOutEditCap.code, 'AUTH_REQUIRED');
-    assert.equal(signedOutEditCap.hasFallback, true);
-    assert.equal(swMock.createdTabs.length, 0, 'Must not open pre-upload Editor tab while signed out');
+    // Signed-out START_REGION_CAPTURE works immediately with zero Google API requests
+    const signedOutRegionStart = await swMock.dispatchMessage({
+      type: 'START_REGION_CAPTURE',
+      tabId: 55,
+    });
+    assert.equal(signedOutRegionStart.ok, true, 'Region selection must work while signed out');
 
-    const fallbackAfterAuthErr = await swMock.dispatchMessage({ type: 'GET_FALLBACK_PNG' });
-    assert.equal(fallbackAfterAuthErr.ok, true);
-    assert.ok(fallbackAfterAuthErr.dataUrl.startsWith('data:image/png;base64,'));
+    // Signed-out CAPTURE_VISIBLE opens local Editor directly (even with editBeforeUpload=false)
+    const signedOutLocalCap = await swMock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 55 });
+    assert.equal(signedOutLocalCap.ok, true);
+    assert.equal(signedOutLocalCap.openedEditor, true);
+    assert.ok(signedOutLocalCap.sessionId);
+    assert.equal(swMock.createdTabs.length, 1, 'Must open local Editor tab when capturing while signed out');
 
-    // Reconnect same account -> sign-in restores cached alice-folder-99 with 0 duplicate folder creations
-    const reconnectRes = await swMock.dispatchMessage({ type: 'SIGN_IN' });
-    assert.equal(reconnectRes.ok, true);
-    assert.equal(reconnectRes.settings.folderId, 'alice-folder-99');
-    assert.equal(folderCreates, 0, 'Reconnecting same account must reuse verified cached Drive folder');
+    const trustedEditorSender = {
+      url: `chrome-extension://testext/pages/editor.html?session=${signedOutLocalCap.sessionId}`,
+      tab: { id: 700, url: `chrome-extension://testext/pages/editor.html?session=${signedOutLocalCap.sessionId}` },
+    };
+    const localSessionLoaded = await swMock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: signedOutLocalCap.sessionId },
+      trustedEditorSender
+    );
+    assert.equal(localSessionLoaded.ok, true);
+    assert.equal(localSessionLoaded.session.mode, 'new');
+    assert.equal(localSessionLoaded.session.signedIn, false);
+    assert.ok(localSessionLoaded.dataUrl.startsWith('data:image/png;base64,'));
+
+    // User clicks "Save to Google Drive" in Editor and cancels OAuth -> returns AUTH_CANCELLED without losing session
+    cancelNextInteractiveAuth = true;
+    const cancelledEditorSave = await swMock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: signedOutLocalCap.sessionId,
+        filename: 'Local_Shot_Upgraded.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(cancelledEditorSave.ok, false);
+    assert.equal(cancelledEditorSave.code, 'AUTH_CANCELLED');
+    assert.equal(swMock.store.signedOut, true);
+
+    // User clicks "Save to Google Drive" again and approves OAuth -> signs in, reuses cached alice-folder-99, and uploads PNG!
+    const upgradedSave = await swMock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: signedOutLocalCap.sessionId,
+        filename: 'Local_Shot_Upgraded.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedEditorSender
+    );
+    assert.equal(upgradedSave.ok, true);
+    assert.equal(upgradedSave.action, 'created');
+    assert.equal(upgradedSave.signedIn, true);
+    assert.equal(upgradedSave.upload.id, 'editor_upgraded_file_1');
+    assert.equal(folderCreates, 0, 'Upgrading from Editor must reuse verified cached Drive folder');
+    assert.equal(swMock.store.signedOut, false);
+    assert.equal((await getRecentUploads()).length, 1, 'Uploaded shot must appear in Recent uploads after sign-in');
   } finally {
     globalThis.fetch = origFetch;
   }

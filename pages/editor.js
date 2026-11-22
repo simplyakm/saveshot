@@ -24,6 +24,7 @@ const els = {
   dimLabel: document.getElementById('dim-label'),
   statusPill: document.getElementById('status-pill'),
   unsavedPill: document.getElementById('unsaved-pill'),
+  editorHelpBtn: document.getElementById('editor-help-btn'),
   downloadBtn: document.getElementById('download-btn'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   openDriveLink: document.getElementById('open-drive-link'),
@@ -57,6 +58,7 @@ const previewCtx = els.previewCanvas.getContext('2d');
 
 const state = {
   sessionId: '',
+  signedIn: false,
   mode: 'new', // 'new' | 'existing'
   fileId: null,
   savedFilename: 'Screenshot.png',
@@ -114,6 +116,15 @@ function hasUnsavedChanges() {
 
 let statusPillTimer = null;
 
+function clearStatusPillIfIdle() {
+  if (state.saving) return;
+  if (statusPillTimer) {
+    clearTimeout(statusPillTimer);
+    statusPillTimer = null;
+  }
+  els.statusPill.hidden = true;
+}
+
 function showStatusPill(kind, text, autoHideMs = 0) {
   if (statusPillTimer) {
     clearTimeout(statusPillTimer);
@@ -121,17 +132,20 @@ function showStatusPill(kind, text, autoHideMs = 0) {
   }
   if (!text) {
     els.statusPill.hidden = true;
+    updateUiState();
     return;
   }
+  els.unsavedPill.hidden = true;
   els.statusPill.hidden = false;
   els.statusPill.className = `status-pill ${kind}`;
   els.statusPill.textContent = text;
   if (autoHideMs > 0) {
     statusPillTimer = setTimeout(() => {
+      statusPillTimer = null;
       if (els.statusPill.textContent === text) {
         els.statusPill.hidden = true;
+        updateUiState();
       }
-      statusPillTimer = null;
     }, autoHideMs);
   }
 }
@@ -148,24 +162,33 @@ function updateDimensionsLabel() {
 
 function updateUiState() {
   const dirty = hasUnsavedChanges();
-  const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
+  const showUnsaved = state.ready && !state.saving && state.signedIn && dirty;
 
-  els.unsavedPill.hidden = !state.ready || state.saving || !dirty;
-  if (dirty && !state.saving && els.statusPill.classList.contains('ok')) {
+  if (showUnsaved && !els.statusPill.hidden && els.statusPill.classList.contains('ok')) {
     els.statusPill.hidden = true;
   }
+  els.unsavedPill.hidden = !showUnsaved || !els.statusPill.hidden;
 
-  els.saveDriveBtn.textContent = 'Save';
-  els.saveDriveBtn.disabled = !canSave;
-  els.saveDriveBtn.title = !state.ready
-    ? 'Loading screenshot...'
-    : state.mode === 'new'
-    ? 'Upload screenshot to Google Drive'
-    : dirty
-    ? 'Save changes to Google Drive'
-    : 'Make an edit or rename to enable Save';
+  if (!state.signedIn) {
+    els.saveDriveBtn.textContent = 'Save to Google Drive';
+    els.saveDriveBtn.disabled = !state.ready || state.saving;
+    els.saveDriveBtn.title = !state.ready
+      ? 'Loading screenshot...'
+      : 'Connect Google Drive and save screenshot';
+  } else {
+    const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
+    els.saveDriveBtn.textContent = 'Save';
+    els.saveDriveBtn.disabled = !canSave;
+    els.saveDriveBtn.title = !state.ready
+      ? 'Loading screenshot...'
+      : state.mode === 'new'
+      ? 'Upload screenshot to Google Drive'
+      : dirty
+      ? 'Save changes to Google Drive'
+      : 'Make an edit or rename to enable Save';
+  }
 
-  const safeLink = safeHttpsUrl(state.webViewLink);
+  const safeLink = state.signedIn ? safeHttpsUrl(state.webViewLink) : '';
   if (safeLink) {
     els.copyLinkBtn.hidden = false;
     els.openDriveLink.hidden = false;
@@ -276,6 +299,7 @@ function commitActiveTextIfNeeded() {
     if (drew) {
       state.isAtOriginalCapture = false;
       state.imageModifiedSinceSave = true;
+      clearStatusPillIfIdle();
     } else {
       const popped = state.undoStack.pop();
       popped?.bitmap?.close?.();
@@ -391,6 +415,7 @@ function applyTransform(kind) {
     syncPreviewCanvasSize();
     state.isAtOriginalCapture = false;
     state.imageModifiedSinceSave = true;
+    clearStatusPillIfIdle();
     updateUiState();
   });
 }
@@ -416,6 +441,7 @@ function undoLastChange() {
     } finally {
       prev.bitmap.close();
     }
+    clearStatusPillIfIdle();
     updateUiState();
   });
 }
@@ -436,6 +462,7 @@ function resetToOriginal() {
 
     state.isAtOriginalCapture = true;
     state.imageModifiedSinceSave = state.mode === 'existing' ? !state.driveMatchesInitial : false;
+    clearStatusPillIfIdle();
     updateUiState();
   });
 }
@@ -554,6 +581,7 @@ function finishPointerDrag(event) {
     if (drew) {
       state.isAtOriginalCapture = false;
       state.imageModifiedSinceSave = true;
+      clearStatusPillIfIdle();
     } else {
       const unused = state.undoStack.pop();
       unused?.bitmap?.close?.();
@@ -570,7 +598,10 @@ els.previewCanvas.addEventListener('pointercancel', (event) => {
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
 });
 
-els.textOverlayInput.addEventListener('input', () => updateUiState());
+els.textOverlayInput.addEventListener('input', () => {
+  clearStatusPillIfIdle();
+  updateUiState();
+});
 
 els.textOverlayInput.addEventListener('keydown', async (event) => {
   if (event.key === 'Escape') {
@@ -610,7 +641,10 @@ function cancelFilenameEdit() {
 }
 
 els.renamePencilBtn.addEventListener('click', openFilenameEditor);
-els.filenameInput.addEventListener('input', () => updateUiState());
+els.filenameInput.addEventListener('input', () => {
+  clearStatusPillIfIdle();
+  updateUiState();
+});
 els.filenameInput.addEventListener('blur', commitFilenameEdit);
 els.filenameInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -706,6 +740,10 @@ for (const btn of document.querySelectorAll('[data-transform]')) {
 els.undoBtn.addEventListener('click', () => undoLastChange());
 els.resetBtn.addEventListener('click', () => resetToOriginal());
 
+els.editorHelpBtn.addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
+});
+
 els.downloadBtn.addEventListener('click', async () => {
   if (!state.ready) return;
   await commitActiveTextIfNeeded();
@@ -753,14 +791,22 @@ async function performSave(saveMode) {
   const desiredFilename = getDesiredFilename();
   syncFilenameDisplay(desiredFilename);
 
+  const wasSignedOut = !state.signedIn;
+  const effectiveMode = wasSignedOut ? 'new' : state.mode;
+  const effectiveSaveMode = wasSignedOut ? 'new' : saveMode;
   const needImagePayload =
-    state.mode === 'new' || saveMode === 'new' || state.imageModifiedSinceSave;
+    wasSignedOut ||
+    effectiveMode === 'new' ||
+    effectiveSaveMode === 'new' ||
+    state.imageModifiedSinceSave;
 
   state.saving = true;
   updateUiState();
   showStatusPill(
     'warn',
-    saveMode === 'replace' && state.mode === 'existing'
+    wasSignedOut
+      ? 'Connecting to Google Drive...'
+      : effectiveSaveMode === 'replace' && effectiveMode === 'existing'
       ? 'Replacing in Google Drive...'
       : 'Uploading to Google Drive...'
   );
@@ -773,13 +819,13 @@ async function performSave(saveMode) {
       filename: desiredFilename,
       dataUrl,
       imageModified: needImagePayload,
-      saveMode,
+      saveMode: effectiveSaveMode,
       sessionContext: {
-        mode: state.mode,
-        fileId: state.fileId,
+        mode: effectiveMode,
+        fileId: wasSignedOut ? null : state.fileId,
         filename: state.savedFilename,
         folderName: state.folderName,
-        webViewLink: state.webViewLink,
+        webViewLink: wasSignedOut ? '' : state.webViewLink,
         captureMode: state.captureMode,
         pageUrl: state.pageUrl,
         pageTitle: state.pageTitle,
@@ -788,9 +834,14 @@ async function performSave(saveMode) {
     });
 
     if (!res.ok) {
+      if (res.code === 'AUTH_CANCELLED') {
+        showStatusPill('warn', 'Sign-in cancelled', 3500);
+        return;
+      }
       throw new Error(res.error || 'Failed to save screenshot to Google Drive.');
     }
 
+    state.signedIn = true;
     state.mode = 'existing';
     state.fileId = res.upload.id;
     state.savedFilename = res.upload.name;
@@ -838,7 +889,7 @@ els.saveDriveBtn.addEventListener('click', async () => {
   if (!state.ready || state.saving) return;
   await commitActiveTextIfNeeded();
 
-  if (state.mode === 'existing') {
+  if (state.signedIn && state.mode === 'existing') {
     if (!hasUnsavedChanges()) {
       return;
     }
@@ -911,7 +962,7 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (hasUnsavedChanges()) {
+  if (state.signedIn && hasUnsavedChanges()) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -947,8 +998,9 @@ async function initEditor() {
     const bitmap = await createImageBitmap(blob);
 
     state.initialBitmap = bitmap;
+    state.signedIn = Boolean(res.session.signedIn);
     state.mode = res.session.mode === 'new' ? 'new' : 'existing';
-    state.driveMatchesInitial = state.mode === 'existing';
+    state.driveMatchesInitial = state.signedIn && state.mode === 'existing';
     state.fileId = res.session.fileId || null;
     state.savedFilename = sanitizeScreenshotFilename(
       res.session.filename || 'Screenshot.png'
@@ -996,6 +1048,36 @@ async function initEditor() {
       err.message || 'Could not load screenshot for editing.';
     showStatusPill('err', 'Session unavailable');
   }
+}
+
+if (chrome?.storage?.onChanged?.addListener) {
+  chrome.storage.onChanged.addListener(async (changes, areaName) => {
+    if (areaName !== 'local' || state.saving || !state.ready) return;
+    if (!changes.signedOut && !changes.userProfile) return;
+
+    try {
+      const res = await sendRuntimeMessage({ type: 'GET_STATE' });
+      if (!res?.ok || state.saving) return;
+
+      const nowSignedIn = Boolean(res.session?.signedIn);
+      if (!nowSignedIn) {
+        state.signedIn = false;
+        state.mode = 'new';
+        state.fileId = null;
+        state.webViewLink = '';
+        state.driveMatchesInitial = false;
+      } else {
+        state.signedIn = true;
+        if (res.settings) {
+          state.autoCopyLink = Boolean(res.settings.autoCopyLink);
+          state.folderName = res.settings.folderName || state.folderName;
+        }
+      }
+      updateUiState();
+    } catch {
+      // Ignore transient background state error
+    }
+  });
 }
 
 initThemeSync();

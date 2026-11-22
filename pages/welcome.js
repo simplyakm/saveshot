@@ -118,7 +118,7 @@ async function loadStatus() {
       els.accountDot.classList.remove('connected');
       els.accountHeading.textContent = 'Google Drive not connected yet';
       els.accountDetail.textContent =
-        'Connect once to save screenshots straight from Chrome to your own Google Drive.';
+        'Capture, edit, and download locally right now, or connect Google Drive for autosave and link sharing.';
       els.signInBtn.hidden = false;
       els.openDriveBtn.hidden = true;
       els.devSetupNotice.hidden = !res.session?.needsSetup;

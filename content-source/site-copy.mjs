@@ -9,7 +9,7 @@ export const SITE_COPY = {
   brandName: 'SaveShot',
   extensionTitle: 'SaveShot: Screenshot to Google Drive',
   version: '1.1.1',
-  lastUpdated: 'November 21, 2026',
+  lastUpdated: 'November 22, 2026',
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation
   shortDescription:
@@ -18,7 +18,7 @@ export const SITE_COPY = {
   tagline: 'Private screenshots straight to Google Drive or your computer.',
 
   overviewLead:
-    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive, with one-click PNG download to your computer anytime. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.',
+    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs locally in Chrome with no external servers, no tracking, and no external dependencies.',
 
   urls: {
     chromeWebStore:
@@ -65,15 +65,15 @@ export const SITE_COPY = {
       title: 'Select area (`Alt+Shift+S`)',
       webTitle: 'Select Area or Full Tab',
       summary:
-        'Drag a box over any part of a webpage to crop and upload just that section with pixel-exact HiDPI and zoom accuracy, press `Enter` for the full tab, or press `Alt+Shift+V` to capture the visible tab in one click.',
+        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press `Enter` for the full tab, or press `Alt+Shift+V` to capture the visible tab in one click, even before signing in.',
       readmeBullet:
-        '**Select area (`Alt+Shift+S`)**: Drag a box over any part of a page to crop and upload just that section, or press `Enter` to capture the full tab.',
+        '**Select area (`Alt+Shift+S`)**: Drag a box over any part of a page to crop just that section, or press `Enter` to capture the full tab.',
     },
     {
       title: 'Visible tab (`Alt+Shift+V`)',
       webTitle: 'Annotate, Redact & Download',
       summary:
-        'Opens automatically in a new tab after upload (or before upload if enabled in Settings) so you can add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Download** a PNG to your computer, or click **Save** to update the same Google Drive share link.',
+        'Opens automatically in a new tab so you can add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Download** a PNG to your computer with no sign-in required, or save straight to Google Drive.',
       readmeBullet:
         '**Visible tab (`Alt+Shift+V`)**: Captures what is currently visible in the active tab.',
     },
@@ -81,10 +81,10 @@ export const SITE_COPY = {
       title: '100% Local in Chrome',
       webTitle: '100% Local in Chrome',
       summary:
-        'Screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
+        'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
         'Chrome_SaveShot_ScreenShots` and copy the share link automatically. SaveShot has no private servers, analytics, or ads.',
       readmeBullet:
-        '**Saves straight to your Drive (or locally)**: Uploads PNGs directly from Chrome to a `Chrome_SaveShot_ScreenShots` folder in your Google Drive (customizable in Settings) with the share link copied automatically, plus one-click local PNG download anytime.',
+        '**Works locally or autosaves to your Drive**: Capture, edit, and download PNGs locally right away without signing in, or connect Google Drive once to autosave to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically.',
     },
     {
       title: 'Narrow `drive.file` Scope',
@@ -92,12 +92,12 @@ export const SITE_COPY = {
       summary:
         'Uses only `activeTab` and Google\'s narrow `drive.file` permission. SaveShot can only access the screenshots and folder it creates itself, never any other files in your Google Drive.',
       readmeBullet:
-        '**Built-in lightweight editor**: Opens automatically in a new tab after upload (or before uploading if you turn on **Open editor before uploading** in Settings) so you can rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Download** to save a PNG on your computer, or press **Save** to update the Drive file while keeping the same share link.',
+        '**Built-in lightweight editor**: Opens automatically in a new tab so you can rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
     },
   ],
 
   readmeExtraBullets: [
-    '**Recent history**: Keeps your last 8 screenshots in the popup for quick access, and clears them automatically when you sign out.',
+    '**Recent history**: Keeps your last 8 Google Drive screenshots in the popup for quick access, and clears them automatically when you sign out.',
     '**Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.',
     '**Strict privacy & narrow permissions**: Uses only `activeTab` and Google\'s narrow `drive.file` scope. SaveShot runs 100% locally in Chrome, sends zero requests to any private or third-party server, and cannot access any other files in your Google Drive.',
   ],
@@ -106,20 +106,20 @@ export const SITE_COPY = {
     'Click the **?** icon or **Report bug** at the bottom of the popup to open the built-in feedback form for bug reports and feature requests. It lets you open a pre-filled GitHub issue with basic version and error info, or copy the report as plain text.',
 
   readmePrivacySummary:
-    'SaveShot runs 100% locally in your browser. Screenshots upload directly from Chrome to Google\'s official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates.',
+    'SaveShot runs 100% locally in your browser. When you connect Google Drive, screenshots upload directly from Chrome to Google\'s official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates.',
 
   // Canonical Privacy Policy (generates both PRIVACY.md and docs/privacy.html identically)
   privacy: {
     heading: 'Privacy Policy for SaveShot',
     intro:
-      'SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser, save them directly to your own Google Drive, or download them to your computer. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.',
+      'SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.',
     sections: [
       {
         heading: 'What data SaveShot accesses',
-        lead: 'SaveShot only accesses data when you choose to sign in or take a screenshot:',
+        lead: 'SaveShot only accesses data when you choose to take a screenshot or connect Google Drive:',
         orderedList: [
-          '**Screenshots you capture**: When you click **Select area**, click **Visible tab**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it and upload it directly to your Google Drive. SaveShot never captures your screen in the background.',
-          '**Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests Google\'s narrow `https://www.googleapis.com/auth/drive.file` permission. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete any of your other Google Drive files.',
+          '**Screenshots you capture**: When you click **Select area**, click **Visible tab**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it in memory, let you download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.',
+          '**Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests Google\'s narrow `https://www.googleapis.com/auth/drive.file` permission when you choose to connect Google Drive. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete any of your other Google Drive files.',
         ],
       },
       {

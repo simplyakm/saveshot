@@ -21,7 +21,7 @@
 
           <span class="topbar-divider" aria-hidden="true"></span>
 
-          <!-- Read-only Filename + Intentional Pencil Rename Button -->
+          <!-- Read-only Filename + Intentional Pencil Rename + Open in Drive Icon -->
           <div class="filename-readonly" id="filename-readonly">
             <span class="filename-stem-wrap" id="filename-stem-wrap">
               <span class="ss-body filename-display" id="filename-display">Screenshot</span><span class="ss-body filename-ext">.png</span>
@@ -38,6 +38,22 @@
                 <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
               </svg>
             </button>
+            <a
+              class="ss-icon-btn open-drive-icon-btn"
+              id="open-drive-link"
+              href="https://drive.google.com/drive/my-drive"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open in Google Drive"
+              aria-label="Open in Google Drive"
+              hidden
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+            </a>
           </div>
 
           <!-- Active Filename Input (shown only after clicking pencil) -->
@@ -56,35 +72,22 @@
 
           <span class="ss-meta tabular dim-label" id="dim-label"></span>
           <span class="status-pill" id="status-pill" hidden></span>
-        </div>
-
-        <div class="topbar-right">
           <span class="unsaved-pill" id="unsaved-pill" role="status" aria-live="polite" hidden>
             <span class="unsaved-dot" aria-hidden="true"></span>
             <span>Unsaved changes &middot; Click Save</span>
           </span>
+        </div>
+
+        <div class="topbar-right">
+          <button type="button" class="ss-btn ss-btn-secondary" id="editor-help-btn" title="Help and shortcuts">
+            Help
+          </button>
           <button type="button" class="ss-btn ss-btn-secondary" id="download-btn" title="Download PNG to your computer">
             Download
           </button>
           <button type="button" class="ss-btn ss-btn-secondary" id="copy-link-btn" hidden>
             Copy link
           </button>
-          <a
-            class="ss-btn ss-btn-secondary"
-            id="open-drive-link"
-            href="https://drive.google.com/drive/my-drive"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open in Google Drive"
-            hidden
-          >
-            <span>Open</span>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-              <polyline points="15 3 21 3 21 9"></polyline>
-              <line x1="10" y1="14" x2="21" y2="3"></line>
-            </svg>
-          </a>
           <button type="button" class="ss-btn ss-btn-primary" id="save-drive-btn" disabled>
             Save
           </button>
