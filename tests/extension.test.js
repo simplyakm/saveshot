@@ -2490,16 +2490,18 @@ test('all repository source, UI, and documentation files contain no em dashes or
   };
   walk(rootDir);
 
-  const { buildCwsZipBuffer } = await import('../scripts/pack-cws.mjs');
+  const { buildCwsZipBuffer, findLatestCwsZipName } = await import('../scripts/pack-cws.mjs');
   const { version, buffer } = buildCwsZipBuffer();
   assert.equal(version, '1.1.1');
+  const latestZipName = findLatestCwsZipName(rootDir, version);
+  assert.ok(latestZipName, 'Expected epoch-stamped CWS zip in store-assets/');
   const zipOnDisk = fs.readFileSync(
-    path.join(rootDir, 'store-assets', `saveshot-v${version}-cws.zip`)
+    path.join(rootDir, 'store-assets', latestZipName)
   );
   assert.equal(
     Buffer.compare(buffer, zipOnDisk),
     0,
-    'store-assets/saveshot-v1.1.1-cws.zip must match current extension source files (run npm run pack)'
+    `store-assets/${latestZipName} must match current extension source files (run npm run pack)`
   );
 
   // Verify centralized content source of truth stays 100% synced across Markdown, HTML, and metadata

@@ -126,9 +126,26 @@ export function buildCwsZipBuffer(baseDir = rootDir) {
   };
 }
 
+export function findLatestCwsZipName(baseDir = rootDir, version = '1.1.1') {
+  const assetsDir = path.join(baseDir, 'store-assets');
+  const prefix = `saveshot-v${version}-`;
+  const matches = fs
+    .readdirSync(assetsDir)
+    .filter((f) => f.startsWith(prefix) && f.endsWith('-cws.zip'))
+    .sort();
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { version, buffer } = buildCwsZipBuffer();
-  const outPath = path.join(rootDir, 'store-assets', `saveshot-v${version}-cws.zip`);
+  const assetsDir = path.join(rootDir, 'store-assets');
+  for (const entry of fs.readdirSync(assetsDir)) {
+    if (entry.startsWith('saveshot-') && entry.endsWith('-cws.zip')) {
+      fs.unlinkSync(path.join(assetsDir, entry));
+    }
+  }
+  const epoch = Math.floor(Date.now() / 1000);
+  const outPath = path.join(assetsDir, `saveshot-v${version}-${epoch}-cws.zip`);
   fs.writeFileSync(outPath, buffer);
   console.log(`Built Chrome Web Store package: ${path.relative(rootDir, outPath)} (${buffer.length} bytes)`);
 }
