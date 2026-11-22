@@ -2,7 +2,7 @@
 
 **Last updated:** November 21, 2026
 
-SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser and save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
+SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser, save them directly to your own Google Drive, or download them to your computer. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
 
 ## What data SaveShot accesses
 

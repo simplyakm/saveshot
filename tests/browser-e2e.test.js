@@ -277,6 +277,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     );
     assert.equal(popupCheck.signedOutVisible, true);
     assert.match(popupCheck.signedOutCopy, /directly from Chrome to your Google Drive/);
+    assert.match(popupCheck.signedOutCopy, /download to your computer in one click/);
     assert.match(popupCheck.signedOutCopy, /No external servers, no tracking/);
     assert.equal(popupCheck.setupBannerVisible, expectedNeedsSetup);
     assert.equal(popupCheck.hasHelpBtn, true);
@@ -308,9 +309,10 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       }))()`
     );
     assert.equal(welcomeCheck.title, 'SaveShot');
+    assert.match(welcomeCheck.subtitle, /download to your computer in one click/i);
     assert.match(welcomeCheck.subtitle, /no external servers or tracking/i);
     assert.equal(welcomeCheck.stepTitles.length, 4, 'Welcome How it works must show all 4 steps including Editing');
-    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or rename'));
+    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or download'));
     assert.equal(welcomeCheck.shortcutRegionText, 'Alt + Shift + S');
     assert.equal(welcomeCheck.shortcutVisibleText, 'Alt + Shift + V');
     assert.equal(welcomeCheck.unsetHintHidden, true, 'Both default shortcuts must bind cleanly on fresh install');

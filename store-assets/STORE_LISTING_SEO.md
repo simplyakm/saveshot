@@ -6,8 +6,8 @@
 
 - **Name (`36` chars)**:
   `SaveShot: Screenshot to Google Drive`
-- **Short Description (`118` chars, limit `132`)**:
-  `Capture and edit screenshots straight to your Google Drive. 100% local in Chrome with no external servers or tracking.`
+- **Short Description (`120` chars, limit `132`)**:
+  `Capture and edit screenshots to Google Drive or download locally. 100% local in Chrome, no external servers or tracking.`
 
 ---
 
@@ -25,22 +25,23 @@
 ## 3. Copy-Paste Full Store Description
 
 ```text
-SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and saving screenshots straight to your Google Drive, with one-click PNG download to your computer anytime. Uploads go directly from Chrome to your own Google Drive with no external servers, no tracking, and no external dependencies.
 
-Every screenshot uploads straight from your Chrome browser to your own Google Drive account and copies the shareable Drive link automatically.
+Every screenshot uploads straight from your Chrome browser to your own Google Drive account (with the shareable link copied automatically), and you can download a PNG copy to your computer in one click anytime.
 
 KEY FEATURES
 
 • Select Area or Full Visible Tab
 Drag across any part of a webpage (Alt+Shift+S) for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, or capture the full visible tab (Alt+Shift+V) in a single click. Press Enter inside the area selector anytime to grab the full tab.
 
-• Built-In Screenshot Editor & Pixel Redaction
+• Built-In Screenshot Editor, Pixel Redaction & Local Download
 Annotate screenshots right in a new tab without leaving Chrome:
 - Draw arrows, rectangles, circles, lines, and freehand pencil strokes
 - Add clean, legible text callouts
 - Permanently black out sensitive text or numbers with solid pixel redaction
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
+- Download a crisp lossless PNG straight to your computer in one click anytime
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link (or turn on "Open editor before uploading" in Settings to redact before initial upload)
 
 • Organized in Your Google Drive + Instant Link Sharing

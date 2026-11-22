@@ -675,20 +675,21 @@ function renderStoreSeoMarkdown(copy) {
 \`\`\`text
 ${copy.overviewLead}
 
-Every screenshot uploads straight from your Chrome browser to your own Google Drive account and copies the shareable Drive link automatically.
+Every screenshot uploads straight from your Chrome browser to your own Google Drive account (with the shareable link copied automatically), and you can download a PNG copy to your computer in one click anytime.
 
 KEY FEATURES
 
 • Select Area or Full Visible Tab
 Drag across any part of a webpage (${copy.shortcuts.region.key}) for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, or capture the full visible tab (${copy.shortcuts.visible.key}) in a single click. Press Enter inside the area selector anytime to grab the full tab.
 
-• Built-In Screenshot Editor & Pixel Redaction
+• Built-In Screenshot Editor, Pixel Redaction & Local Download
 Annotate screenshots right in a new tab without leaving Chrome:
 - Draw arrows, rectangles, circles, lines, and freehand pencil strokes
 - Add clean, legible text callouts
 - Permanently black out sensitive text or numbers with solid pixel redaction
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
+- Download a crisp lossless PNG straight to your computer in one click anytime
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link (or turn on "Open editor before uploading" in Settings to redact before initial upload)
 
 • Organized in Your Google Drive + Instant Link Sharing

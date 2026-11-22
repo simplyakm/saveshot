@@ -905,7 +905,7 @@ export async function generateAllStoreAssets() {
                 </div>
               </div>
               <p class="promo-sm-desc">
-                Capture any area or tab, annotate or redact in Chrome, and copy your Drive share link automatically.
+                Capture any area or tab, annotate or redact in Chrome, save to Drive with the link copied, or download locally.
               </p>
               <div style="display:flex;gap:6px;margin-top:14px;">
                 <span class="ss-kbd">${SITE_COPY.shortcuts.region.key} &middot; Area</span>
@@ -1031,7 +1031,7 @@ export async function generateAllStoreAssets() {
               </div>
               <h1 class="mq-h1">Capture &amp; edit screenshots straight to Google Drive.</h1>
               <p class="mq-sub">
-                Select any area or tab, annotate or redact sensitive details in Chrome, and copy your shareable Drive link automatically.
+                Select any area or tab, annotate or redact sensitive details in Chrome, copy your Drive link automatically, or download locally in one click.
               </p>
               <div class="mq-meta-row">
                 <span class="mq-chip"><span class="mq-chip-dot"></span>100% Local in Chrome</span>
@@ -1274,9 +1274,9 @@ export async function generateAllStoreAssets() {
           <div class="cws-slide">
             ${renderSlideHeader(
               iconDataUri,
-              'Built-In Editor',
-              'Annotate, redact sensitive details, rotate, or rename',
-              'Opens automatically after upload so you can add arrows, shapes, text, or solid black pixel redactions.'
+              'Built-In Editor & Local Download',
+              'Annotate, redact sensitive details, or download locally',
+              'Opens automatically so you can add arrows, shapes, text, or pixel redactions, update Drive, or download a PNG.'
             )}
             <div class="cws-frame">
               <img src="${editorShot.dataUri}" style="width:1136px;height:auto;display:block;" alt="" />

@@ -6,7 +6,7 @@ By installing or using the SaveShot Chrome extension ("SaveShot"), you agree to 
 
 ## 1. What SaveShot Does
 
-SaveShot is a free browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, and upload them directly from your browser to your own Google Drive account using Google's official API. SaveShot does not operate external servers or user accounts.
+SaveShot is a free browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, download them to your computer, and upload them directly from your browser to your own Google Drive account using Google's official API. SaveShot does not operate external servers or user accounts.
 
 ## 2. Your Responsibilities
 
