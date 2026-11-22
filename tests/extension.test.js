@@ -2611,11 +2611,12 @@ test('all repository source, UI, and documentation files contain no em dashes or
     );
   }
 
-  // Website pages must use real icon PNGs (never fake inline SVG badges), omit GitHub source links, and keep legal links in footer only
+  // Website pages must use real icon PNGs, omit GitHub source links, share the unified footer, and keep editor.html footer-free
   const indexHtml = fs.readFileSync(path.join(rootDir, 'docs/index.html'), 'utf8');
   assert.ok(indexHtml.includes('src="icon128.png"'), 'docs/index.html must render canonical icon128.png');
   assert.ok(!indexHtml.includes('brand-badge'), 'docs/index.html must never use a hand-drawn SVG brand badge');
-  assert.equal((indexHtml.match(/href="thanks\.html"/g) || []).length, 1, 'thanks.html should appear once in docs/index.html footer');
+  assert.ok(indexHtml.includes('class="hero-thanks"'), 'docs/index.html hero must include subtle Already using it? Say thanks link');
+  assert.equal((indexHtml.match(/href="thanks\.html"/g) || []).length, 2, 'thanks.html should appear in hero inline link and footer');
   assert.equal((indexHtml.match(/href="privacy\.html"/g) || []).length, 1, 'privacy.html should appear once in docs/index.html footer');
   assert.equal((indexHtml.match(/href="terms\.html"/g) || []).length, 1, 'terms.html should appear once in docs/index.html footer');
 
@@ -2628,10 +2629,15 @@ test('all repository source, UI, and documentation files contain no em dashes or
     thanksHtml.includes(`href="${SITE_COPY.urls.topmateThanks}"`),
     'docs/thanks.html must link to Topmate thank-you page'
   );
+  assert.ok(!thanksHtml.includes('card-meta'), 'docs/thanks.html must not render card-meta badges');
+
+  const editorHtml = fs.readFileSync(path.join(rootDir, 'pages/editor.html'), 'utf8');
+  assert.ok(!editorHtml.includes('<footer'), 'pages/editor.html must remain footer-free for full-height canvas');
 
   for (const webPage of ['docs/index.html', 'docs/thanks.html', 'docs/privacy.html', 'docs/terms.html']) {
     const html = fs.readFileSync(path.join(rootDir, webPage), 'utf8');
     assert.ok(html.includes('href="icon32.png"'), `${webPage} must include official icon32.png favicon`);
+    assert.ok(html.includes('class="site-footer"'), `${webPage} must include unified single-line site-footer`);
     assert.ok(!html.includes('github.com/simplyakm/saveshot'), `${webPage} must not include GitHub source/repo links`);
   }
 });

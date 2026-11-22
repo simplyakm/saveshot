@@ -217,6 +217,11 @@ export const SITE_COPY = {
     ],
   },
 
+  footerLeft: 'SaveShot · 100% local in Chrome',
+
+  heroThanksPrompt: 'Already using it?',
+  heroThanksLinkLabel: 'Say thanks',
+
   // Canonical Say Thanks / Support page (generates docs/thanks.html)
   thanks: {
     pageTitle: 'Say Thanks - SaveShot',
@@ -224,20 +229,16 @@ export const SITE_COPY = {
     lead:
       'SaveShot is free, ad-free, and runs 100% locally in Chrome with no subscriptions or tracking. If it helps in your daily work, here are two simple ways to support it.',
     reviewCard: {
-      meta: 'Free · 15 seconds',
       heading: 'Leave a quick review',
       body:
         'Honest ratings and reviews on the Chrome Web Store are the biggest help for a small independent extension to get discovered by more people.',
       cta: 'Rate on Chrome Web Store',
     },
     thankYouCard: {
-      meta: 'Optional · One-time',
       heading: 'Send a thank-you',
       body:
         'Never expected, always appreciated. If you want to back independent, privacy-first tools, you can send a small thank-you (and a note on how you use SaveShot).',
       cta: 'Send a thank-you',
     },
-    feedbackNote:
-      'Found a bug or want a feature instead? Use **Report bug** inside the SaveShot popup or message [@_simplyakm](https://x.com/_simplyakm).',
   },
 };

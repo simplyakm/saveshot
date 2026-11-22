@@ -133,43 +133,84 @@ const SHARED_DOC_CSS = `      :root {
       }
       a:hover {
         text-decoration: underline;
+      }
+      .site-footer {
+        padding-top: 10px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .site-footer-links {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .site-footer a {
+        color: var(--muted);
+      }
+      .site-footer a:hover {
+        color: var(--text);
+        text-decoration: none;
       }`;
+
+function renderWebFooterHtml(copy) {
+  return `      <footer class="site-footer">
+        <span>${escapeHtml(copy.footerLeft)}</span>
+        <nav class="site-footer-links" aria-label="SaveShot links">
+          <a href="index.html">Website</a>
+          <span aria-hidden="true">&middot;</span>
+          <a href="thanks.html">Say thanks</a>
+          <span aria-hidden="true">&middot;</span>
+          <a href="privacy.html">Privacy</a>
+          <span aria-hidden="true">&middot;</span>
+          <a href="terms.html">Terms</a>
+          <span aria-hidden="true">&middot;</span>
+          <a href="${escapeHtml(copy.urls.authorUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(copy.urls.authorHandle)}</a>
+        </nav>
+      </footer>`;
+}
 
 function renderPolicyHtml(doc, pageTitle, copy) {
   const bodyParts = [];
   bodyParts.push(
-    `      <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to ${escapeHtml(copy.brandName)}</span></a>`
+    `        <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to ${escapeHtml(copy.brandName)}</span></a>`
   );
-  bodyParts.push(`      <h1>${escapeHtml(doc.heading)}</h1>`);
-  bodyParts.push(`      <p class="updated">Last updated: ${escapeHtml(copy.lastUpdated)}</p>`);
-  bodyParts.push(`      <p>${inlineMarkdownToHtml(replacePlaceholders(doc.intro, 'html'))}</p>`);
+  bodyParts.push(`        <h1>${escapeHtml(doc.heading)}</h1>`);
+  bodyParts.push(`        <p class="updated">Last updated: ${escapeHtml(copy.lastUpdated)}</p>`);
+  bodyParts.push(`        <p>${inlineMarkdownToHtml(replacePlaceholders(doc.intro, 'html'))}</p>`);
 
   for (const sec of doc.sections) {
-    bodyParts.push(`      <h2>${escapeHtml(sec.heading)}</h2>`);
+    bodyParts.push(`        <h2>${escapeHtml(sec.heading)}</h2>`);
     if (sec.lead) {
-      bodyParts.push(`      <p>${inlineMarkdownToHtml(replacePlaceholders(sec.lead, 'html'))}</p>`);
+      bodyParts.push(`        <p>${inlineMarkdownToHtml(replacePlaceholders(sec.lead, 'html'))}</p>`);
     }
     if (sec.paragraphs) {
       for (const p of sec.paragraphs) {
-        bodyParts.push(`      <p>${inlineMarkdownToHtml(replacePlaceholders(p, 'html'))}</p>`);
+        bodyParts.push(`        <p>${inlineMarkdownToHtml(replacePlaceholders(p, 'html'))}</p>`);
       }
     }
     if (sec.orderedList) {
-      bodyParts.push('      <ol>');
+      bodyParts.push('        <ol>');
       for (const item of sec.orderedList) {
-        bodyParts.push(`        <li>${inlineMarkdownToHtml(replacePlaceholders(item, 'html'))}</li>`);
+        bodyParts.push(`          <li>${inlineMarkdownToHtml(replacePlaceholders(item, 'html'))}</li>`);
       }
-      bodyParts.push('      </ol>');
+      bodyParts.push('        </ol>');
     }
     if (sec.unorderedList) {
-      bodyParts.push('      <ul>');
+      bodyParts.push('        <ul>');
       for (const item of sec.unorderedList) {
-        bodyParts.push(`        <li>${inlineMarkdownToHtml(replacePlaceholders(item, 'html'))}</li>`);
+        bodyParts.push(`          <li>${inlineMarkdownToHtml(replacePlaceholders(item, 'html'))}</li>`);
       }
-      bodyParts.push('      </ul>');
+      bodyParts.push('        </ul>');
     }
     if (sec.outro) {
-      bodyParts.push(`      <p class="outro">${inlineMarkdownToHtml(replacePlaceholders(sec.outro, 'html'))}</p>`);
+      bodyParts.push(`        <p class="outro">${inlineMarkdownToHtml(replacePlaceholders(sec.outro, 'html'))}</p>`);
     }
   }
 
@@ -184,9 +225,14 @@ function renderPolicyHtml(doc, pageTitle, copy) {
     <title>${escapeHtml(pageTitle)}</title>
     <style>
 ${SHARED_DOC_CSS}
-      .wrap {
+      .shell {
         max-width: 720px;
         margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .wrap {
         background: var(--card);
         border: 1px solid var(--border);
         border-radius: 16px;
@@ -240,8 +286,11 @@ ${SHARED_DOC_CSS}
     </style>
   </head>
   <body>
-    <main class="wrap">
+    <main class="shell">
+      <div class="wrap">
 ${bodyParts.join('\n')}
+      </div>
+${renderWebFooterHtml(copy)}
     </main>
   </body>
 </html>
@@ -310,9 +359,17 @@ ${SHARED_DOC_CSS}
       }
       .actions {
         display: flex;
+        align-items: center;
         flex-wrap: wrap;
-        gap: 10px;
+        gap: 16px;
         padding-top: 4px;
+      }
+      .hero-thanks {
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .hero-thanks a {
+        font-weight: 500;
       }
       .btn {
         height: 40px;
@@ -368,18 +425,6 @@ ${SHARED_DOC_CSS}
         color: var(--sub);
         line-height: 1.55;
       }
-      footer {
-        display: flex;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 12px;
-        font-size: 13px;
-        color: var(--muted);
-        padding-top: 8px;
-      }
-      footer a {
-        color: var(--sub);
-      }
     </style>
   </head>
   <body>
@@ -395,6 +440,7 @@ ${SHARED_DOC_CSS}
         <p class="lead">${inlineMarkdownToHtml(copy.overviewLead)}</p>
         <div class="actions">
           <a class="btn btn-primary" href="${escapeHtml(copy.urls.chromeWebStore)}">Add to Chrome</a>
+          <span class="hero-thanks">${escapeHtml(copy.heroThanksPrompt)} <a href="thanks.html">${escapeHtml(copy.heroThanksLinkLabel)} &rarr;</a></span>
         </div>
       </section>
 
@@ -402,15 +448,7 @@ ${SHARED_DOC_CSS}
 ${cardsHtml}
       </section>
 
-      <footer>
-        <span>${escapeHtml(copy.brandName)} · 100% local in Chrome · No external servers or tracking</span>
-        <div>
-          <a href="thanks.html">Say thanks</a> ·
-          <a href="privacy.html">Privacy Policy</a> ·
-          <a href="terms.html">Terms of Service</a> ·
-          <a href="${escapeHtml(copy.urls.authorUrl)}">${escapeHtml(copy.urls.authorHandle)}</a>
-        </div>
-      </footer>
+${renderWebFooterHtml(copy)}
     </main>
   </body>
 </html>
@@ -492,20 +530,7 @@ ${SHARED_DOC_CSS}
       .card-top {
         display: flex;
         flex-direction: column;
-        gap: 8px;
-      }
-      .card-meta {
-        align-self: flex-start;
-        font-size: 11.5px;
-        font-weight: 600;
-        padding: 3px 9px;
-        border-radius: 6px;
-        background: var(--accent-soft);
-        color: var(--accent);
-      }
-      .card-meta.neutral {
-        background: rgba(120, 126, 140, 0.12);
-        color: var(--sub);
+        gap: 6px;
       }
       .card h2 {
         font-size: 17px;
@@ -552,25 +577,6 @@ ${SHARED_DOC_CSS}
       .btn-secondary:hover {
         background: rgba(120, 126, 140, 0.08);
       }
-      .note {
-        font-size: 13px;
-        color: var(--muted);
-        text-align: center;
-        padding-top: 2px;
-      }
-      footer {
-        display: flex;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 12px;
-        font-size: 13px;
-        color: var(--muted);
-        padding-top: 8px;
-        border-top: 1px solid var(--border);
-      }
-      footer a {
-        color: var(--sub);
-      }
     </style>
   </head>
   <body>
@@ -585,7 +591,6 @@ ${SHARED_DOC_CSS}
       <section class="grid">
         <div class="card">
           <div class="card-top">
-            <span class="card-meta">${escapeHtml(t.reviewCard.meta)}</span>
             <h2>${escapeHtml(t.reviewCard.heading)}</h2>
             <p>${inlineMarkdownToHtml(t.reviewCard.body)}</p>
           </div>
@@ -594,7 +599,6 @@ ${SHARED_DOC_CSS}
 
         <div class="card">
           <div class="card-top">
-            <span class="card-meta neutral">${escapeHtml(t.thankYouCard.meta)}</span>
             <h2>${escapeHtml(t.thankYouCard.heading)}</h2>
             <p>${inlineMarkdownToHtml(t.thankYouCard.body)}</p>
           </div>
@@ -602,17 +606,7 @@ ${SHARED_DOC_CSS}
         </div>
       </section>
 
-      <p class="note">${inlineMarkdownToHtml(t.feedbackNote)}</p>
-
-      <footer>
-        <span>${escapeHtml(copy.brandName)} · 100% local in Chrome · No external servers or tracking</span>
-        <div>
-          <a href="index.html">Website</a> ·
-          <a href="privacy.html">Privacy Policy</a> ·
-          <a href="terms.html">Terms of Service</a> ·
-          <a href="${escapeHtml(copy.urls.authorUrl)}">${escapeHtml(copy.urls.authorHandle)}</a>
-        </div>
-      </footer>
+${renderWebFooterHtml(copy)}
     </main>
   </body>
 </html>
