@@ -2822,7 +2822,7 @@ test('seamless OAuth reconnect on signOut, selective DRIVE_SCOPE_MISSING grant r
 
     await signOut();
     assert.equal(revokeCalls, 0, 'Normal signOut must NOT revoke Google Account grant');
-    assert.equal(s1WasClearedAll(), false, 'Normal signOut must NOT call clearAllCachedAuthTokens when removeCachedAuthToken succeeds');
+    assert.equal(s1WasClearedAll(), true, 'Normal signOut must call clearAllCachedAuthTokens to clear remembered account preference');
     assert.equal(s1Store.signedOut, true);
     assert.equal(s1Store.userProfile, null);
     assert.deepEqual(s1Store.recentUploads, []);
@@ -3146,7 +3146,7 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
       midSignInRemoved.includes('late-minted-token-99'),
       'Token minted by superseded signIn must be evicted immediately'
     );
-    assert.equal(midSignInClearedAll, 0, 'Must not call clearAllCachedAuthTokens when removeCachedAuthToken succeeds');
+    assert.ok(midSignInClearedAll >= 2, 'clearAllCachedAuthTokens must run during signOut and superseded signIn');
     assert.equal(midSignInStore.signedOut, true);
     assert.equal(midSignInStore.userProfile, null);
 
@@ -3194,6 +3194,32 @@ test('local token eviction resilience: API throws, runtime.lastError, wedged cal
     assert.equal(quotaStore.signedOut, true, 'signedOut=true must persist even when first storage.local.set hits quota');
     assert.equal(quotaStore.userProfile, null);
     assert.deepEqual(quotaStore.recentUploads, []);
+
+    // 8. Normal logged-in 401 token expiry refreshes silently via removeCachedAuthToken WITHOUT calling clearAllCachedAuthTokens or signing out
+    const {
+      store: refreshStore,
+      removedTokens: refreshRemoved,
+      wasClearedAll: refreshWasClearedAll,
+    } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() },
+      },
+    });
+    let attempt = 0;
+    const uploadResult = await withAuthToken(async (tok) => {
+      attempt += 1;
+      if (attempt === 1) {
+        const expired = new Error('Token expired');
+        expired.status = 401;
+        throw expired;
+      }
+      return `ok-${tok}`;
+    });
+    assert.equal(uploadResult, 'ok-token-2');
+    assert.deepEqual(refreshRemoved, ['token-1']);
+    assert.equal(refreshWasClearedAll(), false, 'Background 401 refresh must NOT call clearAllCachedAuthTokens');
+    assert.equal(refreshStore.signedOut, false, 'Logged-in user must stay signed in across token rotation');
   } finally {
     globalThis.fetch = origFetch;
   }
