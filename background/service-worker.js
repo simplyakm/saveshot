@@ -56,11 +56,30 @@ const LAST_UPLOADED_META_KEY = 'lastUploadedMeta';
 const FALLBACK_CAPTURE_KEY = 'lastFailedCaptureSession';
 const PENDING_REGION_TABS_KEY = 'pendingRegionTabs';
 
+export const CONTEXT_MENU_CAPTURE_ID = 'saveshot-take-screenshot';
+export const CONTEXT_MENU_TITLE = 'Take Screenshot';
+export const CONTEXT_MENU_URL_PATTERNS = Object.freeze([
+  'http://*/*',
+  'https://*/*',
+  'file://*/*',
+]);
+export const CONTEXT_MENU_CONTEXTS = Object.freeze([
+  'page',
+  'frame',
+  'selection',
+  'link',
+  'editable',
+  'image',
+  'video',
+  'audio',
+]);
+
 let badgeClearTimer = null;
 let lastCaptureTimestamp = 0;
 let lastErrorCode = '';
 let lastFailedCapture = null;
 let fallbackExpiryTimer = null;
+let contextMenuSyncChain = Promise.resolve(false);
 
 let lastUploadedFileId = '';
 const recentUploadedCaptures = new Map();
@@ -1128,13 +1147,69 @@ async function handleSaveEditedScreenshot(message) {
   };
 }
 
+export function syncContextMenus() {
+  contextMenuSyncChain = contextMenuSyncChain.catch(() => false).then(() => {
+    if (!chrome?.contextMenus?.removeAll || !chrome?.contextMenus?.create) {
+      return false;
+    }
+    return new Promise((resolve) => {
+      try {
+        chrome.contextMenus.removeAll(() => {
+          void chrome.runtime?.lastError;
+          try {
+            chrome.contextMenus.create(
+              {
+                id: CONTEXT_MENU_CAPTURE_ID,
+                title: CONTEXT_MENU_TITLE,
+                contexts: [...CONTEXT_MENU_CONTEXTS],
+                documentUrlPatterns: [...CONTEXT_MENU_URL_PATTERNS],
+              },
+              () => {
+                void chrome.runtime?.lastError;
+                resolve(true);
+              }
+            );
+          } catch {
+            resolve(false);
+          }
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+  return contextMenuSyncChain;
+}
+
+async function triggerBackgroundRegionCapture(targetTab) {
+  if (!targetTab?.id) return;
+  try {
+    await startRegionCaptureFlow({ tab: targetTab });
+  } catch (err) {
+    const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+    lastErrorCode = normalized.code || 'CAPTURE_ERROR';
+    setBadge('!', '#dc2626', 4000);
+    await sendTabToast(targetTab.id, {
+      status: 'error',
+      title: 'Cannot start region capture',
+      message: normalized.userMessage,
+    });
+  }
+}
+
 export function registerServiceWorkerListeners() {
   if (chrome?.runtime?.onInstalled) {
     chrome.runtime.onInstalled.addListener(async (details) => {
-      await pruneStorage().catch(() => {});
-      if (details.reason === 'install') {
+      await Promise.all([syncContextMenus(), pruneStorage().catch(() => {})]);
+      if (details?.reason === 'install') {
         chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
       }
+    });
+  }
+
+  if (chrome?.runtime?.onStartup) {
+    chrome.runtime.onStartup.addListener(() => {
+      syncContextMenus();
     });
   }
 
@@ -1552,7 +1627,9 @@ export function registerServiceWorkerListeners() {
 
   if (chrome?.commands?.onCommand) {
     chrome.commands.onCommand.addListener(async (command, tab) => {
-      const activeTab = tab || (await resolveTargetTab());
+      const activeTab =
+        (tab && typeof tab.id === 'number' && tab.id >= 0 ? tab : null) ||
+        (await resolveTargetTab());
       if (!activeTab) return;
 
       if (command === 'capture-visible') {
@@ -1566,20 +1643,24 @@ export function registerServiceWorkerListeners() {
           // Surfaced via toast and badge
         }
       } else if (command === 'capture-region') {
-        try {
-          await startRegionCaptureFlow({ tab: activeTab });
-        } catch (err) {
-          const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
-          lastErrorCode = normalized.code || 'CAPTURE_ERROR';
-          await sendTabToast(activeTab.id, {
-            status: 'error',
-            title: 'Cannot start region capture',
-            message: normalized.userMessage,
-          });
-        }
+        await triggerBackgroundRegionCapture(activeTab);
       }
     });
   }
+
+  if (chrome?.contextMenus?.onClicked) {
+    chrome.contextMenus.onClicked.addListener(handleContextMenuClicked);
+  }
 }
+
+export async function handleContextMenuClicked(info, tab) {
+  if (info?.menuItemId !== CONTEXT_MENU_CAPTURE_ID) return;
+  const targetTab =
+    (tab && typeof tab.id === 'number' && tab.id >= 0 ? tab : null) ||
+    (await resolveTargetTab());
+  await triggerBackgroundRegionCapture(targetTab);
+}
+
+globalThis.__saveshotTriggerContextMenuForTest = handleContextMenuClicked;
 
 registerServiceWorkerListeners();

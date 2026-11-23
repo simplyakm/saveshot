@@ -362,7 +362,9 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         hasFeedbackSection: Boolean(document.getElementById('feedback')),
         versionStripText: document.getElementById('version-info-text')?.textContent?.trim() || '',
         cwsHref: document.getElementById('cws-support-link')?.href || '',
-        ghIssuesHref: document.getElementById('repo-issues-link')?.href || '',
+        hasRepoIssuesLink: Boolean(document.getElementById('repo-issues-link')),
+        feedbackActionCount: document.querySelectorAll('#feedback .feedback-actions a').length,
+        hasGithubAnywhere: document.documentElement.outerHTML.toLowerCase().includes('github.com'),
         footerLeft: document.getElementById('welcome-footer-left')?.textContent?.trim() || '',
         footerLinksCount: document.querySelectorAll('.welcome-footer-links a').length,
       }))()`
@@ -388,13 +390,15 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(welcomeCheck.hasFeedbackSection, true);
     assert.match(
       welcomeCheck.versionStripText,
-      /^SaveShot v1\.1\.1 \u00b7 Chrome .* \u00b7 Last error: None$/
+      /^SaveShot v1\.1\.2 \u00b7 Chrome .* \u00b7 Last error: None$/
     );
     assert.equal(
       welcomeCheck.cwsHref,
       'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support'
     );
-    assert.equal(welcomeCheck.ghIssuesHref, 'https://github.com/simplyakm/saveshot/issues');
+    assert.equal(welcomeCheck.hasRepoIssuesLink, false, 'Raise on GitHub must be removed from welcome.html');
+    assert.equal(welcomeCheck.feedbackActionCount, 1, 'Feedback card must render only the single CWS Support CTA');
+    assert.equal(welcomeCheck.hasGithubAnywhere, false, 'welcome.html must contain zero github.com URLs');
     assert.equal(welcomeCheck.footerLeft, 'SaveShot \u00b7 Privacy-first screenshot tool');
     assert.equal(welcomeCheck.footerLinksCount, 5, 'Welcome footer must stay decluttered with 5 right-side links');
 
@@ -434,7 +438,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       })()`
     );
     assert.equal(livePinAndCopyCheck.btnLabelAfterCopy, 'Copied!');
-    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.1\.1 \u00b7 Chrome .* \u00b7 Last error: None$/);
+    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.1\.2 \u00b7 Chrome .* \u00b7 Last error: None$/);
     assert.equal(livePinAndCopyCheck.pinNudgeHiddenAfterPin, true, 'Pin nudge must hide once pinned');
     assert.equal(livePinAndCopyCheck.pinDoneVisibleAfterPin, true, 'Pin celebration must appear when pinned live');
     assert.match(livePinAndCopyCheck.pinDoneText, /Pinned to your Chrome toolbar!/);
@@ -489,6 +493,79 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         return { tabId: t.id, windowId: t.windowId };
       })()`
     );
+
+    // -------------------------------------------------------------------------
+    // 0. Real Chromium C++ MenuManager Registration + Context Menu 1-Click Capture Flow
+    // -------------------------------------------------------------------------
+    const nativeContextMenuAudit = await evalIn(
+      swSession,
+      `(async () => {
+        const hasClickListener = Boolean(chrome.contextMenus?.onClicked?.hasListeners?.());
+        const existingCheck = await new Promise((resolve) => {
+          chrome.contextMenus.update('saveshot-take-screenshot', {}, () => {
+            resolve(chrome.runtime.lastError ? chrome.runtime.lastError.message : 'OK');
+          });
+        });
+        const bogusCheck = await new Promise((resolve) => {
+          chrome.contextMenus.update('saveshot-nonexistent-submenu', {}, () => {
+            resolve(chrome.runtime.lastError ? chrome.runtime.lastError.message : 'OK');
+          });
+        });
+        const targetTab = await chrome.tabs.get(${testTabInfo.tabId});
+        await globalThis.__saveshotTriggerContextMenuForTest(
+          { menuItemId: 'saveshot-take-screenshot' },
+          targetTab
+        );
+        return { hasClickListener, existingCheck, bogusCheck };
+      })()`
+    );
+    assert.equal(nativeContextMenuAudit.hasClickListener, true, 'Service worker must bind contextMenus.onClicked');
+    assert.equal(
+      nativeContextMenuAudit.existingCheck,
+      'OK',
+      'Chromium native MenuManager must have registered saveshot-take-screenshot on install'
+    );
+    assert.match(
+      nativeContextMenuAudit.bogusCheck,
+      /Cannot find menu item/i,
+      'No extra submenu item may exist in Chromium MenuManager'
+    );
+
+    // Verify context menu click mounted the region selector on the active page and dragging opens cropped local Editor
+    const cmOverlayMounted = await evalIn(
+      pageSession,
+      `Boolean(document.getElementById('__saveshot-overlay-host'))`
+    );
+    assert.equal(cmOverlayMounted, true, 'Clicking Take Screenshot must mount region overlay on webpage');
+
+    await cdp.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x: 124, y: 94, button: 'left', clickCount: 1 },
+      pageSession
+    );
+    await cdp.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: 256, y: 186, button: 'left' },
+      pageSession
+    );
+    await cdp.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x: 256, y: 186, button: 'left', clickCount: 1 },
+      pageSession
+    );
+
+    let cmEditorTarget = null;
+    for (let i = 0; i < 20; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      cmEditorTarget = targetInfos.find(
+        (t) => t.type === 'page' && t.url.includes('/pages/editor.html?session=')
+      );
+      if (cmEditorTarget) break;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    assert.ok(cmEditorTarget, 'Context-menu region drag must open cropped Editor tab');
+    await cdp.send('Target.closeTarget', { targetId: cmEditorTarget.targetId });
+    await evalIn(swSession, `chrome.tabs.update(${testTabInfo.tabId}, { active: true })`);
 
     // -------------------------------------------------------------------------
     // 1. Real OffscreenCanvas Crop Accuracy across Browser Zooms & Pinch-Zoom

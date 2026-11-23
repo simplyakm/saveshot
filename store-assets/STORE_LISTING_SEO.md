@@ -31,8 +31,8 @@ Capture and download screenshots locally right out of the box with no sign-in re
 
 KEY FEATURES
 
-• Select Area, Full Tab, or Customizable Keyboard Shortcuts
-Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
+• Select Area, Full Tab, Right-Click Menu, or Keyboard Shortcuts
+Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, right-click any webpage and choose "Take Screenshot", press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
 • Built-In Screenshot Editor, Pixel Redaction & Local Download
 Annotate screenshots right in a new tab without leaving Chrome:
@@ -57,7 +57,7 @@ PRIVACY FIRST BY DESIGN
 
 • No External Servers: Uploads go directly from your browser to Google's official Drive API (https://www.googleapis.com). SaveShot has zero private or third-party servers.
 • Narrow Google Drive Permission (drive.file): SaveShot can only access the screenshots and folder it creates itself. It cannot read, list, edit, or delete any other files in your Google Drive.
-• Active-Tab Only (activeTab): SaveShot never runs in the background and only captures when you click SaveShot or press your shortcut.
+• Active-Tab Only (activeTab): SaveShot never runs in the background and only captures when you click SaveShot, choose Take Screenshot from the right-click menu, or press your shortcut.
 • Incognito Ready: When allowed in Incognito, SaveShot leaves page URLs out of filenames and skips local device history.
 • Zero External Dependencies: Lightweight vanilla code with zero third-party libraries, SDKs, analytics, or trackers.
 ```

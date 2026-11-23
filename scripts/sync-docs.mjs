@@ -16,9 +16,10 @@ function escapeHtml(raw) {
 
 function replacePlaceholders(text, mode) {
   const isHtml = mode === 'html';
-  return String(text)
-    .replace(/\{\{LICENSE_LINK\}\}/g, isHtml ? SITE_COPY.urls.githubLicense : 'LICENSE')
-    .replace(/\{\{PRIVACY_LINK\}\}/g, isHtml ? 'privacy.html' : 'PRIVACY.md');
+  return String(text).replace(
+    /\{\{PRIVACY_LINK\}\}/g,
+    isHtml ? 'privacy.html' : 'PRIVACY.md'
+  );
 }
 
 /**
@@ -587,7 +588,6 @@ ${faqsHtml}
         </div>
         <div class="support-actions">
           <a class="btn btn-sm btn-primary" href="${escapeHtml(copy.urls.chromeWebStoreSupport)}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(sup.cwsCta)}</span>${EXTERNAL_LINK_SVG}</a>
-          <a class="btn btn-sm btn-secondary" href="${escapeHtml(copy.urls.githubIssues)}" target="_blank" rel="noopener noreferrer"><span>${escapeHtml(sup.githubCta)}</span>${EXTERNAL_LINK_SVG}</a>
         </div>
       </section>
 
@@ -822,8 +822,8 @@ Capture and download screenshots locally right out of the box with no sign-in re
 
 KEY FEATURES
 
-• Select Area, Full Tab, or Customizable Keyboard Shortcuts
-Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
+• Select Area, Full Tab, Right-Click Menu, or Keyboard Shortcuts
+Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, right-click any webpage and choose "Take Screenshot", press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
 • Built-In Screenshot Editor, Pixel Redaction & Local Download
 Annotate screenshots right in a new tab without leaving Chrome:
@@ -848,7 +848,7 @@ PRIVACY FIRST BY DESIGN
 
 • No External Servers: Uploads go directly from your browser to Google's official Drive API (https://www.googleapis.com). ${copy.brandName} has zero private or third-party servers.
 • Narrow Google Drive Permission (drive.file): ${copy.brandName} can only access the screenshots and folder it creates itself. It cannot read, list, edit, or delete any other files in your Google Drive.
-• Active-Tab Only (activeTab): ${copy.brandName} never runs in the background and only captures when you click ${copy.brandName} or press your shortcut.
+• Active-Tab Only (activeTab): ${copy.brandName} never runs in the background and only captures when you click ${copy.brandName}, choose Take Screenshot from the right-click menu, or press your shortcut.
 • Incognito Ready: When allowed in Incognito, ${copy.brandName} leaves page URLs out of filenames and skips local device history.
 • Zero External Dependencies: Lightweight vanilla code with zero third-party libraries, SDKs, analytics, or trackers.
 \`\`\`
@@ -894,13 +894,22 @@ export function renderWelcomeFaqItemsHtml(copy = SITE_COPY) {
 export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
   let updated = syncAnchorHrefs(welcomeHtml, [
     ['cws-support-link', copy.urls.chromeWebStoreSupport],
-    ['repo-issues-link', copy.urls.githubIssues],
     ['welcome-site-link', copy.urls.homepage],
     ['welcome-thanks-link', copy.urls.thanksHtml],
     ['welcome-privacy-link', copy.urls.privacyHtml],
     ['welcome-terms-link', copy.urls.termsHtml],
     ['welcome-author-link', copy.urls.authorUrl],
   ]);
+
+  updated = updated.replace(
+    /(<span class="ss-kbd" id="ext-version">)[\s\S]*?(<\/span>)/,
+    `$1v${escapeHtml(copy.version)}$2`
+  );
+
+  updated = updated.replace(
+    /(<span class="version-info-text" id="version-info-text">)[\s\S]*?(<\/span>)/,
+    `$1${escapeHtml(copy.brandName)} v${escapeHtml(copy.version)}$2`
+  );
 
   updated = updated.replace(
     /(<span id="welcome-footer-left">)[\s\S]*?(<\/span>)/,
@@ -916,10 +925,14 @@ export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
 }
 
 export function syncPopupHtmlLinks(popupHtml, copy = SITE_COPY) {
-  return syncAnchorHrefs(popupHtml, [
+  const updated = syncAnchorHrefs(popupHtml, [
     ['footer-thanks-link', copy.urls.thanksHtml],
     ['footer-author-link', copy.urls.authorUrl],
   ]);
+  return updated.replace(
+    /(<span class="tabular" id="popup-version">)[\s\S]*?(<\/span>)/,
+    `$1v${escapeHtml(copy.version)}$2`
+  );
 }
 
 export function buildGeneratedFiles(copy = SITE_COPY) {

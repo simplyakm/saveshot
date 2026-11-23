@@ -1,6 +1,6 @@
 # Terms of Service for SaveShot
 
-**Last updated:** November 22, 2026
+**Last updated:** November 23, 2026
 
 By installing or using the SaveShot Chrome extension ("SaveShot"), you agree to these Terms of Service.
 
@@ -32,4 +32,4 @@ To the maximum extent permitted by applicable law, the developer and contributor
 
 ## 7. Changes & Contact
 
-We may update these Terms from time to time by updating the date at the top of this page. For questions, bug reports, or feature requests, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).
+We may update these Terms from time to time by updating the date at the top of this page. For questions, bug reports, or feature requests, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support).

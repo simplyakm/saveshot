@@ -126,7 +126,7 @@ export function buildCwsZipBuffer(baseDir = rootDir) {
   };
 }
 
-export function findLatestCwsZipName(baseDir = rootDir, version = '1.1.1') {
+export function findLatestCwsZipName(baseDir = rootDir, version = '1.1.2') {
   const assetsDir = path.join(baseDir, 'store-assets');
   const prefix = `saveshot-v${version}-`;
   const matches = fs

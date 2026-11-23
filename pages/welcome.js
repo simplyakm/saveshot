@@ -2,7 +2,6 @@ import {
   DEFAULT_CWS_SUPPORT_URL,
   formatVersionInfoLine,
   getEnvironmentSummary,
-  getRepoUrl,
 } from '../lib/feedback.js';
 import {
   formatShortcutDisplay,
@@ -29,7 +28,6 @@ const els = {
   versionInfoText: document.getElementById('version-info-text'),
   copyVersionBtn: document.getElementById('copy-version-btn'),
   cwsSupportLink: document.getElementById('cws-support-link'),
-  repoIssuesLink: document.getElementById('repo-issues-link'),
 };
 
 let lastErrorCode = '';
@@ -73,10 +71,6 @@ async function loadStatus() {
   els.cwsSupportLink.href = safeHttpsUrl(
     els.cwsSupportLink.getAttribute('href'),
     DEFAULT_CWS_SUPPORT_URL
-  );
-  els.repoIssuesLink.href = safeHttpsUrl(
-    `${getRepoUrl()}/issues`,
-    'https://github.com/simplyakm/saveshot/issues'
   );
 
   const params = new URLSearchParams(window.location.search);

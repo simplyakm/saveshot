@@ -8,8 +8,8 @@
 export const SITE_COPY = {
   brandName: 'SaveShot',
   extensionTitle: 'SaveShot: Screenshot to Google Drive',
-  version: '1.1.1',
-  lastUpdated: 'November 22, 2026',
+  version: '1.1.2',
+  lastUpdated: 'November 23, 2026',
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation
   shortDescription:
@@ -32,9 +32,6 @@ export const SITE_COPY = {
     privacyHtml: 'https://simplyakm.github.io/saveshot/privacy.html',
     termsHtml: 'https://simplyakm.github.io/saveshot/terms.html',
     topmateThanks: 'https://topmate.io/simplyakm/2420618',
-    githubRepo: 'https://github.com/simplyakm/saveshot',
-    githubIssues: 'https://github.com/simplyakm/saveshot/issues',
-    githubLicense: 'https://github.com/simplyakm/saveshot/blob/main/LICENSE',
     authorUrl: 'https://x.com/_simplyakm',
     authorHandle: '@_simplyakm',
     googleConnections: 'https://myaccount.google.com/connections',
@@ -66,9 +63,9 @@ export const SITE_COPY = {
       title: 'Select area or full tab',
       webTitle: 'Select Area or Full Tab',
       summary:
-        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press `Enter` for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.',
+        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, right-click any page and choose **Take Screenshot**, press `Enter` for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.',
       readmeBullet:
-        '**Select area or full tab**: Drag a box over any part of a page to crop just that section, press `Enter` to capture the full tab, or capture the visible tab in one click.',
+        '**Select area, full tab, or right-click**: Drag a box over any part of a page to crop just that section, right-click any page and choose **Take Screenshot**, press `Enter` to capture the full tab, or capture the visible tab in one click.',
     },
     {
       title: 'Annotate, redact & download',
@@ -123,7 +120,7 @@ export const SITE_COPY = {
     {
       question: 'How do keyboard shortcuts work?',
       answer:
-        'SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts`.',
+        'SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).',
     },
     {
       question: 'Why are capture buttons disabled on some tabs?',
@@ -147,13 +144,12 @@ export const SITE_COPY = {
     sectionTitle: 'Report a bug or request a feature',
     heading: 'Found a bug or want a feature?',
     body:
-      'Report an issue or suggest a feature on the Chrome Web Store Support page, or open an issue on GitHub.',
+      'Report an issue or suggest a feature on the Chrome Web Store Support page.',
     cwsCta: 'Report on Chrome Web Store',
-    githubCta: 'Raise on GitHub',
   },
 
   readmeFeedbackParagraph:
-    'Click **Help** or **Report bug** inside SaveShot to copy your version info in one click and report an issue or request a feature on the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
+    'Click **Help** or **Report bug** inside SaveShot to copy your version info in one click and report an issue or request a feature on the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support).',
 
   readmePrivacySummary:
     'SaveShot runs in your browser with no external or middleman servers. When you connect Google Drive, screenshots upload directly from Chrome to Google\'s official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates.',
@@ -168,7 +164,7 @@ export const SITE_COPY = {
         heading: 'What data SaveShot accesses',
         lead: 'SaveShot only accesses data when you choose to take a screenshot or connect Google Drive:',
         orderedList: [
-          '**Screenshots you capture**: When you click **Select area**, click **Visible tab**, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it in memory, let you download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.',
+          '**Screenshots you capture**: When you click **Select area**, click **Visible tab**, choose **Take Screenshot** from the right-click menu, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it in memory, let you download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.',
           '**Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests Google\'s narrow `https://www.googleapis.com/auth/drive.file` permission when you choose to connect Google Drive. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete any of your other Google Drive files.',
         ],
       },
@@ -208,7 +204,7 @@ export const SITE_COPY = {
       {
         heading: 'Contact',
         paragraphs: [
-          'If you have questions about this policy or want to report a privacy issue, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
+          'If you have questions about this policy or want to report a privacy issue, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support).',
         ],
       },
     ],
@@ -261,7 +257,7 @@ export const SITE_COPY = {
       {
         heading: '7. Changes & Contact',
         paragraphs: [
-          'We may update these Terms from time to time by updating the date at the top of this page. For questions, bug reports, or feature requests, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
+          'We may update these Terms from time to time by updating the date at the top of this page. For questions, bug reports, or feature requests, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support).',
         ],
       },
     ],

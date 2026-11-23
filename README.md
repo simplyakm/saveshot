@@ -8,7 +8,7 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotat
 
 ## What it does
 
-- **Select area or full tab**: Drag a box over any part of a page to crop just that section, press `Enter` to capture the full tab, or capture the visible tab in one click.
+- **Select area, full tab, or right-click**: Drag a box over any part of a page to crop just that section, right-click any page and choose **Take Screenshot**, press `Enter` to capture the full tab, or capture the visible tab in one click.
 - **Customizable keyboard shortcuts**: Trigger area selection or visible-tab capture from the keyboard, and customize your preferred keys anytime at `chrome://extensions/shortcuts`.
 - **Works locally or autosaves to your Drive**: Capture, edit, and download PNGs locally right away without signing in, or connect Google Drive once to autosave to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically.
 - **Built-in lightweight editor**: Opens automatically in a new tab so you can rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.
@@ -18,7 +18,7 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotat
 
 ## Reporting bugs or requesting features
 
-Click **Help** or **Report bug** inside SaveShot to copy your version info in one click and report an issue or request a feature on the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).
+Click **Help** or **Report bug** inside SaveShot to copy your version info in one click and report an issue or request a feature on the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support).
 
 ## Privacy & Terms
 

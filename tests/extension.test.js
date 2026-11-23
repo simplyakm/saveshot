@@ -53,11 +53,9 @@ import {
   updateSettings,
 } from '../lib/storage.js';
 import {
-  buildFeedbackPayload,
   DEFAULT_CWS_SUPPORT_URL,
   formatVersionInfoLine,
   getEnvironmentSummary,
-  getRepoUrl,
 } from '../lib/feedback.js';
 import {
   clampPoint,
@@ -107,10 +105,15 @@ function installChromeMock({
   let tokenCounter = 0;
   let remainingSetFailures = failStorageSetCount || (failStorageSetOnce ? 1 : 0);
 
+  const contextMenuItems = [];
+  let duplicateMenuErrors = 0;
+
   const listeners = {
     onInstalled: [],
+    onStartup: [],
     onMessage: [],
     onCommand: [],
+    onContextMenuClicked: [],
     onStorageChanged: [],
   };
 
@@ -118,12 +121,15 @@ function installChromeMock({
     runtime: {
       lastError: null,
       getManifest: () => ({
-        version: '1.1.1',
+        version: '1.1.2',
         oauth2: { client_id: clientId },
       }),
       getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
       onInstalled: {
         addListener: (fn) => listeners.onInstalled.push(fn),
+      },
+      onStartup: {
+        addListener: (fn) => listeners.onStartup.push(fn),
       },
       onMessage: {
         addListener: (fn) => listeners.onMessage.push(fn),
@@ -141,6 +147,29 @@ function installChromeMock({
     commands: {
       onCommand: {
         addListener: (fn) => listeners.onCommand.push(fn),
+      },
+    },
+    contextMenus: {
+      create: (props, cb) => {
+        if (props?.id && contextMenuItems.some((item) => item.id === props.id)) {
+          duplicateMenuErrors += 1;
+          globalThis.chrome.runtime.lastError = {
+            message: `Cannot create item with duplicate id ${props.id}`,
+          };
+          cb?.();
+          globalThis.chrome.runtime.lastError = null;
+          return props.id;
+        }
+        contextMenuItems.push(structuredClone(props));
+        cb?.();
+        return props?.id;
+      },
+      removeAll: (cb) => {
+        contextMenuItems.length = 0;
+        cb?.();
+      },
+      onClicked: {
+        addListener: (fn) => listeners.onContextMenuClicked.push(fn),
       },
     },
     action: {
@@ -277,6 +306,8 @@ function installChromeMock({
     createdTabs,
     sentTabMessages,
     badges,
+    contextMenuItems,
+    getDuplicateMenuErrors: () => duplicateMenuErrors,
     listeners,
     dispatchMessage,
     getExecuteScriptCalls: () => executeScriptCalls,
@@ -337,6 +368,7 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
 
   assert.deepEqual(manifest.permissions.sort(), [
     'activeTab',
+    'contextMenus',
     'identity',
     'scripting',
     'storage',
@@ -811,7 +843,12 @@ test('storage compacts upload records, caps account cache to 5, and prunes legac
   );
 });
 
-test('feedback helper builds version info lines, resolves GitHub repo URLs safely, and never leaks private info', () => {
+test('feedback helper builds compact version info lines across OS/UA variants and exports zero GitHub links', async () => {
+  const feedbackMod = await import('../lib/feedback.js');
+  assert.equal('DEFAULT_REPO_URL' in feedbackMod, false, 'lib/feedback.js must not export DEFAULT_REPO_URL');
+  assert.equal('getRepoUrl' in feedbackMod, false, 'lib/feedback.js must not export getRepoUrl');
+  assert.equal('buildFeedbackPayload' in feedbackMod, false, 'lib/feedback.js must not export buildFeedbackPayload');
+
   const env = getEnvironmentSummary(
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/156.0.0.0 Safari/537.36'
   );
@@ -825,54 +862,30 @@ test('feedback helper builds version info lines, resolves GitHub repo URLs safel
     formatVersionInfoLine({ env, lastErrorCode: 'DRIVE_QUOTA_EXCEEDED' }),
     `SaveShot v${env.extensionVersion} \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: DRIVE_QUOTA_EXCEEDED`
   );
-  assert.ok(DEFAULT_CWS_SUPPORT_URL.endsWith('/support'));
+  assert.ok(DEFAULT_CWS_SUPPORT_URL.endsWith('/eilmbilnlihhddjdmdpppalfnbnieppf/support'));
 
   const prevChrome = globalThis.chrome;
   try {
-    globalThis.chrome = {
-      runtime: {
-        getManifest: () => ({ homepage_url: 'https://simplyakm.github.io/saveshot/' }),
-      },
-    };
+    globalThis.chrome = undefined;
     assert.equal(
-      getRepoUrl(),
-      'https://github.com/simplyakm/saveshot',
-      'getRepoUrl must fall back to github.com when homepage_url points to GitHub Pages'
+      getEnvironmentSummary('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/157.0.1.2').os,
+      'Windows'
     );
-    globalThis.chrome = {
-      runtime: {
-        getManifest: () => ({ homepage_url: 'https://github.com/acme/saveshot///' }),
-      },
-    };
-    assert.equal(getRepoUrl(), 'https://github.com/acme/saveshot');
+    assert.equal(
+      getEnvironmentSummary('Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) Chrome/157.0.0.0').os,
+      'ChromeOS'
+    );
+    assert.equal(
+      getEnvironmentSummary('Mozilla/5.0 (X11; Linux x86_64) Chrome/157.0.0.0').os,
+      'Linux'
+    );
+    const fallbackEnv = getEnvironmentSummary('CustomBrowser/1.0');
+    assert.equal(fallbackEnv.extensionVersion, '1.1.2');
+    assert.equal(fallbackEnv.browser, 'Chromium');
+    assert.equal(fallbackEnv.os, 'Unknown OS');
   } finally {
     globalThis.chrome = prevChrome;
   }
-
-  const bug = buildFeedbackPayload({
-    kind: 'bug',
-    title: 'Upload stuck on slow Wi-Fi',
-    details: 'Happened once after waking laptop.',
-    lastErrorCode: 'NETWORK_ERROR',
-    includeDiagnostics: true,
-    repoUrl: 'https://github.com/acme/saveshot',
-    env,
-  });
-
-  assert.ok(bug.issueUrl.startsWith('https://github.com/acme/saveshot/issues/new?'));
-  assert.ok(bug.issueUrl.includes('labels=bug'));
-  assert.ok(bug.body.includes('Last error code: NETWORK_ERROR'));
-
-  const featureNoDiag = buildFeedbackPayload({
-    kind: 'feature',
-    title: 'WebP upload option',
-    details: 'Save Drive space.',
-    includeDiagnostics: false,
-    repoUrl: 'https://github.com/acme/saveshot',
-    env,
-  });
-  assert.ok(featureNoDiag.issueUrl.includes('labels=enhancement'));
-  assert.ok(!featureNoDiag.body.includes('Diagnostic info:'));
 });
 
 test('capture and filename helpers survive NaN/Infinity inputs, IPv6 URLs, invalid dates, and non-webstore chrome.google.com paths', async () => {
@@ -2594,7 +2607,7 @@ test('all repository source, UI, and documentation files contain no em dashes or
 
   const { buildCwsZipBuffer, findLatestCwsZipName } = await import('../scripts/pack-cws.mjs');
   const { version, buffer } = buildCwsZipBuffer();
-  assert.equal(version, '1.1.1');
+  assert.equal(version, '1.1.2');
   const latestZipName = findLatestCwsZipName(rootDir, version);
   assert.ok(latestZipName, 'Expected epoch-stamped CWS zip in store-assets/');
   const zipOnDisk = fs.readFileSync(
@@ -2733,9 +2746,11 @@ test('all repository source, UI, and documentation files contain no em dashes or
     indexHtml.includes(`href="${SITE_COPY.urls.chromeWebStoreSupport}"`),
     'docs/index.html Support card must link to Chrome Web Store Support page'
   );
-  assert.ok(
-    indexHtml.includes(`href="${SITE_COPY.urls.githubIssues}"`),
-    'docs/index.html Support card must link to GitHub Issues'
+  const indexSupportActions = indexHtml.match(/<div class="support-actions">[\s\S]*?<\/div>/)?.[0] || '';
+  assert.equal(
+    (indexSupportActions.match(/<a\b/g) || []).length,
+    1,
+    'docs/index.html Support card must render only the single Chrome Web Store Support button'
   );
   assert.equal((indexHtml.match(/href="thanks\.html"/g) || []).length, 2, 'thanks.html should appear in hero inline link and footer');
   assert.equal((indexHtml.match(/href="privacy\.html"/g) || []).length, 1, 'privacy.html should appear once in docs/index.html footer');
@@ -2766,22 +2781,16 @@ test('all repository source, UI, and documentation files contain no em dashes or
   assert.ok(welcomeHtml.includes('id="pin-nudge-card"'), 'pages/welcome.html must include smart live Pin-to-Chrome card');
   assert.ok(welcomeHtml.includes('id="version-strip"'), 'pages/welcome.html must include W1 version info strip');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.chromeWebStoreSupport}"`), 'pages/welcome.html must link to Chrome Web Store Support');
-  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.githubIssues}"`), 'pages/welcome.html must link to GitHub Issues');
+  assert.ok(!welcomeHtml.includes('repo-issues-link'), 'pages/welcome.html must not include Raise on GitHub button');
 
   for (const webPage of ['docs/index.html', 'docs/thanks.html', 'docs/privacy.html', 'docs/terms.html']) {
     const html = fs.readFileSync(path.join(rootDir, webPage), 'utf8');
     assert.ok(html.includes('href="icon32.png"'), `${webPage} must include official icon32.png favicon`);
     assert.ok(html.includes('class="site-footer"'), `${webPage} must include unified single-line site-footer`);
     assert.ok(html.includes('Privacy-first screenshot tool'), `${webPage} footer must show SaveShot · Privacy-first screenshot tool`);
-    assert.ok(
-      !html.includes('href="https://github.com/simplyakm/saveshot"') &&
-        !html.includes('github.com/simplyakm/saveshot/tree') &&
-        !html.includes('github.com/simplyakm/saveshot/blob'),
-      `${webPage} must not link to raw GitHub source repo tree`
-    );
   }
 
-  // Capability-only shortcuts & footer-only @_simplyakm invariants across static HTML and Markdown
+  // Capability-only shortcuts, zero github.com links, & footer-only @_simplyakm invariants across static HTML and Markdown
   for (const staticRel of [
     'docs/index.html',
     'docs/thanks.html',
@@ -2799,6 +2808,10 @@ test('all repository source, UI, and documentation files contain no em dashes or
     assert.ok(
       !/Alt\s*\+\s*Shift\s*\+\s*[SV]/i.test(text),
       `${staticRel} must never hardcode exact Alt+Shift+S / Alt+Shift+V shortcut keys`
+    );
+    assert.ok(
+      !text.toLowerCase().includes('github.com'),
+      `${staticRel} must not contain any github.com URLs`
     );
     if (staticRel.endsWith('.html')) {
       const withoutFooters = text.replace(/<footer\b[\s\S]*?<\/footer>/gi, '');
@@ -3654,6 +3667,156 @@ test('REGION_SELECTED security gate blocks uninitiated/cross-tab/replayed drags,
     });
     assert.equal(secondLoad.ok, true);
     assert.equal(secondLoad.dataUrl, TINY_PNG_DATA_URL);
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.createImageBitmap = origCreateImageBitmap;
+    globalThis.OffscreenCanvas = origOffscreenCanvas;
+  }
+});
+
+test('contextMenus lifecycle: single top-level Take Screenshot item, concurrency safety, URL allowlist, click capture, TAB_ID_NONE fallback, and restricted page guard', async () => {
+  const origFetch = globalThis.fetch;
+  const origCreateImageBitmap = globalThis.createImageBitmap;
+  const origOffscreenCanvas = globalThis.OffscreenCanvas;
+  try {
+    globalThis.createImageBitmap = async () => ({
+      width: 200,
+      height: 120,
+      close() {},
+    });
+    globalThis.OffscreenCanvas = class {
+      constructor(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return { drawImage() {}, imageSmoothingEnabled: true, imageSmoothingQuality: 'high' };
+      }
+      async convertToBlob() {
+        return new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' });
+      }
+    };
+
+    const webTab = {
+      id: 301,
+      windowId: 7,
+      active: true,
+      url: 'https://example.com/article',
+      title: 'Article',
+      incognito: false,
+    };
+    const restrictedTab = {
+      id: 302,
+      windowId: 7,
+      active: false,
+      url: 'chrome://settings',
+      title: 'Settings',
+      incognito: false,
+    };
+
+    const mock = installChromeMock({
+      initialStore: { signedOut: true, userProfile: null },
+      tabs: [webTab, restrictedTab],
+    });
+    const {
+      CONTEXT_MENU_CAPTURE_ID,
+      CONTEXT_MENU_CONTEXTS,
+      CONTEXT_MENU_TITLE,
+      CONTEXT_MENU_URL_PATTERNS,
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+      syncContextMenus,
+    } = await import('../background/service-worker.js');
+    resetInMemoryWorkerStateForTests();
+    registerServiceWorkerListeners();
+
+    // 1. onInstalled ('update' from 1.1.1 -> 1.1.2) registers exactly 1 top-level item (no submenu, no welcome tab)
+    for (const fn of mock.listeners.onInstalled) {
+      await fn({ reason: 'update', previousVersion: '1.1.1' });
+    }
+    assert.equal(mock.createdTabs.length, 0, 'Update must not open welcome.html');
+    assert.equal(
+      mock.contextMenuItems.length,
+      1,
+      'Must register exactly 1 context menu item so Chrome renders icon at top level with no submenu'
+    );
+    assert.equal(mock.contextMenuItems[0].id, CONTEXT_MENU_CAPTURE_ID);
+    assert.equal(mock.contextMenuItems[0].title, CONTEXT_MENU_TITLE);
+    assert.equal(mock.contextMenuItems[0].title, 'Take Screenshot');
+    assert.equal(mock.contextMenuItems[0].parentId, undefined, 'Must have no parentId');
+    assert.deepEqual(mock.contextMenuItems[0].documentUrlPatterns, [
+      ...CONTEXT_MENU_URL_PATTERNS,
+    ]);
+    assert.ok(
+      !mock.contextMenuItems[0].contexts.includes('action'),
+      'Webpage context menu item should not clutter toolbar icon right-click menu'
+    );
+    assert.deepEqual(mock.contextMenuItems[0].contexts, [...CONTEXT_MENU_CONTEXTS]);
+
+    // 2. Concurrent syncContextMenus + onStartup calls serialize cleanly with zero duplicate-id errors
+    for (const fn of mock.listeners.onStartup) {
+      fn();
+    }
+    const syncResults = await Promise.all([
+      syncContextMenus(),
+      syncContextMenus(),
+      syncContextMenus(),
+    ]);
+    assert.deepEqual(syncResults, [true, true, true]);
+    assert.equal(mock.contextMenuItems.length, 1);
+    assert.equal(
+      mock.getDuplicateMenuErrors(),
+      0,
+      'Serialized syncContextMenus must never trigger duplicate menu id errors'
+    );
+
+    // 3. Unknown menuItemId click is ignored completely
+    for (const fn of mock.listeners.onContextMenuClicked) {
+      await fn({ menuItemId: 'unrelated-item' }, webTab);
+    }
+    assert.equal(mock.sentTabMessages.length, 0);
+
+    // 4. Right-click Take Screenshot on webTab (including TAB_ID_NONE fallback) mounts selector & authorizes REGION_SELECTED
+    for (const fn of mock.listeners.onContextMenuClicked) {
+      await fn({ menuItemId: CONTEXT_MENU_CAPTURE_ID }, { id: -1 });
+    }
+    assert.ok(
+      mock.sentTabMessages.some(
+        (m) => m.tabId === 301 && m.message?.type === 'START_REGION_SELECT'
+      ),
+      'Clicking Take Screenshot must mount START_REGION_SELECT on active tab'
+    );
+
+    const sel = { x: 12, y: 12, width: 90, height: 60, viewportWidth: 200, viewportHeight: 120 };
+    const regionRes = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      { url: webTab.url, tab: webTab }
+    );
+    assert.equal(regionRes.ok, true, 'Context-menu-initiated region drag must be authorized');
+    for (let i = 0; i < 30 && mock.createdTabs.length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(mock.createdTabs.length, 1, 'Signed-out context-menu capture must open local Editor');
+
+    // 5. Clicking on an uncapturable internal page flashes '!' badge, sets lastErrorCode, and never authorizes REGION_SELECTED
+    mock.badges.length = 0;
+    for (const fn of mock.listeners.onContextMenuClicked) {
+      await fn({ menuItemId: CONTEXT_MENU_CAPTURE_ID }, restrictedTab);
+    }
+    assert.ok(
+      mock.badges.some((b) => b.text === '!'),
+      'Restricted page context-menu attempt must flash ! badge'
+    );
+    const blockedDrag = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      { url: restrictedTab.url, tab: restrictedTab }
+    );
+    assert.equal(blockedDrag.ok, false);
+    assert.equal(blockedDrag.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 6. Graceful false return if chrome.contextMenus is absent or throws
+    globalThis.chrome.contextMenus = null;
+    assert.equal(await syncContextMenus(), false);
   } finally {
     globalThis.fetch = origFetch;
     globalThis.createImageBitmap = origCreateImageBitmap;
