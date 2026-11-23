@@ -60,6 +60,9 @@ import {
 import {
   clampPoint,
   computeArrowGeometry,
+  EDITOR_TOOLS,
+  HIGHLIGHTER_ALPHA,
+  HIGHLIGHTER_SIZES,
   normalizeRect,
   parseHexColorInput,
   renderAnnotation,
@@ -1636,6 +1639,53 @@ test('editor-core geometry, subpixel-proof redaction snapping, color validation,
     ),
     true
   );
+  assert.ok(EDITOR_TOOLS.includes('highlighter'));
+  assert.deepEqual(HIGHLIGHTER_SIZES, { sm: 14, md: 22, lg: 32 });
+  assert.equal(HIGHLIGHTER_ALPHA, 0.36);
+
+  // Highlighter ignores < 2px taps and renders valid strokes as a single translucent path
+  assert.equal(
+    renderAnnotation(mockCtx, { tool: 'highlighter', points: [{ x: 10, y: 10 }] }, 200, 120),
+    false
+  );
+  assert.equal(
+    renderAnnotation(
+      mockCtx,
+      { tool: 'highlighter', points: [{ x: 10, y: 10 }, { x: 10.8, y: 10.5 }] },
+      200,
+      120
+    ),
+    false
+  );
+
+  let recordedAlpha = null;
+  let recordedLineWidth = null;
+  mockCtx.stroke = () => {
+    recordedAlpha = mockCtx.globalAlpha;
+    recordedLineWidth = mockCtx.lineWidth;
+    opsLog.push('stroke');
+  };
+  assert.equal(
+    renderAnnotation(
+      mockCtx,
+      {
+        tool: 'highlighter',
+        color: '#f59e0b',
+        strokeWidth: 66,
+        points: [
+          { x: 12, y: 24 },
+          { x: 48, y: 24 },
+          { x: 96, y: 26 },
+        ],
+      },
+      200,
+      120
+    ),
+    true
+  );
+  assert.equal(recordedAlpha, HIGHLIGHTER_ALPHA);
+  assert.equal(recordedLineWidth, 66, 'Highlighter must support HiDPI stroke widths > 48px');
+
   assert.equal(
     renderAnnotation(mockCtx, { tool: 'text', text: 'Line 1\nLine 2', x: 15, y: 20, color: '#ffffff' }, 200, 120),
     true
@@ -2286,8 +2336,16 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
     'Unsaved changes pill must live in topbar-left status slot so right-side buttons never shift'
   );
   assert.ok(
-    topbarRightChunk.indexOf('id="editor-help-btn"') < topbarRightChunk.indexOf('id="download-btn"'),
-    'Help button must appear before Download in editor topbar-right'
+    topbarRightChunk.indexOf('id="editor-help-btn"') < topbarRightChunk.indexOf('id="copy-image-btn"'),
+    'Help button must appear before Copy image in editor topbar-right'
+  );
+  assert.ok(
+    topbarRightChunk.indexOf('id="copy-image-btn"') < topbarRightChunk.indexOf('id="download-btn"'),
+    'Copy image button must appear before Download in editor topbar-right'
+  );
+  assert.ok(
+    editorHtml.includes('data-tool="highlighter"'),
+    'Editor dock must include Highlighter tool button'
   );
 });
 
@@ -2589,7 +2647,7 @@ test('CAPTURE_VISIBLE_FROM_OVERLAY security gate: blocks uninitiated, cross-tab,
 });
 
 test('all repository source, UI, and documentation files contain no em dashes or en dashes, and CWS zip is in sync', async () => {
-  const textExts = new Set(['.js', '.mjs', '.json', '.html', '.css', '.md', '.yml']);
+  const textExts = new Set(['.js', '.mjs', '.json', '.html', '.css', '.md', '.txt', '.xml', '.yml']);
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.git') || entry.name === 'node_modules') continue;
@@ -2624,14 +2682,21 @@ test('all repository source, UI, and documentation files contain no em dashes or
   const {
     buildGeneratedFiles,
     inlineMarkdownToHtml,
+    stripInlineMarkdown,
     syncPopupHtmlLinks,
     syncWelcomeHtmlLinks,
+    toIsoDate,
   } = await import('../scripts/sync-docs.mjs');
 
   assert.equal(
     inlineMarkdownToHtml('Use `<script>` & **Save** at [Site](https://example.com)'),
     'Use <code>&lt;script&gt;</code> &amp; <strong>Save</strong> at <a href="https://example.com" target="_blank" rel="noopener noreferrer">Site</a>'
   );
+  assert.equal(
+    stripInlineMarkdown('Click **Copy image** (`Ctrl+C`) at [Support](https://example.com)'),
+    'Click Copy image (Ctrl+C) at Support'
+  );
+  assert.equal(toIsoDate('November 23, 2026'), '2026-11-23');
 
   const expectedDocs = buildGeneratedFiles(SITE_COPY);
   for (const [relPath, expectedContent] of Object.entries(expectedDocs)) {
@@ -2736,9 +2801,48 @@ test('all repository source, UI, and documentation files contain no em dashes or
     );
   }
 
-  // Website pages must use real icon PNGs, include 7 FAQs + Support card on index.html, keep footers decluttered, and keep editor.html footer-free
+  // Website pages must use real icon PNGs, include 7 FAQs + Support card + valid JSON-LD on index.html, keep footers decluttered, and keep editor.html footer-free
   const indexHtml = fs.readFileSync(path.join(rootDir, 'docs/index.html'), 'utf8');
   assert.ok(indexHtml.includes('src="icon128.png"'), 'docs/index.html must render canonical icon128.png');
+  assert.ok(
+    indexHtml.includes('<link rel="alternate" type="text/plain" href="llms.txt"'),
+    'docs/index.html head must advertise llms.txt for AI/agent discovery'
+  );
+  const ldJsonMatch = indexHtml.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/);
+  assert.ok(ldJsonMatch, 'docs/index.html must contain application/ld+json structured data');
+  assert.ok(!ldJsonMatch[1].includes('<'), 'JSON-LD script body must escape all < characters');
+  const parsedJsonLd = JSON.parse(ldJsonMatch[1]);
+  assert.equal(parsedJsonLd['@context'], 'https://schema.org');
+  const appNode = parsedJsonLd['@graph']?.find((n) => n['@type'] === 'SoftwareApplication');
+  const faqNode = parsedJsonLd['@graph']?.find((n) => n['@type'] === 'FAQPage');
+  assert.ok(appNode, 'JSON-LD must include SoftwareApplication');
+  assert.equal(appNode.softwareVersion, SITE_COPY.version);
+  assert.equal(appNode.installUrl, SITE_COPY.urls.chromeWebStore);
+  assert.equal(appNode.offers?.price, '0');
+  assert.equal(appNode.aggregateRating, undefined, 'JSON-LD must never include fabricated aggregateRating');
+  assert.ok(faqNode, 'JSON-LD must include FAQPage');
+  assert.equal(faqNode.mainEntity?.length, 7, 'JSON-LD FAQPage must include all 7 visible FAQs');
+
+  const llmsTxt = fs.readFileSync(path.join(rootDir, 'docs/llms.txt'), 'utf8');
+  assert.ok(llmsTxt.startsWith('# SaveShot\n'), 'docs/llms.txt must start with H1 # SaveShot');
+  assert.ok(llmsTxt.includes(SITE_COPY.urls.chromeWebStore), 'docs/llms.txt must include Chrome Web Store URL');
+  assert.ok(llmsTxt.includes(SITE_COPY.urls.privacyHtml), 'docs/llms.txt must include Privacy Policy URL');
+  assert.ok(llmsTxt.includes('Copy image'), 'docs/llms.txt must document Copy image capability');
+
+  const robotsTxt = fs.readFileSync(path.join(rootDir, 'docs/robots.txt'), 'utf8');
+  assert.ok(robotsTxt.includes('Allow: /'), 'docs/robots.txt must allow crawlers');
+  assert.ok(robotsTxt.includes(`Sitemap: ${SITE_COPY.urls.homepage}sitemap.xml`), 'docs/robots.txt must point to sitemap.xml');
+
+  const sitemapXml = fs.readFileSync(path.join(rootDir, 'docs/sitemap.xml'), 'utf8');
+  for (const expectedLoc of [
+    SITE_COPY.urls.homepage,
+    SITE_COPY.urls.privacyHtml,
+    SITE_COPY.urls.termsHtml,
+    SITE_COPY.urls.thanksHtml,
+  ]) {
+    assert.ok(sitemapXml.includes(`<loc>${expectedLoc}</loc>`), `docs/sitemap.xml must include ${expectedLoc}`);
+  }
+
   assert.ok(!indexHtml.includes('brand-badge'), 'docs/index.html must never use a hand-drawn SVG brand badge');
   assert.ok(indexHtml.includes('class="hero-thanks"'), 'docs/index.html hero must include subtle Already using it? Say thanks link');
   assert.equal((indexHtml.match(/<details\b/g) || []).length, 7, 'docs/index.html must render all 7 collapsible FAQs');
@@ -2790,12 +2894,15 @@ test('all repository source, UI, and documentation files contain no em dashes or
     assert.ok(html.includes('Privacy-first screenshot tool'), `${webPage} footer must show SaveShot · Privacy-first screenshot tool`);
   }
 
-  // Capability-only shortcuts, zero github.com links, & footer-only @_simplyakm invariants across static HTML and Markdown
+  // Capability-only shortcuts, zero github.com links, & footer-only @_simplyakm invariants across static HTML, Markdown, and agent discovery files
   for (const staticRel of [
     'docs/index.html',
     'docs/thanks.html',
     'docs/privacy.html',
     'docs/terms.html',
+    'docs/llms.txt',
+    'docs/robots.txt',
+    'docs/sitemap.xml',
     'popup/popup.html',
     'pages/editor.html',
     'pages/welcome.html',

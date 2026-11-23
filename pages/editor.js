@@ -5,6 +5,7 @@ import {
 } from '../lib/capture.js';
 import {
   FONT_SIZES,
+  HIGHLIGHTER_SIZES,
   parseHexColorInput,
   renderAnnotation,
   sanitizeHexColor,
@@ -25,6 +26,7 @@ const els = {
   statusPill: document.getElementById('status-pill'),
   unsavedPill: document.getElementById('unsaved-pill'),
   editorHelpBtn: document.getElementById('editor-help-btn'),
+  copyImageBtn: document.getElementById('copy-image-btn'),
   downloadBtn: document.getElementById('download-btn'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
   openDriveLink: document.getElementById('open-drive-link'),
@@ -72,6 +74,8 @@ const state = {
   autoCopyLink: true,
   tool: 'arrow',
   color: '#ef4444',
+  userPickedColor: false,
+  highlighterAutoColored: false,
   sizeKey: 'md',
   ready: false,
   saving: false,
@@ -215,8 +219,9 @@ function getDisplayScale() {
   return Math.max(1, Math.min(3.5, els.baseCanvas.width / rect.width));
 }
 
-function getEffectiveStrokeWidth() {
-  const base = STROKE_SIZES[state.sizeKey] || STROKE_SIZES.md;
+function getEffectiveStrokeWidth(tool = state.tool) {
+  const sizeTable = tool === 'highlighter' ? HIGHLIGHTER_SIZES : STROKE_SIZES;
+  const base = sizeTable[state.sizeKey] || sizeTable.md;
   return Math.round(base * getDisplayScale() * 10) / 10;
 }
 
@@ -274,6 +279,9 @@ function commitActiveTextIfNeeded() {
 
   els.textOverlayInput.hidden = true;
   els.textOverlayInput.value = '';
+  if (document.activeElement === els.textOverlayInput) {
+    els.textOverlayInput.blur();
+  }
   state.activeTextAnchor = null;
 
   if (!text.trim()) {
@@ -311,6 +319,9 @@ function commitActiveTextIfNeeded() {
 function cancelActiveText() {
   els.textOverlayInput.hidden = true;
   els.textOverlayInput.value = '';
+  if (document.activeElement === els.textOverlayInput) {
+    els.textOverlayInput.blur();
+  }
   state.activeTextAnchor = null;
   updateUiState();
 }
@@ -348,6 +359,16 @@ async function setTool(nextTool) {
 
   for (const btn of document.querySelectorAll('[data-tool]')) {
     btn.classList.toggle('active', btn.dataset.tool === nextTool);
+  }
+
+  if (
+    nextTool === 'highlighter' &&
+    !state.userPickedColor &&
+    !state.highlighterAutoColored &&
+    state.color === '#ef4444'
+  ) {
+    state.highlighterAutoColored = true;
+    setColor('#f59e0b', { isCustom: false });
   }
 
   if (nextTool === 'redact') {
@@ -506,6 +527,19 @@ function schedulePreviewRender() {
   previewRafId = requestAnimationFrame(renderActiveDragPreview);
 }
 
+function computeHighlighterPoints(drag, shiftKey) {
+  if (shiftKey) {
+    const dx = drag.currentX - drag.startX;
+    const dy = drag.currentY - drag.startY;
+    const snappedEnd =
+      Math.abs(dx) >= Math.abs(dy)
+        ? { x: drag.currentX, y: drag.startY }
+        : { x: drag.startX, y: drag.currentY };
+    return [{ x: drag.startX, y: drag.startY }, snappedEnd];
+  }
+  return drag.rawPoints;
+}
+
 els.previewCanvas.addEventListener('pointerdown', (event) => {
   if (!state.ready || state.saving || event.button !== 0) return;
   event.preventDefault();
@@ -525,16 +559,20 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
     // Synthetic pointer events in tests may not register an active pointerId
   }
 
+  const isFreehand = state.tool === 'pencil' || state.tool === 'highlighter';
+  const initialRawPoints = isFreehand ? [{ x: coords.x, y: coords.y }] : null;
+
   state.activeDrag = {
     pointerId: event.pointerId,
     tool: state.tool,
     color: state.color,
-    strokeWidth: getEffectiveStrokeWidth(),
+    strokeWidth: getEffectiveStrokeWidth(state.tool),
     startX: coords.x,
     startY: coords.y,
     currentX: coords.x,
     currentY: coords.y,
-    points: state.tool === 'pencil' ? [{ x: coords.x, y: coords.y }] : null,
+    rawPoints: initialRawPoints,
+    points: initialRawPoints,
   };
   renderActiveDragPreview();
 });
@@ -545,11 +583,15 @@ els.previewCanvas.addEventListener('pointermove', (event) => {
   const coords = getCanvasCoordinates(event);
   state.activeDrag.currentX = coords.x;
   state.activeDrag.currentY = coords.y;
-  if (state.activeDrag.points) {
-    const last = state.activeDrag.points[state.activeDrag.points.length - 1];
+  if (state.activeDrag.rawPoints) {
+    const last = state.activeDrag.rawPoints[state.activeDrag.rawPoints.length - 1];
     if (!last || Math.hypot(coords.x - last.x, coords.y - last.y) >= 1.5) {
-      state.activeDrag.points.push({ x: coords.x, y: coords.y });
+      state.activeDrag.rawPoints.push({ x: coords.x, y: coords.y });
     }
+    state.activeDrag.points =
+      state.activeDrag.tool === 'highlighter'
+        ? computeHighlighterPoints(state.activeDrag, event.shiftKey)
+        : state.activeDrag.rawPoints;
   }
   schedulePreviewRender();
 });
@@ -560,8 +602,12 @@ function finishPointerDrag(event) {
   const coords = getCanvasCoordinates(event);
   state.activeDrag.currentX = coords.x;
   state.activeDrag.currentY = coords.y;
-  if (state.activeDrag.points) {
-    state.activeDrag.points.push({ x: coords.x, y: coords.y });
+  if (state.activeDrag.rawPoints) {
+    state.activeDrag.rawPoints.push({ x: coords.x, y: coords.y });
+    state.activeDrag.points =
+      state.activeDrag.tool === 'highlighter'
+        ? computeHighlighterPoints(state.activeDrag, event.shiftKey)
+        : state.activeDrag.rawPoints;
   }
 
   const finishedDrag = state.activeDrag;
@@ -626,10 +672,14 @@ function openFilenameEditor() {
 }
 
 function commitFilenameEdit() {
+  if (els.filenameEditing.hidden) return;
   const clean = sanitizeScreenshotFilename(els.filenameInput.value, state.savedFilename);
   syncFilenameDisplay(clean);
   els.filenameEditing.hidden = true;
   els.filenameReadonly.hidden = false;
+  if (document.activeElement === els.filenameInput) {
+    els.filenameInput.blur();
+  }
   updateUiState();
 }
 
@@ -637,6 +687,9 @@ function cancelFilenameEdit() {
   els.filenameInput.value = state.committedStem;
   els.filenameEditing.hidden = true;
   els.filenameReadonly.hidden = false;
+  if (document.activeElement === els.filenameInput) {
+    els.filenameInput.blur();
+  }
   updateUiState();
 }
 
@@ -677,6 +730,7 @@ els.hexPopover.addEventListener('click', (event) => {
 els.hexColorNative.addEventListener('input', () => {
   const parsed = parseHexColorInput(els.hexColorNative.value);
   if (parsed) {
+    state.userPickedColor = true;
     els.hexInputWrap.classList.remove('invalid');
     setColor(parsed, { isCustom: true });
   }
@@ -688,6 +742,7 @@ function applyHexFromTextInput() {
     els.hexInputWrap.classList.add('invalid');
     return false;
   }
+  state.userPickedColor = true;
   els.hexInputWrap.classList.remove('invalid');
   setColor(parsed, { isCustom: true });
   closeHexPopover();
@@ -724,6 +779,7 @@ for (const btn of document.querySelectorAll('[data-tool]')) {
 
 for (const swatch of els.colorSwatches.querySelectorAll('[data-color]')) {
   swatch.addEventListener('click', () => {
+    state.userPickedColor = true;
     closeHexPopover();
     setColor(swatch.dataset.color, { isCustom: false });
   });
@@ -742,6 +798,47 @@ els.resetBtn.addEventListener('click', () => resetToOriginal());
 
 els.editorHelpBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
+});
+
+function canvasToPngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not encode PNG screenshot.'));
+    }, 'image/png');
+  });
+}
+
+let copyImageTimer = null;
+
+async function copyCanvasImageToClipboard() {
+  if (!state.ready) return false;
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    showStatusPill('err', 'Clipboard image copy is not available in this browser.', 3000);
+    return false;
+  }
+  try {
+    const pngBlobPromise = (async () => {
+      await commitActiveTextIfNeeded();
+      return canvasToPngBlob(els.baseCanvas);
+    })();
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlobPromise })]);
+    if (copyImageTimer) clearTimeout(copyImageTimer);
+    els.copyImageBtn.textContent = 'Copied!';
+    copyImageTimer = setTimeout(() => {
+      copyImageTimer = null;
+      els.copyImageBtn.textContent = 'Copy image';
+    }, 1600);
+    showStatusPill('ok', 'Copied image to clipboard', 2600);
+    return true;
+  } catch {
+    showStatusPill('err', 'Could not copy image to clipboard.', 3000);
+    return false;
+  }
+}
+
+els.copyImageBtn.addEventListener('click', () => {
+  copyCanvasImageToClipboard();
 });
 
 els.downloadBtn.addEventListener('click', async () => {
@@ -779,12 +876,7 @@ els.copyLinkBtn.addEventListener('click', async () => {
 });
 
 async function exportCanvasDataUrl() {
-  const blob = await new Promise((resolve, reject) => {
-    els.baseCanvas.toBlob((b) => {
-      if (b) resolve(b);
-      else reject(new Error('Could not encode PNG screenshot.'));
-    }, 'image/png');
-  });
+  const blob = await canvasToPngBlob(els.baseCanvas);
   return blobToDataUrl(blob);
 }
 
@@ -919,6 +1011,11 @@ els.confirmReplaceBtn.addEventListener('click', async () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Shift' && state.activeDrag?.tool === 'highlighter' && state.activeDrag.rawPoints) {
+    state.activeDrag.points = computeHighlighterPoints(state.activeDrag, true);
+    schedulePreviewRender();
+  }
+
   if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
@@ -932,8 +1029,9 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  const tag = document.activeElement?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const activeEl = document.activeElement;
+  const tag = activeEl?.tagName;
+  if ((tag === 'INPUT' || tag === 'TEXTAREA') && activeEl.offsetParent !== null) return;
 
   if (event.key === 'Escape' && !els.hexPopover.hidden) {
     event.preventDefault();
@@ -947,6 +1045,21 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    !event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === 'c'
+  ) {
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed && String(selection).length > 0) {
+      return;
+    }
+    event.preventDefault();
+    copyCanvasImageToClipboard();
+    return;
+  }
+
   if (event.ctrlKey || event.metaKey || event.altKey) return;
 
   const keyMap = {
@@ -954,6 +1067,7 @@ window.addEventListener('keydown', (event) => {
     b: 'box',
     c: 'circle',
     l: 'line',
+    h: 'highlighter',
     p: 'pencil',
     t: 'text',
     r: 'redact',
@@ -962,6 +1076,13 @@ window.addEventListener('keydown', (event) => {
   if (nextTool) {
     event.preventDefault();
     setTool(nextTool);
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (event.key === 'Shift' && state.activeDrag?.tool === 'highlighter' && state.activeDrag.rawPoints) {
+    state.activeDrag.points = computeHighlighterPoints(state.activeDrag, false);
+    schedulePreviewRender();
   }
 });
 

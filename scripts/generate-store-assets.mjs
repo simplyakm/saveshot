@@ -583,6 +583,15 @@ function stageRealExtensionFiles(stageDir, fontBridgeCss) {
         const ops = [
           { tool: 'redact', x1: 102, y1: 141, x2: 344, y2: 162 },
           { tool: 'redact', x1: 102, y1: 173, x2: 274, y2: 194 },
+          {
+            tool: 'highlighter',
+            color: '#f59e0b',
+            strokeWidth: 20,
+            points: [
+              { x: 464, y: 151.5 },
+              { x: 642, y: 151.5 },
+            ],
+          },
           { tool: 'box', color: '#ef4444', strokeWidth: 3.5, x1: 444, y1: 100, x2: 848, y2: 226 },
           { tool: 'arrow', color: '#ef4444', strokeWidth: 4, x1: 360, y1: 238, x2: 436, y2: 184 },
           { tool: 'text', color: '#ef4444', fontSize: 16, x: 224, y: 230, text: 'Null backoff bug' },
@@ -1351,9 +1360,9 @@ export async function generateAllStoreAssets() {
           <div class="cws-slide">
             ${renderSlideHeader(
               iconDataUri,
-              'Built-In Editor & Local Download',
-              'Annotate, redact sensitive details, or download locally',
-              'Opens automatically so you can add arrows, shapes, text, or pixel redactions, update Drive, or download a PNG.'
+              'Built-In Editor & Instant Copy',
+              'Highlight, annotate, redact sensitive details, or copy PNG',
+              'Opens automatically so you can highlight, add arrows, shapes, text, or pixel redactions, copy to clipboard, or save.'
             )}
             <div class="cws-frame">
               <iframe src="${editorUrl}" style="width:1136px;height:640px;border:0;display:block;" scrolling="no"></iframe>

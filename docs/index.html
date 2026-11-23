@@ -6,8 +6,96 @@
     <meta name="google-site-verification" content="ZyYQoDsqlo22U-Vpm9XZtIMK0I0vTFF3RJLMP6pkOpE" />
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
+    <link rel="alternate" type="text/plain" href="llms.txt" title="SaveShot LLMs.txt" />
     <title>SaveShot: Screenshot to Google Drive</title>
     <meta name="description" content="Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking." />
+    <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "SaveShot: Screenshot to Google Drive",
+      "alternateName": "SaveShot",
+      "applicationCategory": "BrowserApplication",
+      "applicationSubCategory": "Productivity",
+      "operatingSystem": "Chrome",
+      "softwareVersion": "1.1.2",
+      "description": "SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.",
+      "url": "https://simplyakm.github.io/saveshot/",
+      "installUrl": "https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf",
+      "image": "https://simplyakm.github.io/saveshot/icon128.png",
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Do I need to sign in to capture and download screenshots?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. You can capture an area or visible tab, highlight, annotate, or redact it in the editor, and click Copy image or Download with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does SaveShot use any external servers or track my data?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. SaveShot runs in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow drive.file scope, it cannot see any other files in your Drive."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I redact sensitive details before uploading to Google Drive?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on Open editor before uploading in Settings (or capture while signed out)."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do keyboard shortcuts work?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "SaveShot supports customizable shortcuts for both Select area and Visible tab. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at chrome://extensions/shortcuts (or right-click any webpage and choose Take Screenshot)."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why are capture buttons disabled on some tabs?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Chrome blocks all extensions from running on internal pages like chrome://settings and on the Chrome Web Store. For local PDFs or file:// pages, turn on Allow access to file URLs in SaveShot's details at chrome://extensions."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What happens if my Google Drive is full or offline?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "If an upload fails after taking a screenshot, SaveShot shows a Save PNG locally button so you can save the image to your computer without losing it."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How does Incognito mode work?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "If you turn on Allow in Incognito in chrome://extensions, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy."
+          }
+        }
+      ]
+    }
+  ]
+}
+    </script>
     <style>
       :root {
         --bg: #f5f6f8;
@@ -312,7 +400,7 @@
             <p class="lead">Private screenshots straight to Google Drive or your computer.</p>
           </div>
         </div>
-        <p class="lead">SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.</p>
+        <p class="lead">SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.</p>
         <div class="actions">
           <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf">Add to Chrome</a>
           <span class="hero-thanks">Already using it? <a href="thanks.html">Say thanks &rarr;</a></span>
@@ -325,8 +413,8 @@
           <p>Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, right-click any page and choose <strong>Take Screenshot</strong>, press <code>Enter</code> for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.</p>
         </div>
         <div class="card">
-          <h2>Annotate, Redact &amp; Download</h2>
-          <p>Opens automatically in a new tab so you can add arrows, boxes, circles, lines, freehand strokes, text, custom <code>#HEX</code> colors, or solid black pixel redactions, rotate or flip, rename, <strong>Download</strong> a PNG to your computer with no sign-in required, or save straight to Google Drive.</p>
+          <h2>Annotate, Redact &amp; Copy</h2>
+          <p>Opens automatically in a new tab so you can highlight text, add arrows, boxes, circles, lines, freehand strokes, text, custom <code>#HEX</code> colors, or solid black pixel redactions, rotate or flip, rename, <strong>Copy image</strong> (<code>Ctrl+C</code>) or <strong>Download</strong> a PNG with no sign-in required, or save straight to Google Drive.</p>
         </div>
         <div class="card">
           <h2>No External Servers</h2>
@@ -345,7 +433,7 @@
             <span>Do I need to sign in to capture and download screenshots?</span>
             <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </summary>
-          <p class="faq-answer">No. You can capture an area or visible tab, annotate or redact it in the editor, and click <strong>Download</strong> with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.</p>
+          <p class="faq-answer">No. You can capture an area or visible tab, highlight, annotate, or redact it in the editor, and click <strong>Copy image</strong> or <strong>Download</strong> with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.</p>
         </details>
         <details>
           <summary>

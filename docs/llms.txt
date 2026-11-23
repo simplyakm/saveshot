@@ -1,0 +1,57 @@
+# SaveShot
+
+> Private screenshots straight to Google Drive or your computer.
+
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.
+
+## Key Capabilities
+
+- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, press `Enter` inside the selector for the full tab, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at `chrome://extensions/shortcuts`.
+- **Built-in screenshot editor**: Add arrows, rectangles, circles, lines, translucent marker highlights (`H`, hold `Shift` for a straight line), freehand pencil strokes, legible text callouts, custom `#HEX` colors, or solid black pixel redactions, plus rotate 90 degrees, flip, undo, or reset.
+- **Instant clipboard and local export (no sign-in required)**: Click **Copy image** (or press `Ctrl+C` / `Cmd+C`) in the editor to copy a lossless PNG straight to your clipboard for pasting into AI assistants, chat apps, docs, or bug trackers, or click **Download** to save the PNG to your computer.
+- **Direct Google Drive autosave**: Optionally connect Google Drive once to upload screenshots straight from Chrome into `Chrome_SaveShot_ScreenShots` (customizable in Settings) and copy the share link automatically, with a local PNG fallback if Drive is offline or full.
+
+## Privacy and Security
+
+- **No external servers**: Screenshots stay in Chrome or upload over HTTPS directly from the browser to Google's official Drive API (`https://www.googleapis.com`). SaveShot operates zero private, middleman, or analytics servers.
+- **Narrow permissions**: Uses `activeTab` and `contextMenus` for user-triggered capture, and Google's narrow `https://www.googleapis.com/auth/drive.file` scope when connected so SaveShot can only access the screenshots and folder it creates itself.
+- **Incognito isolation**: When allowed in Incognito, SaveShot omits page URLs from filenames and Drive descriptions and skips local device history.
+
+## Official Links
+
+- [Chrome Web Store Listing](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf): Install SaveShot (SaveShot: Screenshot to Google Drive, v1.1.2).
+- [Homepage](https://simplyakm.github.io/saveshot/): Product overview and frequently asked questions.
+- [Privacy Policy](https://simplyakm.github.io/saveshot/privacy.html): Data handling and Google API Services User Data Policy Limited Use disclosure.
+- [Terms of Service](https://simplyakm.github.io/saveshot/terms.html): Terms of use and Apache License 2.0 details.
+- [Support and Bug Reports](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support): Official Chrome Web Store support hub for bug reports and feature requests.
+- [Say Thanks](https://simplyakm.github.io/saveshot/thanks.html): Leave a Chrome Web Store review or send a thank-you.
+
+## Frequently Asked Questions
+
+### Do I need to sign in to capture and download screenshots?
+
+No. You can capture an area or visible tab, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.
+
+### Does SaveShot use any external servers or track my data?
+
+No. SaveShot runs in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow `drive.file` scope, it cannot see any other files in your Drive.
+
+### Can I redact sensitive details before uploading to Google Drive?
+
+Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on **Open editor before uploading** in Settings (or capture while signed out).
+
+### How do keyboard shortcuts work?
+
+SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).
+
+### Why are capture buttons disabled on some tabs?
+
+Chrome blocks all extensions from running on internal pages like `chrome://settings` and on the Chrome Web Store. For local PDFs or `file://` pages, turn on **Allow access to file URLs** in SaveShot's details at `chrome://extensions`.
+
+### What happens if my Google Drive is full or offline?
+
+If an upload fails after taking a screenshot, SaveShot shows a **Save PNG locally** button so you can save the image to your computer without losing it.
+
+### How does Incognito mode work?
+
+If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.

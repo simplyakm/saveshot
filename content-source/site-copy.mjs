@@ -18,7 +18,7 @@ export const SITE_COPY = {
   tagline: 'Private screenshots straight to Google Drive or your computer.',
 
   overviewLead:
-    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.',
+    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.',
 
   urls: {
     chromeWebStore:
@@ -69,9 +69,9 @@ export const SITE_COPY = {
     },
     {
       title: 'Annotate, redact & download',
-      webTitle: 'Annotate, Redact & Download',
+      webTitle: 'Annotate, Redact & Copy',
       summary:
-        'Opens automatically in a new tab so you can add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Download** a PNG to your computer with no sign-in required, or save straight to Google Drive.',
+        'Opens automatically in a new tab so you can highlight text, add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Copy image** (`Ctrl+C`) or **Download** a PNG with no sign-in required, or save straight to Google Drive.',
       readmeBullet:
         '**Customizable keyboard shortcuts**: Trigger area selection or visible-tab capture from the keyboard, and customize your preferred keys anytime at `chrome://extensions/shortcuts`.',
     },
@@ -82,7 +82,7 @@ export const SITE_COPY = {
         'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
         'Chrome_SaveShot_ScreenShots` and copy the share link automatically. SaveShot has no private servers, analytics, or ads.',
       readmeBullet:
-        '**Works locally or autosaves to your Drive**: Capture, edit, and download PNGs locally right away without signing in, or connect Google Drive once to autosave to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically.',
+        '**Works locally or autosaves to your Drive**: Capture, edit, copy, and download PNGs locally right away without signing in, or connect Google Drive once to autosave to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically.',
     },
     {
       title: 'Narrow `drive.file` Scope',
@@ -90,7 +90,7 @@ export const SITE_COPY = {
       summary:
         'Uses only `activeTab` and Google\'s narrow `drive.file` permission. SaveShot can only access the screenshots and folder it creates itself, never any other files in your Google Drive.',
       readmeBullet:
-        '**Built-in lightweight editor**: Opens automatically in a new tab so you can rename the file, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
+        '**Built-in lightweight editor**: Opens automatically in a new tab so you can rename the file, highlight text, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Copy image** (`Ctrl+C`) to paste straight into AI tools or docs, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
     },
   ],
 
@@ -105,7 +105,7 @@ export const SITE_COPY = {
     {
       question: 'Do I need to sign in to capture and download screenshots?',
       answer:
-        'No. You can capture an area or visible tab, annotate or redact it in the editor, and click **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
+        'No. You can capture an area or visible tab, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
     },
     {
       question: 'Does SaveShot use any external servers or track my data?',

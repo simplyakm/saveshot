@@ -49,6 +49,86 @@ export function inlineMarkdownToHtml(rawText) {
   return result;
 }
 
+export function stripInlineMarkdown(rawText) {
+  return String(rawText)
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+}
+
+const MONTH_INDEX_BY_NAME = Object.freeze({
+  january: '01',
+  february: '02',
+  march: '03',
+  april: '04',
+  may: '05',
+  june: '06',
+  july: '07',
+  august: '08',
+  september: '09',
+  october: '10',
+  november: '11',
+  december: '12',
+});
+
+export function toIsoDate(rawDate) {
+  const match = String(rawDate || '')
+    .trim()
+    .match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+  if (match) {
+    const month = MONTH_INDEX_BY_NAME[match[1].toLowerCase()];
+    if (month) {
+      return `${match[3]}-${month}-${String(Number(match[2])).padStart(2, '0')}`;
+    }
+  }
+  return '2026-11-23';
+}
+
+function serializeJsonLd(data) {
+  return JSON.stringify(data, null, 2)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
+function buildHomepageJsonLd(copy) {
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'SoftwareApplication',
+        name: copy.extensionTitle,
+        alternateName: copy.brandName,
+        applicationCategory: 'BrowserApplication',
+        applicationSubCategory: 'Productivity',
+        operatingSystem: 'Chrome',
+        softwareVersion: copy.version,
+        description: stripInlineMarkdown(copy.overviewLead),
+        url: copy.urls.homepage,
+        installUrl: copy.urls.chromeWebStore,
+        image: `${copy.urls.homepage}icon128.png`,
+        license: 'https://www.apache.org/licenses/LICENSE-2.0',
+        offers: {
+          '@type': 'Offer',
+          price: '0',
+          priceCurrency: 'USD',
+        },
+      },
+      {
+        '@type': 'FAQPage',
+        mainEntity: copy.faqs.map((item) => ({
+          '@type': 'Question',
+          name: item.question,
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: stripInlineMarkdown(item.answer),
+          },
+        })),
+      },
+    ],
+  };
+}
+
 function renderPolicyMarkdown(doc, copy) {
   const lines = [`# ${doc.heading}`, '', `**Last updated:** ${copy.lastUpdated}`, ''];
   lines.push(replacePlaceholders(doc.intro, 'md'));
@@ -329,6 +409,7 @@ function renderIndexHtml(copy) {
     .join('\n');
 
   const sup = copy.supportCard;
+  const jsonLdScript = serializeJsonLd(buildHomepageJsonLd(copy));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -338,8 +419,12 @@ function renderIndexHtml(copy) {
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
+    <link rel="alternate" type="text/plain" href="llms.txt" title="SaveShot LLMs.txt" />
     <title>${escapeHtml(copy.extensionTitle)}</title>
     <meta name="description" content="${escapeHtml(copy.shortDescription)}" />
+    <script type="application/ld+json">
+${jsonLdScript}
+    </script>
     <style>
 ${SHARED_DOC_CSS}
       .wrap {
@@ -825,14 +910,14 @@ KEY FEATURES
 • Select Area, Full Tab, Right-Click Menu, or Keyboard Shortcuts
 Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, right-click any webpage and choose "Take Screenshot", press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
-• Built-In Screenshot Editor, Pixel Redaction & Local Download
+• Built-In Screenshot Editor, Highlighter, Pixel Redaction & Instant Clipboard Copy
 Annotate screenshots right in a new tab without leaving Chrome:
-- Draw arrows, rectangles, circles, lines, and freehand pencil strokes
+- Draw arrows, rectangles, circles, lines, translucent marker highlights (hold Shift for straight lines), and freehand pencil strokes
 - Add clean, legible text callouts
 - Permanently black out sensitive text or numbers with solid pixel redaction
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
-- Download a crisp lossless PNG straight to your computer in one click anytime (no sign-in required)
+- Click "Copy image" (or press Ctrl+C / Cmd+C) to copy a lossless PNG straight to your clipboard for pasting into AI tools, chats, docs, or bug trackers, or click "Download" to save locally anytime (no sign-in required)
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Open editor before uploading" in Settings to redact before initial upload
 
 • Organized in Your Google Drive + Instant Link Sharing
@@ -935,6 +1020,73 @@ export function syncPopupHtmlLinks(popupHtml, copy = SITE_COPY) {
   );
 }
 
+function renderLlmsTxt(copy) {
+  const faqBlocks = copy.faqs
+    .map((item) => `### ${item.question}\n\n${item.answer}`)
+    .join('\n\n');
+
+  return `# ${copy.brandName}
+
+> ${copy.tagline}
+
+${copy.overviewLead}
+
+## Key Capabilities
+
+- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, press \`Enter\` inside the selector for the full tab, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at \`chrome://extensions/shortcuts\`.
+- **Built-in screenshot editor**: Add arrows, rectangles, circles, lines, translucent marker highlights (\`H\`, hold \`Shift\` for a straight line), freehand pencil strokes, legible text callouts, custom \`#HEX\` colors, or solid black pixel redactions, plus rotate 90 degrees, flip, undo, or reset.
+- **Instant clipboard and local export (no sign-in required)**: Click **Copy image** (or press \`Ctrl+C\` / \`Cmd+C\`) in the editor to copy a lossless PNG straight to your clipboard for pasting into AI assistants, chat apps, docs, or bug trackers, or click **Download** to save the PNG to your computer.
+- **Direct Google Drive autosave**: Optionally connect Google Drive once to upload screenshots straight from Chrome into \`${copy.defaultFolderName}\` (customizable in Settings) and copy the share link automatically, with a local PNG fallback if Drive is offline or full.
+
+## Privacy and Security
+
+- **No external servers**: Screenshots stay in Chrome or upload over HTTPS directly from the browser to Google's official Drive API (\`https://www.googleapis.com\`). ${copy.brandName} operates zero private, middleman, or analytics servers.
+- **Narrow permissions**: Uses \`activeTab\` and \`contextMenus\` for user-triggered capture, and Google's narrow \`https://www.googleapis.com/auth/drive.file\` scope when connected so ${copy.brandName} can only access the screenshots and folder it creates itself.
+- **Incognito isolation**: When allowed in Incognito, ${copy.brandName} omits page URLs from filenames and Drive descriptions and skips local device history.
+
+## Official Links
+
+- [Chrome Web Store Listing](${copy.urls.chromeWebStore}): Install ${copy.brandName} (${copy.extensionTitle}, v${copy.version}).
+- [Homepage](${copy.urls.homepage}): Product overview and frequently asked questions.
+- [Privacy Policy](${copy.urls.privacyHtml}): Data handling and Google API Services User Data Policy Limited Use disclosure.
+- [Terms of Service](${copy.urls.termsHtml}): Terms of use and Apache License 2.0 details.
+- [Support and Bug Reports](${copy.urls.chromeWebStoreSupport}): Official Chrome Web Store support hub for bug reports and feature requests.
+- [Say Thanks](${copy.urls.thanksHtml}): Leave a Chrome Web Store review or send a thank-you.
+
+## Frequently Asked Questions
+
+${faqBlocks}
+`;
+}
+
+function renderRobotsTxt(copy) {
+  return `User-agent: *\nAllow: /\n\nSitemap: ${copy.urls.homepage}sitemap.xml\n`;
+}
+
+function renderSitemapXml(copy) {
+  const lastmod = toIsoDate(copy.lastUpdated);
+  const urls = [
+    copy.urls.homepage,
+    copy.urls.privacyHtml,
+    copy.urls.termsHtml,
+    copy.urls.thanksHtml,
+  ];
+  const entries = urls
+    .map(
+      (loc) => `  <url>
+    <loc>${escapeHtml(loc)}</loc>
+    <lastmod>${escapeHtml(lastmod)}</lastmod>
+  </url>`
+    )
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${entries}
+</urlset>
+`;
+}
+
 export function buildGeneratedFiles(copy = SITE_COPY) {
   return {
     'README.md': renderReadmeMarkdown(copy),
@@ -944,6 +1096,9 @@ export function buildGeneratedFiles(copy = SITE_COPY) {
     'docs/thanks.html': renderThanksHtml(copy),
     'docs/privacy.html': renderPolicyHtml(copy.privacy, `Privacy Policy - ${copy.brandName}`, copy),
     'docs/terms.html': renderPolicyHtml(copy.terms, `Terms of Service - ${copy.brandName}`, copy),
+    'docs/llms.txt': renderLlmsTxt(copy),
+    'docs/robots.txt': renderRobotsTxt(copy),
+    'docs/sitemap.xml': renderSitemapXml(copy),
     'store-assets/STORE_LISTING_SEO.md': renderStoreSeoMarkdown(copy),
   };
 }

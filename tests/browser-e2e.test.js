@@ -382,7 +382,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     );
     assert.equal(welcomeCheck.accountHeading, 'Autosave to your Google Drive');
     assert.equal(welcomeCheck.stepTitles.length, 4, 'Welcome How it works must show all 4 steps including Editing');
-    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or download'));
+    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or copy'));
     assert.equal(welcomeCheck.shortcutRegionText, 'Alt + Shift + S');
     assert.equal(welcomeCheck.shortcutVisibleText, 'Alt + Shift + V');
     assert.equal(welcomeCheck.unsetHintHidden, true, 'Both default shortcuts must bind cleanly on fresh install');
@@ -1234,6 +1234,100 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(transformCheck.restoredH, 100);
     assert.deepEqual(transformCheck.restoredBlackPixel, [0, 0, 0, 255]);
 
+    // 5B.2. Test Highlighter (H) auto-Amber default, translucent marker stroke, Shift straight-line snap, and Undo
+    const highlighterCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'h', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 20));
+
+        const highlighterActive = document
+          .querySelector('[data-tool="highlighter"]')
+          .classList.contains('active');
+        const autoSwitchedToAmber = document
+          .querySelector('.swatch-amber')
+          .classList.contains('active');
+
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        const sx = rect.width / 160;
+        const sy = rect.height / 100;
+
+        // Drag from (90, 65) to (145, 88) while holding Shift -> must snap horizontally along y=65
+        preview.dispatchEvent(
+          new PointerEvent('pointerdown', {
+            bubbles: true,
+            button: 0,
+            pointerId: 9,
+            shiftKey: true,
+            clientX: rect.left + 90 * sx,
+            clientY: rect.top + 65 * sy,
+          })
+        );
+        preview.dispatchEvent(
+          new PointerEvent('pointermove', {
+            bubbles: true,
+            button: 0,
+            pointerId: 9,
+            shiftKey: true,
+            clientX: rect.left + 145 * sx,
+            clientY: rect.top + 88 * sy,
+          })
+        );
+        preview.dispatchEvent(
+          new PointerEvent('pointerup', {
+            bubbles: true,
+            button: 0,
+            pointerId: 9,
+            shiftKey: true,
+            clientX: rect.left + 145 * sx,
+            clientY: rect.top + 88 * sy,
+          })
+        );
+        await new Promise((r) => setTimeout(r, 40));
+
+        const ctx = document.getElementById('base-canvas').getContext('2d');
+        const highlightedHorizontalPixel = Array.from(ctx.getImageData(130, 65, 1, 1).data);
+        const unsnappedDiagonalPixel = Array.from(ctx.getImageData(145, 88, 1, 1).data);
+
+        // Undo restores white background at (130, 65) cleanly
+        document.getElementById('undo-btn').click();
+        await new Promise((r) => setTimeout(r, 30));
+        const restoredAfterUndoPixel = Array.from(ctx.getImageData(130, 65, 1, 1).data);
+
+        return {
+          highlighterActive,
+          autoSwitchedToAmber,
+          highlightedHorizontalPixel,
+          unsnappedDiagonalPixel,
+          restoredAfterUndoPixel,
+        };
+      })()`
+    );
+    assert.equal(highlighterCheck.highlighterActive, true, 'Pressing H must activate Highlighter tool');
+    assert.equal(
+      highlighterCheck.autoSwitchedToAmber,
+      true,
+      'Selecting Highlighter for the first time must auto-switch default Red to Amber'
+    );
+    assert.ok(
+      highlighterCheck.highlightedHorizontalPixel[2] > 120 &&
+        highlighterCheck.highlightedHorizontalPixel[2] < 210,
+      `Expected translucent Amber blend over white at (130, 65), got ${JSON.stringify(
+        highlighterCheck.highlightedHorizontalPixel
+      )}`
+    );
+    assert.deepEqual(
+      highlighterCheck.unsnappedDiagonalPixel,
+      [255, 255, 255, 255],
+      'Shift-snapped horizontal highlighter must not paint down at diagonal (145, 88)'
+    );
+    assert.deepEqual(
+      highlighterCheck.restoredAfterUndoPixel,
+      [255, 255, 255, 255],
+      'Undo must cleanly remove Highlighter stroke'
+    );
+
     // 5C. Custom #HEX color, Intentional Pencil Rename + Escape, XSS payloads, and Pixel-Exact Replace Dialog
     const dialogAndXssCheck = await evalIn(
       editorSession,
@@ -1305,7 +1399,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const dialogOpenOnSave = dlg.open;
         const dialogHeading = dlg.querySelector('h2')?.textContent?.trim() || '';
 
-        // Measure all 4 right-hand topbar controls and all 3 dialog buttons for pixel-exact 32px parity
+        // Measure all 5 right-hand topbar controls and all 3 dialog buttons for pixel-exact 32px parity
         const measureBtns = (ids) =>
           ids.map((id) => {
             const el = document.getElementById(id);
@@ -1325,6 +1419,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
 
         const topbarBtns = measureBtns([
           'editor-help-btn',
+          'copy-image-btn',
           'download-btn',
           'copy-link-btn',
           'save-drive-btn',
@@ -1396,10 +1491,12 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(dialogAndXssCheck.leftUnsavedMetrics.inLeft, true, 'Unsaved changes pill must render inside .topbar-left');
     assert.equal(dialogAndXssCheck.leftUnsavedMetrics.height, 24, 'Left unsaved pill must match 24px status pill height');
 
-    // Verify all 4 Editor topbar-right buttons (Help, Download, Copy link, Save) share exact 32px height and 0px vertical drift
-    const [helpBtnMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics] = dialogAndXssCheck.topbarBtns;
+    // Verify all 5 Editor topbar-right buttons (Help, Copy image, Download, Copy link, Save) share exact 32px height and 0px vertical drift
+    const [helpBtnMetrics, copyImgMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics] =
+      dialogAndXssCheck.topbarBtns;
     assert.equal(helpBtnMetrics.text, 'Help');
-    for (const m of [helpBtnMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics]) {
+    assert.equal(copyImgMetrics.text, 'Copy image');
+    for (const m of [helpBtnMetrics, copyImgMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics]) {
       assert.equal(m.height, 32, `${m.id} must be 32px tall`);
       assert.equal(m.fontSize, '12.5px', `${m.id} must use 12.5px font-size`);
       assert.equal(m.lineHeight, '18px', `${m.id} must use 18px line-height`);
@@ -1407,6 +1504,109 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       assert.ok(Math.abs(m.top - dlBtnMetrics.top) <= 0.5, `${m.id} top misaligned`);
       assert.ok(Math.abs(m.bottom - dlBtnMetrics.bottom) <= 0.5, `${m.id} bottom misaligned`);
     }
+
+    // 5C.2. Verify real ClipboardItem PNG copy (zero clipboardWrite permission) via Copy image button & Ctrl+C, plus input focus & Circle (C) safety
+    await cdp.send('Page.bringToFront', {}, editorSession);
+    const nativeCopyRes = await cdp.send(
+      'Runtime.evaluate',
+      {
+        expression: `(async () => {
+          document.getElementById('copy-image-btn').click();
+          for (let i = 0; i < 20; i += 1) {
+            if (document.getElementById('copy-image-btn').textContent.trim() === 'Copied!') {
+              return {
+                ok: true,
+                pillText: document.getElementById('status-pill').textContent.trim(),
+              };
+            }
+            await new Promise((r) => setTimeout(r, 30));
+          }
+          return {
+            ok: false,
+            btnText: document.getElementById('copy-image-btn').textContent.trim(),
+            pillText: document.getElementById('status-pill').textContent.trim(),
+          };
+        })()`,
+        userGesture: true,
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      editorSession
+    );
+    assert.equal(
+      nativeCopyRes.result.value.ok,
+      true,
+      `Real Chromium ClipboardItem write must succeed without clipboardWrite permission (got: ${JSON.stringify(
+        nativeCopyRes.result.value
+      )})`
+    );
+    assert.equal(nativeCopyRes.result.value.pillText, 'Copied image to clipboard');
+
+    const ctrlCCopyCheck = await evalIn(
+      editorSession,
+      `(async () => {
+        const capturedItems = [];
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            write: async (items) => {
+              capturedItems.push(...items);
+            },
+            writeText: async () => {},
+          },
+        });
+
+        // 1. Ctrl+C while focused inside filename input must NOT hijack native text copy
+        document.getElementById('rename-pencil-btn').click();
+        const fnInput = document.getElementById('filename-input');
+        fnInput.focus();
+        fnInput.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true })
+        );
+        await new Promise((r) => setTimeout(r, 25));
+        const writesDuringInputFocus = capturedItems.length;
+        fnInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+        // 2. Plain 'c' (no Ctrl/Cmd) must still select the Circle tool
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 20));
+        const circleActiveOnPlainC = document
+          .querySelector('[data-tool="circle"]')
+          .classList.contains('active');
+
+        // 3. Ctrl+C on canvas copies encoded 160x100 PNG ClipboardItem
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true })
+        );
+        for (let i = 0; i < 20 && capturedItems.length === 0; i += 1) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        const pngBlob = await capturedItems[0].getType('image/png');
+        const bytes = new Uint8Array(await pngBlob.arrayBuffer());
+        const magicHex = Array.from(bytes.slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
+        const view = new DataView(bytes.buffer);
+        const pngWidth = view.getUint32(16, false);
+        const pngHeight = view.getUint32(20, false);
+
+        document.getElementById('status-pill').hidden = true;
+        return {
+          writesDuringInputFocus,
+          circleActiveOnPlainC,
+          totalWritesAfterCtrlC: capturedItems.length,
+          mimeType: pngBlob.type,
+          magicHex,
+          pngWidth,
+          pngHeight,
+        };
+      })()`
+    );
+    assert.equal(ctrlCCopyCheck.writesDuringInputFocus, 0, 'Ctrl+C inside <input> must not copy canvas image');
+    assert.equal(ctrlCCopyCheck.circleActiveOnPlainC, true, 'Plain C key must still activate Circle tool');
+    assert.equal(ctrlCCopyCheck.totalWritesAfterCtrlC, 1, 'Ctrl+C on editor stage must copy canvas PNG');
+    assert.equal(ctrlCCopyCheck.mimeType, 'image/png');
+    assert.equal(ctrlCCopyCheck.magicHex, '89504e470d0a1a0a');
+    assert.equal(ctrlCCopyCheck.pngWidth, 160);
+    assert.equal(ctrlCCopyCheck.pngHeight, 100);
 
     // Verify all 3 modal buttons (Cancel, Save as new, Replace) share exact 32px height, 0px vertical drift, and identical typography
     const [cancelMetrics, saveNewMetrics, replaceMetrics] = dialogAndXssCheck.dlgBtns;

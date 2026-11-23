@@ -25,7 +25,7 @@
 ## 3. Copy-Paste Full Store Description
 
 ```text
-SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.
 
 Capture and download screenshots locally right out of the box with no sign-in required, or connect your Google Drive account once to autosave PNGs straight from Chrome with the share link copied automatically.
 
@@ -34,14 +34,14 @@ KEY FEATURES
 • Select Area, Full Tab, Right-Click Menu, or Keyboard Shortcuts
 Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, right-click any webpage and choose "Take Screenshot", press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
-• Built-In Screenshot Editor, Pixel Redaction & Local Download
+• Built-In Screenshot Editor, Highlighter, Pixel Redaction & Instant Clipboard Copy
 Annotate screenshots right in a new tab without leaving Chrome:
-- Draw arrows, rectangles, circles, lines, and freehand pencil strokes
+- Draw arrows, rectangles, circles, lines, translucent marker highlights (hold Shift for straight lines), and freehand pencil strokes
 - Add clean, legible text callouts
 - Permanently black out sensitive text or numbers with solid pixel redaction
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
-- Download a crisp lossless PNG straight to your computer in one click anytime (no sign-in required)
+- Click "Copy image" (or press Ctrl+C / Cmd+C) to copy a lossless PNG straight to your clipboard for pasting into AI tools, chats, docs, or bug trackers, or click "Download" to save locally anytime (no sign-in required)
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Open editor before uploading" in Settings to redact before initial upload
 
 • Organized in Your Google Drive + Instant Link Sharing
