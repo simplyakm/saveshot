@@ -351,9 +351,9 @@ function renderSettings(settings) {
 
 function renderRecentUploads(uploads) {
   const list = Array.isArray(uploads) ? uploads : [];
-  els.uploadList.replaceChildren();
 
   if (list.length === 0) {
+    els.uploadList.replaceChildren();
     els.emptyHistory.hidden = false;
     els.uploadList.hidden = true;
     els.clearHistoryBtn.hidden = true;
@@ -363,6 +363,8 @@ function renderRecentUploads(uploads) {
   els.emptyHistory.hidden = true;
   els.uploadList.hidden = false;
   els.clearHistoryBtn.hidden = false;
+
+  const frag = document.createDocumentFragment();
 
   for (const item of list) {
     const li = document.createElement('li');
@@ -430,12 +432,15 @@ function renderRecentUploads(uploads) {
       copyBtn.title = 'Copy Drive link';
       copyBtn.setAttribute('aria-label', 'Copy Drive link');
       copyBtn.append(createActionSvg('copy'));
+      let copyTimer = null;
       copyBtn.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(safeLink);
+          if (copyTimer) clearTimeout(copyTimer);
           copyBtn.classList.add('copied');
           copyBtn.replaceChildren(createActionSvg('check'));
-          setTimeout(() => {
+          copyTimer = setTimeout(() => {
+            copyTimer = null;
             copyBtn.classList.remove('copied');
             copyBtn.replaceChildren(createActionSvg('copy'));
           }, 1400);
@@ -457,8 +462,10 @@ function renderRecentUploads(uploads) {
     }
 
     li.append(meta, actions);
-    els.uploadList.append(li);
+    frag.append(li);
   }
+
+  els.uploadList.replaceChildren(frag);
 }
 
 function updateCaptureAvailability() {
@@ -514,17 +521,23 @@ function initStaticMetadata() {
 
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {
+      let sawRegion = false;
+      let sawVisible = false;
       for (const cmd of commands || []) {
         if (cmd.name === 'capture-region') {
+          sawRegion = true;
           els.shortcutRegion.textContent = cmd.shortcut
             ? formatShortcutDisplay(cmd.shortcut)
             : 'Shortcut not set';
         } else if (cmd.name === 'capture-visible') {
+          sawVisible = true;
           els.shortcutVisible.textContent = cmd.shortcut
             ? formatShortcutDisplay(cmd.shortcut)
             : 'Shortcut not set';
         }
       }
+      if (!sawRegion) els.shortcutRegion.textContent = 'Shortcut not set';
+      if (!sawVisible) els.shortcutVisible.textContent = 'Shortcut not set';
     });
   }
 }
@@ -835,6 +848,9 @@ if (chrome?.storage?.onChanged?.addListener) {
     if (changes.signedOut || changes.userProfile) {
       loadState({ showSpinner: false });
       return;
+    }
+    if (changes.settings?.newValue) {
+      renderSettings(changes.settings.newValue);
     }
     if (changes.recentUploads && currentState.signedIn) {
       renderRecentUploads(changes.recentUploads.newValue || []);

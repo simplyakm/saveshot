@@ -283,7 +283,12 @@ async function persistEditorSessionMeta(session, { storePreUploadBlob = false } 
         const dropIds = otherNewIds.slice(0, otherNewIds.length - 1);
         await sessionStoreRemove(dropIds.map((id) => `${PREUPLOAD_PNG_PREFIX}${id}`));
       }
-      const dataUrl = await blobToDataUrl(session.pngBlob);
+      const dataUrl =
+        typeof session.pngDataUrl === 'string' &&
+        session.pngDataUrl.startsWith('data:image/png;base64,')
+          ? session.pngDataUrl
+          : await blobToDataUrl(session.pngBlob);
+      session.pngDataUrl = dataUrl;
       await sessionStoreSet({
         [`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`]: dataUrl,
       });
@@ -303,6 +308,7 @@ async function createEditorSession(data) {
     folderName: data.folderName || 'Chrome_SaveShot_ScreenShots',
     webViewLink: data.webViewLink || '',
     pngBlob: data.pngBlob || null,
+    pngDataUrl: typeof data.pngDataUrl === 'string' ? data.pngDataUrl : '',
     pageUrl: data.pageUrl || '',
     pageTitle: data.pageTitle || '',
     captureMode: data.captureMode === 'region' ? 'region' : 'visible',
@@ -753,6 +759,7 @@ async function captureVisibleTabFlow({
         folderName: settings.folderName,
         webViewLink: '',
         pngBlob,
+        pngDataUrl: dataUrl,
         pageUrl: targetTab?.url || '',
         pageTitle: targetTab?.title || '',
         captureMode: 'visible',
@@ -801,6 +808,7 @@ async function captureVisibleTabFlow({
       folderName: result.upload.folderName,
       webViewLink: result.upload.webViewLink,
       pngBlob,
+      pngDataUrl: dataUrl,
       pageUrl: targetTab?.url || '',
       pageTitle: targetTab?.title || '',
       captureMode: 'visible',
@@ -867,7 +875,6 @@ async function startRegionCaptureFlow({ tab, tabId } = {}) {
 
 async function handleRegionSelected(selection, senderTab) {
   if (!senderTab?.id) return;
-  consumePendingRegionTab(senderTab.id).catch(() => {});
 
   setBadge('...', '#1a73e8');
   try {
@@ -1027,6 +1034,7 @@ async function handleSaveEditedScreenshot(message) {
     session.webViewLink = updatedFile.webViewLink;
     if (pngBlob) {
       session.pngBlob = pngBlob;
+      session.pngDataUrl = '';
     }
     await persistEditorSessionMeta(session);
 
@@ -1102,6 +1110,7 @@ async function handleSaveEditedScreenshot(message) {
   session.webViewLink = result.upload.webViewLink;
   session.folderName = result.upload.folderName;
   session.pngBlob = uploadBlob;
+  session.pngDataUrl = '';
   await persistEditorSessionMeta(session);
   await sessionStoreRemove(`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`);
 
@@ -1270,6 +1279,14 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'REGION_SELECTED': {
+              const senderTabId = sender?.tab?.id;
+              const allowed = await consumePendingRegionTab(senderTabId);
+              if (!allowed) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
               sendResponse({ ok: true });
               await handleRegionSelected(message.selection, sender.tab);
               return;
@@ -1434,6 +1451,7 @@ export function registerServiceWorkerListeners() {
                   (token) => downloadScreenshotFromDrive(token, session.fileId),
                   { interactive: false }
                 );
+                session.pngDataUrl = '';
               }
 
               const justUploaded = Boolean(session.justUploaded);
@@ -1442,7 +1460,17 @@ export function registerServiceWorkerListeners() {
                 await persistEditorSessionMeta(session);
               }
 
-              const dataUrl = await blobToDataUrl(session.pngBlob);
+              let dataUrl = '';
+              if (
+                typeof session.pngDataUrl === 'string' &&
+                session.pngDataUrl.startsWith('data:image/')
+              ) {
+                dataUrl = session.pngDataUrl;
+                session.pngDataUrl = '';
+              } else {
+                dataUrl = await blobToDataUrl(session.pngBlob);
+              }
+
               sendResponse({
                 ok: true,
                 session: {

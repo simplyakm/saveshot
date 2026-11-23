@@ -54,7 +54,10 @@ import {
 } from '../lib/storage.js';
 import {
   buildFeedbackPayload,
+  DEFAULT_CWS_SUPPORT_URL,
+  formatVersionInfoLine,
   getEnvironmentSummary,
+  getRepoUrl,
 } from '../lib/feedback.js';
 import {
   clampPoint,
@@ -804,12 +807,43 @@ test('storage compacts upload records, caps account cache to 5, and prunes legac
   );
 });
 
-test('feedback helper builds pre-filled GitHub bug and feature URLs without leaking private info', () => {
+test('feedback helper builds version info lines, resolves GitHub repo URLs safely, and never leaks private info', () => {
   const env = getEnvironmentSummary(
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/156.0.0.0 Safari/537.36'
   );
   assert.equal(env.browser, 'Chrome 156.0.0.0');
   assert.equal(env.os, 'macOS');
+  assert.equal(
+    formatVersionInfoLine({ env }),
+    `SaveShot v${env.extensionVersion} \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: None`
+  );
+  assert.equal(
+    formatVersionInfoLine({ env, lastErrorCode: 'DRIVE_QUOTA_EXCEEDED' }),
+    `SaveShot v${env.extensionVersion} \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: DRIVE_QUOTA_EXCEEDED`
+  );
+  assert.ok(DEFAULT_CWS_SUPPORT_URL.endsWith('/support'));
+
+  const prevChrome = globalThis.chrome;
+  try {
+    globalThis.chrome = {
+      runtime: {
+        getManifest: () => ({ homepage_url: 'https://simplyakm.github.io/saveshot/' }),
+      },
+    };
+    assert.equal(
+      getRepoUrl(),
+      'https://github.com/simplyakm/saveshot',
+      'getRepoUrl must fall back to github.com when homepage_url points to GitHub Pages'
+    );
+    globalThis.chrome = {
+      runtime: {
+        getManifest: () => ({ homepage_url: 'https://github.com/acme/saveshot///' }),
+      },
+    };
+    assert.equal(getRepoUrl(), 'https://github.com/acme/saveshot');
+  } finally {
+    globalThis.chrome = prevChrome;
+  }
 
   const bug = buildFeedbackPayload({
     kind: 'bug',
@@ -2685,14 +2719,30 @@ test('all repository source, UI, and documentation files contain no em dashes or
     );
   }
 
-  // Website pages must use real icon PNGs, omit GitHub source links, share the unified footer, and keep editor.html footer-free
+  // Website pages must use real icon PNGs, include 7 FAQs + Support card on index.html, keep footers decluttered, and keep editor.html footer-free
   const indexHtml = fs.readFileSync(path.join(rootDir, 'docs/index.html'), 'utf8');
   assert.ok(indexHtml.includes('src="icon128.png"'), 'docs/index.html must render canonical icon128.png');
   assert.ok(!indexHtml.includes('brand-badge'), 'docs/index.html must never use a hand-drawn SVG brand badge');
   assert.ok(indexHtml.includes('class="hero-thanks"'), 'docs/index.html hero must include subtle Already using it? Say thanks link');
+  assert.equal((indexHtml.match(/<details\b/g) || []).length, 7, 'docs/index.html must render all 7 collapsible FAQs');
+  assert.ok(
+    indexHtml.includes(`href="${SITE_COPY.urls.chromeWebStoreSupport}"`),
+    'docs/index.html Support card must link to Chrome Web Store Support page'
+  );
+  assert.ok(
+    indexHtml.includes(`href="${SITE_COPY.urls.githubIssues}"`),
+    'docs/index.html Support card must link to GitHub Issues'
+  );
   assert.equal((indexHtml.match(/href="thanks\.html"/g) || []).length, 2, 'thanks.html should appear in hero inline link and footer');
   assert.equal((indexHtml.match(/href="privacy\.html"/g) || []).length, 1, 'privacy.html should appear once in docs/index.html footer');
   assert.equal((indexHtml.match(/href="terms\.html"/g) || []).length, 1, 'terms.html should appear once in docs/index.html footer');
+
+  const indexFooterLinks = indexHtml.match(/<nav class="site-footer-links"[\s\S]*?<\/nav>/)?.[0] || '';
+  assert.equal(
+    (indexFooterLinks.match(/<a\b/g) || []).length,
+    4,
+    'docs/index.html footer must stay decluttered at exactly 4 links (Say thanks, Privacy, Terms, @_simplyakm)'
+  );
 
   const thanksHtml = fs.readFileSync(path.join(rootDir, 'docs/thanks.html'), 'utf8');
   assert.ok(
@@ -2708,11 +2758,56 @@ test('all repository source, UI, and documentation files contain no em dashes or
   const editorHtml = fs.readFileSync(path.join(rootDir, 'pages/editor.html'), 'utf8');
   assert.ok(!editorHtml.includes('<footer'), 'pages/editor.html must remain footer-free for full-height canvas');
 
+  assert.equal((welcomeHtml.match(/class="faq-item"/g) || []).length, 7, 'pages/welcome.html must render all 7 Good to know FAQs');
+  assert.ok(welcomeHtml.includes('id="pin-nudge-card"'), 'pages/welcome.html must include smart live Pin-to-Chrome card');
+  assert.ok(welcomeHtml.includes('id="version-strip"'), 'pages/welcome.html must include W1 version info strip');
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.chromeWebStoreSupport}"`), 'pages/welcome.html must link to Chrome Web Store Support');
+  assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.githubIssues}"`), 'pages/welcome.html must link to GitHub Issues');
+
   for (const webPage of ['docs/index.html', 'docs/thanks.html', 'docs/privacy.html', 'docs/terms.html']) {
     const html = fs.readFileSync(path.join(rootDir, webPage), 'utf8');
     assert.ok(html.includes('href="icon32.png"'), `${webPage} must include official icon32.png favicon`);
     assert.ok(html.includes('class="site-footer"'), `${webPage} must include unified single-line site-footer`);
-    assert.ok(!html.includes('github.com/simplyakm/saveshot'), `${webPage} must not include GitHub source/repo links`);
+    assert.ok(html.includes('Privacy-first screenshot tool'), `${webPage} footer must show SaveShot · Privacy-first screenshot tool`);
+    assert.ok(
+      !html.includes('href="https://github.com/simplyakm/saveshot"') &&
+        !html.includes('github.com/simplyakm/saveshot/tree') &&
+        !html.includes('github.com/simplyakm/saveshot/blob'),
+      `${webPage} must not link to raw GitHub source repo tree`
+    );
+  }
+
+  // Capability-only shortcuts & footer-only @_simplyakm invariants across static HTML and Markdown
+  for (const staticRel of [
+    'docs/index.html',
+    'docs/thanks.html',
+    'docs/privacy.html',
+    'docs/terms.html',
+    'popup/popup.html',
+    'pages/editor.html',
+    'pages/welcome.html',
+    'README.md',
+    'PRIVACY.md',
+    'TERMS.md',
+    'store-assets/STORE_LISTING_SEO.md',
+  ]) {
+    const text = fs.readFileSync(path.join(rootDir, staticRel), 'utf8');
+    assert.ok(
+      !/Alt\s*\+\s*Shift\s*\+\s*[SV]/i.test(text),
+      `${staticRel} must never hardcode exact Alt+Shift+S / Alt+Shift+V shortcut keys`
+    );
+    if (staticRel.endsWith('.html')) {
+      const withoutFooters = text.replace(/<footer\b[\s\S]*?<\/footer>/gi, '');
+      assert.ok(
+        !withoutFooters.includes('_simplyakm'),
+        `${staticRel} must never mention @_simplyakm outside <footer>`
+      );
+    } else {
+      assert.ok(
+        !text.includes('_simplyakm'),
+        `${staticRel} must not mention @_simplyakm in prose`
+      );
+    }
   }
 });
 
@@ -3452,5 +3547,112 @@ test('token eviction and revocation resilience: API throws, offline revoke failu
     assert.equal(refreshStore.signedOut, false, 'Logged-in user must stay signed in across token rotation');
   } finally {
     globalThis.fetch = origFetch;
+  }
+});
+
+test('REGION_SELECTED security gate blocks uninitiated/cross-tab/replayed drags, survives SW cold restart, and CAPTURE_VISIBLE reuses pngDataUrl without re-encoding', async () => {
+  const origFetch = globalThis.fetch;
+  const origCreateImageBitmap = globalThis.createImageBitmap;
+  const origOffscreenCanvas = globalThis.OffscreenCanvas;
+  try {
+    globalThis.createImageBitmap = async () => ({
+      width: 200,
+      height: 120,
+      close() {},
+    });
+    globalThis.OffscreenCanvas = class {
+      constructor(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return { drawImage() {}, imageSmoothingEnabled: true, imageSmoothingQuality: 'high' };
+      }
+      async convertToBlob() {
+        return new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' });
+      }
+    };
+
+    const activeTabs = [
+      { id: 101, windowId: 5, active: true, url: 'https://example.com/app', title: 'App', incognito: false },
+      { id: 202, windowId: 5, active: true, url: 'https://evil.example/page', title: 'Evil', incognito: false },
+    ];
+
+    const mock = installChromeMock({
+      initialStore: { signedOut: true, userProfile: null },
+      tabs: activeTabs,
+    });
+    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
+      '../background/service-worker.js'
+    );
+    resetInMemoryWorkerStateForTests();
+    registerServiceWorkerListeners();
+
+    const tab101Sender = { url: activeTabs[0].url, tab: activeTabs[0] };
+    const tab202Sender = { url: activeTabs[1].url, tab: activeTabs[1] };
+    const sel = { x: 10, y: 10, width: 80, height: 60, viewportWidth: 200, viewportHeight: 120 };
+
+    // 1. Uninitiated REGION_SELECTED from webpage content script is rejected with NO_ACTIVE_REGION_SESSION
+    const forged = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      tab202Sender
+    );
+    assert.equal(forged.ok, false);
+    assert.equal(forged.code, 'NO_ACTIVE_REGION_SESSION');
+    assert.equal(mock.createdTabs.length, 0, 'Forged REGION_SELECTED must not open an Editor tab');
+
+    // 2. Start region capture on tab 101 -> cross-tab REGION_SELECTED from tab 202 is STILL blocked
+    const start101 = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 101 });
+    assert.equal(start101.ok, true);
+
+    const crossTab = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      tab202Sender
+    );
+    assert.equal(crossTab.ok, false);
+    assert.equal(crossTab.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 3. Simulate MV3 SW 30s idle cold restart -> legitimate REGION_SELECTED from tab 101 still succeeds via chrome.storage.session
+    resetInMemoryWorkerStateForTests();
+    const legit = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      tab101Sender
+    );
+    assert.equal(legit.ok, true);
+    for (let i = 0; i < 30 && mock.createdTabs.length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(mock.createdTabs.length, 1, 'Legitimate REGION_SELECTED must open local Editor tab');
+
+    // 4. Replaying REGION_SELECTED a second time on tab 101 is blocked because token was consumed
+    const replayed = await mock.dispatchMessage(
+      { type: 'REGION_SELECTED', selection: sel },
+      tab101Sender
+    );
+    assert.equal(replayed.ok, false);
+    assert.equal(replayed.code, 'NO_ACTIVE_REGION_SESSION');
+
+    // 5. CAPTURE_VISIBLE -> GET_EDITOR_SESSION returns exact captured dataUrl on first read and falls back cleanly on second read
+    const capRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 101 });
+    assert.equal(capRes.ok, true);
+    assert.equal(capRes.openedEditor, true);
+
+    const firstLoad = await mock.dispatchMessage({
+      type: 'GET_EDITOR_SESSION',
+      sessionId: capRes.sessionId,
+    });
+    assert.equal(firstLoad.ok, true);
+    assert.equal(firstLoad.dataUrl, TINY_PNG_DATA_URL);
+
+    const secondLoad = await mock.dispatchMessage({
+      type: 'GET_EDITOR_SESSION',
+      sessionId: capRes.sessionId,
+    });
+    assert.equal(secondLoad.ok, true);
+    assert.equal(secondLoad.dataUrl, TINY_PNG_DATA_URL);
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.createImageBitmap = origCreateImageBitmap;
+    globalThis.OffscreenCanvas = origOffscreenCanvas;
   }
 });

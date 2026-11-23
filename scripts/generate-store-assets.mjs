@@ -55,43 +55,102 @@ export function computeAssetSourceHashes(baseDir = rootDir) {
   return result;
 }
 
+function readFontDataUriIfPresent(absPath) {
+  if (!fs.existsSync(absPath)) return null;
+  return `data:font/ttf;base64,${fs.readFileSync(absPath).toString('base64')}`;
+}
+
 /**
- * Map system-ui on headless Linux to Google Chrome's native UI font (Roboto)
- * instead of X11 DejaVu Sans, so weights 400 / 500 / 600 / 700 render crisply
- * and match SaveShot's tokens.css typography hierarchy.
+ * Build a valid custom @font-face family ('SaveShotAssetUI' & 'SaveShotAssetMono')
+ * backed by embedded Roboto & Liberation Mono TTF weights on Linux (with native OS
+ * fallbacks on macOS/Windows), overriding --ss-font-sans / --ss-font-mono during
+ * store asset generation so Chromium never falls back to X11 DejaVu Sans.
  */
-const FONT_BRIDGE_CSS = `
-  @font-face {
-    font-family: 'system-ui';
-    src: local('Roboto'), local('Liberation Sans');
-    font-weight: 400;
-    font-style: normal;
+function buildFontBridgeCss() {
+  const robotoRegular = readFontDataUriIfPresent(
+    '/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf'
+  );
+  const robotoMedium = readFontDataUriIfPresent(
+    '/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Medium.ttf'
+  );
+  const robotoBold = readFontDataUriIfPresent(
+    '/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf'
+  );
+  const monoRegular = readFontDataUriIfPresent(
+    '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf'
+  );
+  const monoBold = readFontDataUriIfPresent(
+    '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf'
+  );
+
+  const faces = [];
+  if (robotoRegular) {
+    faces.push(`
+      @font-face {
+        font-family: 'SaveShotAssetUI';
+        src: url('${robotoRegular}') format('truetype');
+        font-weight: 400;
+        font-style: normal;
+      }
+    `);
   }
-  @font-face {
-    font-family: 'system-ui';
-    src: local('Roboto Medium'), local('Roboto');
-    font-weight: 500;
-    font-style: normal;
+  if (robotoMedium) {
+    faces.push(`
+      @font-face {
+        font-family: 'SaveShotAssetUI';
+        src: url('${robotoMedium}') format('truetype');
+        font-weight: 500;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: 'SaveShotAssetUI';
+        src: url('${robotoMedium}') format('truetype');
+        font-weight: 600;
+        font-style: normal;
+      }
+    `);
   }
-  @font-face {
-    font-family: 'system-ui';
-    src: local('Roboto Medium'), local('Roboto Bold'), local('Roboto');
-    font-weight: 600;
-    font-style: normal;
+  if (robotoBold) {
+    faces.push(`
+      @font-face {
+        font-family: 'SaveShotAssetUI';
+        src: url('${robotoBold}') format('truetype');
+        font-weight: 700;
+        font-style: normal;
+      }
+    `);
   }
-  @font-face {
-    font-family: 'system-ui';
-    src: local('Roboto Bold'), local('Liberation Sans Bold'), local('Roboto');
-    font-weight: 700;
-    font-style: normal;
+  if (monoRegular) {
+    faces.push(`
+      @font-face {
+        font-family: 'SaveShotAssetMono';
+        src: url('${monoRegular}') format('truetype');
+        font-weight: 400 500;
+        font-style: normal;
+      }
+    `);
   }
-  @font-face {
-    font-family: 'ui-monospace';
-    src: local('Liberation Mono'), local('DejaVu Sans Mono');
-    font-weight: 400 700;
-    font-style: normal;
+  if (monoBold) {
+    faces.push(`
+      @font-face {
+        font-family: 'SaveShotAssetMono';
+        src: url('${monoBold}') format('truetype');
+        font-weight: 600 700;
+        font-style: normal;
+      }
+    `);
   }
-`;
+
+  return `
+    ${faces.join('\n')}
+    :root,
+    :root[data-theme="light"],
+    :root[data-theme="dark"] {
+      --ss-font-sans: 'SaveShotAssetUI', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+      --ss-font-mono: 'SaveShotAssetMono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+    }
+  `;
+}
 
 function createMiniThumbDataUri(accent = '#1a73e8', dark = false) {
   const bg = dark ? '#1e2430' : '#eff4fc';
@@ -118,8 +177,8 @@ async function launchChromiumCdp(userDataDir) {
       '--no-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
+      '--allow-file-access-from-files',
       '--hide-scrollbars',
-      '--font-render-hinting=none',
       '--window-size=1600,1000',
       `--user-data-dir=${userDataDir}`,
       '--remote-debugging-port=0',
@@ -177,50 +236,41 @@ async function launchChromiumCdp(userDataDir) {
   return { proc, ws, send, sessionId };
 }
 
-async function captureElementPngDataUri(cdp, url, selector, viewportW, viewportH) {
+/**
+ * Render each slide in a single 3x supersampled Chromium pass (including live vector
+ * extension surfaces inside seamless iframes), waiting for all web fonts & frames to settle.
+ */
+async function captureFullViewport3x(cdp, htmlPath, width, height, outRawPngPath) {
   const { send, sessionId } = cdp;
   await send(
     'Emulation.setDeviceMetricsOverride',
-    { width: viewportW, height: viewportH, deviceScaleFactor: 2, mobile: false },
+    { width, height, deviceScaleFactor: 3, mobile: false },
     sessionId
   );
-  await send('Page.navigate', { url }, sessionId);
-  await new Promise((r) => setTimeout(r, 320));
-
-  const evalRes = await send(
+  await send('Page.navigate', { url: `file://${htmlPath}` }, sessionId);
+  await new Promise((r) => setTimeout(r, 260));
+  await send(
     'Runtime.evaluate',
     {
-      expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        const r = el.getBoundingClientRect();
-        return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+      expression: `(async () => {
+        if (document.fonts?.ready) await document.fonts.ready;
+        for (const frame of document.querySelectorAll('iframe')) {
+          if (!frame.contentDocument) {
+            await new Promise((res) => frame.addEventListener('load', res, { once: true }));
+          }
+          if (frame.contentDocument?.fonts?.ready) {
+            await frame.contentDocument.fonts.ready;
+          }
+        }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return true;
       })()`,
+      awaitPromise: true,
       returnByValue: true,
     },
     sessionId
   );
-  const box = evalRes.result.value;
-  const { data } = await send(
-    'Page.captureScreenshot',
-    {
-      format: 'png',
-      omitBackground: true,
-      clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
-    },
-    sessionId
-  );
-  return { dataUri: `data:image/png;base64,${data}`, width: box.width, height: box.height };
-}
-
-async function captureFullViewport2x(cdp, htmlPath, width, height, outRawPngPath) {
-  const { send, sessionId } = cdp;
-  await send(
-    'Emulation.setDeviceMetricsOverride',
-    { width, height, deviceScaleFactor: 2, mobile: false },
-    sessionId
-  );
-  await send('Page.navigate', { url: `file://${htmlPath}` }, sessionId);
-  await new Promise((r) => setTimeout(r, 320));
+  await new Promise((r) => setTimeout(r, 120));
   const { data } = await send(
     'Page.captureScreenshot',
     {
@@ -232,15 +282,40 @@ async function captureFullViewport2x(cdp, htmlPath, width, height, outRawPngPath
   fs.writeFileSync(outRawPngPath, Buffer.from(data, 'base64'));
 }
 
-function stageRealExtensionFiles(stageDir) {
+async function measureIframeHeight(cdp, fileUrl, selector, viewportW, viewportH) {
+  const { send, sessionId } = cdp;
+  await send(
+    'Emulation.setDeviceMetricsOverride',
+    { width: viewportW, height: viewportH, deviceScaleFactor: 2, mobile: false },
+    sessionId
+  );
+  await send('Page.navigate', { url: fileUrl }, sessionId);
+  await new Promise((r) => setTimeout(r, 200));
+  const evalRes = await send(
+    'Runtime.evaluate',
+    {
+      expression: `(async () => {
+        if (document.fonts?.ready) await document.fonts.ready;
+        const el = document.querySelector(${JSON.stringify(selector)});
+        return Math.ceil(el.getBoundingClientRect().height);
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    sessionId
+  );
+  return evalRes.result.value;
+}
+
+function stageRealExtensionFiles(stageDir, fontBridgeCss) {
   for (const dir of ['styles', 'popup', 'pages', 'lib', 'icons']) {
     fs.cpSync(path.join(rootDir, dir), path.join(stageDir, dir), { recursive: true });
   }
 
-  // Prepend FONT_BRIDGE_CSS to staged styles/tokens.css so every real extension page uses crisp Roboto
+  // Append fontBridgeCss AFTER tokens.css so --ss-font-sans resolves to embedded Roboto weights
   const stagedTokensPath = path.join(stageDir, 'styles/tokens.css');
   const tokensCss = fs.readFileSync(stagedTokensPath, 'utf8');
-  fs.writeFileSync(stagedTokensPath, `${FONT_BRIDGE_CSS}\n${tokensCss}`, 'utf8');
+  fs.writeFileSync(stagedTokensPath, `${tokensCss}\n${fontBridgeCss}\n`, 'utf8');
 
   const rawPopupHtml = fs
     .readFileSync(path.join(stageDir, 'popup/popup.html'), 'utf8')
@@ -253,12 +328,12 @@ function stageRealExtensionFiles(stageDir) {
     const thumb2 = createMiniThumbDataUri('#15803d', isDark);
 
     const frameCss = `
-      html { background: transparent !important; }
-      body {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 352px !important;
         background: transparent !important;
-        padding: 36px !important;
-        width: auto !important;
-        display: inline-block !important;
+        overflow: hidden !important;
       }
       #popup-shell {
         width: 352px;
@@ -268,7 +343,6 @@ function stageRealExtensionFiles(stageDir) {
         border: 1px solid ${isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 18, 24, 0.10)'};
         overflow: hidden;
       }
-      /* Upgrade header & hero icons to icon128.png for razor-sharp 2x Retina downsampling */
     `;
 
     const initScript = `
@@ -289,8 +363,8 @@ function stageRealExtensionFiles(stageDir) {
         document.getElementById('settings-toggle-btn').hidden = false;
         document.getElementById('popup-version').textContent = ${JSON.stringify(`v${SITE_COPY.version}`)};
         document.getElementById('footer-author-link').textContent = ${JSON.stringify(SITE_COPY.urls.authorHandle)};
-        document.getElementById('popup-shortcut-region').textContent = ${JSON.stringify(SITE_COPY.shortcuts.region.display)};
-        document.getElementById('popup-shortcut-visible').textContent = ${JSON.stringify(SITE_COPY.shortcuts.visible.display)};
+        document.getElementById('popup-shortcut-region').textContent = 'Custom shortcut';
+        document.getElementById('popup-shortcut-visible').textContent = 'Custom shortcut';
 
         if (${JSON.stringify(isSignedOut)}) {
           document.getElementById('open-drive-btn').hidden = true;
@@ -361,9 +435,14 @@ function stageRealExtensionFiles(stageDir) {
     .replace(/<script\b[^>]*><\/script>/g, '');
   const inlinedEditorCoreJs = fs
     .readFileSync(path.join(rootDir, 'lib/editor-core.js'), 'utf8')
-    .replace(/^export\s+/gm, '');
+    .replace(/^export\s+/gm, '')
+    .replace(
+      'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      "'SaveShotAssetUI', Roboto, sans-serif"
+    );
 
   const editorStageCss = `
+    html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
     .editor-app { height: 636px !important; }
     .stage { padding: 14px 28px 0 !important; align-items: flex-start !important; }
     #canvas-wrap { border-radius: 8px 8px 0 0 !important; overflow: hidden; }
@@ -388,133 +467,130 @@ function stageRealExtensionFiles(stageDir) {
       document.getElementById('reset-btn').disabled = false;
       document.getElementById('stage-message').hidden = true;
 
-      const wrap = document.getElementById('canvas-wrap');
-      wrap.hidden = false;
-      const base = document.getElementById('base-canvas');
-      const prev = document.getElementById('preview-canvas');
-      const W = 880;
-      const H = 500;
-      const dpr = 2;
-      base.width = W * dpr;
-      base.height = H * dpr;
-      base.style.width = W + 'px';
-      base.style.height = H + 'px';
-      prev.width = W * dpr;
-      prev.height = H * dpr;
-      prev.style.width = W + 'px';
-      prev.style.height = H + 'px';
+      (async () => {
+        if (document.fonts?.ready) await document.fonts.ready;
 
-      const ctx = base.getContext('2d');
-      ctx.scale(dpr, dpr);
+        const wrap = document.getElementById('canvas-wrap');
+        wrap.hidden = false;
+        const base = document.getElementById('base-canvas');
+        const prev = document.getElementById('preview-canvas');
+        const W = 880;
+        const H = 500;
+        const dpr = 3;
+        base.width = W * dpr;
+        base.height = H * dpr;
+        base.style.width = W + 'px';
+        base.style.height = H + 'px';
+        prev.width = W * dpr;
+        prev.height = H * dpr;
+        prev.style.width = W + 'px';
+        prev.style.height = H + 'px';
 
-      // Draw crisp captured SaaS payment receipt UI on the screenshot canvas
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, W, H);
+        const ctx = base.getContext('2d');
+        ctx.scale(dpr, dpr);
 
-      // Header row
-      ctx.fillStyle = '#141518';
-      ctx.font = '700 18px system-ui, Roboto, sans-serif';
-      ctx.fillText('Order #INV-88412 · Webhook Delivery Log', 34, 42);
-      ctx.fillStyle = '#767c89';
-      ctx.font = '400 12.5px system-ui, Roboto, sans-serif';
-      ctx.fillText('Production Environment · Processed 2 minutes ago', 34, 63);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, W, H);
 
-      // Error badge top-right
-      ctx.fillStyle = '#fef2f2';
-      ctx.beginPath();
-      ctx.roundRect(674, 26, 172, 28, 6);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(220, 38, 38, 0.28)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = '#991b1b';
-      ctx.font = '600 12px system-ui, Roboto, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('HTTP 502 Bad Gateway', 674 + 86, 44);
-      ctx.textAlign = 'left';
-
-      ctx.strokeStyle = '#eceef2';
-      ctx.beginPath();
-      ctx.moveTo(34, 82);
-      ctx.lineTo(846, 82);
-      ctx.stroke();
-
-      // Left info card (Customer PII to be redacted)
-      ctx.fillStyle = '#f5f6f8';
-      ctx.beginPath();
-      ctx.roundRect(34, 102, 392, 122, 10);
-      ctx.fill();
-      ctx.fillStyle = '#767c89';
-      ctx.font = '500 11.5px system-ui, Roboto, sans-serif';
-      ctx.fillText('Customer Billing Details', 52, 126);
-      ctx.fillStyle = '#525866';
-      ctx.font = '400 13px system-ui, Roboto, sans-serif';
-      ctx.fillText('Email:', 52, 156);
-      ctx.fillText('Card:', 52, 188);
-
-      // Right info card (Buggy retry payload highlighted by SaveShot annotations)
-      ctx.fillStyle = '#f5f6f8';
-      ctx.beginPath();
-      ctx.roundRect(446, 102, 400, 122, 10);
-      ctx.fill();
-      ctx.fillStyle = '#767c89';
-      ctx.font = '500 11.5px system-ui, Roboto, sans-serif';
-      ctx.fillText('Retry Configuration Payload', 464, 126);
-      ctx.fillStyle = '#141518';
-      ctx.font = '600 13px ui-monospace, Liberation Mono, monospace';
-      ctx.fillText('retry_backoff_ms: null', 464, 156);
-      ctx.fillStyle = '#525866';
-      ctx.font = '400 12.5px ui-monospace, Liberation Mono, monospace';
-      ctx.fillText('max_attempts: 3  |  timeout_ms: 15000', 464, 184);
-
-      // Event table below
-      ctx.strokeStyle = '#eceef2';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(34, 256, 812, 146, 10);
-      ctx.stroke();
-      ctx.fillStyle = '#f5f6f8';
-      ctx.beginPath();
-      ctx.roundRect(35, 257, 810, 36, [9, 9, 0, 0]);
-      ctx.fill();
-
-      ctx.fillStyle = '#767c89';
-      ctx.font = '600 11.5px system-ui, Roboto, sans-serif';
-      ctx.fillText('Timestamp', 52, 279);
-      ctx.fillText('Event Type', 210, 279);
-      ctx.fillText('Result', 720, 279);
-
-      const rows = [
-        ['10:42:11.04', 'payment_intent.succeeded', '200 OK', '#15803d'],
-        ['10:42:14.89', 'webhook.delivery.retry_failed (NaN delay)', '502 Error', '#dc2626'],
-      ];
-      rows.forEach(([ts, ev, status, col], idx) => {
-        const y = 318 + idx * 44;
-        if (idx === 1) {
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.04)';
-          ctx.fillRect(35, y - 24, 810, 44);
-        }
-        ctx.fillStyle = '#525866';
-        ctx.font = '400 12.5px ui-monospace, Liberation Mono, monospace';
-        ctx.fillText(ts, 52, y);
         ctx.fillStyle = '#141518';
-        ctx.fillText(ev, 210, y);
-        ctx.fillStyle = col;
-        ctx.font = '600 12.5px system-ui, Roboto, sans-serif';
-        ctx.fillText(status, 720, y);
-      });
+        ctx.font = "700 18px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Order #INV-88412 · Webhook Delivery Log', 34, 42);
+        ctx.fillStyle = '#767c89';
+        ctx.font = "400 12.5px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Production Environment · Processed 2 minutes ago', 34, 63);
 
-      // Render real SaveShot annotations + solid black pixel redactions using lib/editor-core.js!
-      const ops = [
-        { tool: 'redact', x1: 102, y1: 141, x2: 344, y2: 162 },
-        { tool: 'redact', x1: 102, y1: 173, x2: 274, y2: 194 },
-        { tool: 'box', color: '#ef4444', strokeWidth: 3.5, x1: 444, y1: 100, x2: 848, y2: 226 },
-        { tool: 'arrow', color: '#ef4444', strokeWidth: 4, x1: 360, y1: 238, x2: 436, y2: 184 },
-        { tool: 'text', color: '#ef4444', fontSize: 16, x: 224, y: 230, text: 'Null backoff bug' },
-      ];
-      for (const op of ops) {
-        renderAnnotation(ctx, op, W, H);
-      }
+        ctx.fillStyle = '#fef2f2';
+        ctx.beginPath();
+        ctx.roundRect(674, 26, 172, 28, 6);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.28)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = '#991b1b';
+        ctx.font = "600 12px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillText('HTTP 502 Bad Gateway', 674 + 86, 44);
+        ctx.textAlign = 'left';
+
+        ctx.strokeStyle = '#eceef2';
+        ctx.beginPath();
+        ctx.moveTo(34, 82);
+        ctx.lineTo(846, 82);
+        ctx.stroke();
+
+        ctx.fillStyle = '#f5f6f8';
+        ctx.beginPath();
+        ctx.roundRect(34, 102, 392, 122, 10);
+        ctx.fill();
+        ctx.fillStyle = '#767c89';
+        ctx.font = "500 11.5px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Customer Billing Details', 52, 126);
+        ctx.fillStyle = '#525866';
+        ctx.font = "400 13px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Email:', 52, 156);
+        ctx.fillText('Card:', 52, 188);
+
+        ctx.fillStyle = '#f5f6f8';
+        ctx.beginPath();
+        ctx.roundRect(446, 102, 400, 122, 10);
+        ctx.fill();
+        ctx.fillStyle = '#767c89';
+        ctx.font = "500 11.5px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Retry Configuration Payload', 464, 126);
+        ctx.fillStyle = '#141518';
+        ctx.font = "600 13px 'SaveShotAssetMono', monospace";
+        ctx.fillText('retry_backoff_ms: null', 464, 156);
+        ctx.fillStyle = '#525866';
+        ctx.font = "400 12.5px 'SaveShotAssetMono', monospace";
+        ctx.fillText('max_attempts: 3  |  timeout_ms: 15000', 464, 184);
+
+        ctx.strokeStyle = '#eceef2';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(34, 256, 812, 146, 10);
+        ctx.stroke();
+        ctx.fillStyle = '#f5f6f8';
+        ctx.beginPath();
+        ctx.roundRect(35, 257, 810, 36, [9, 9, 0, 0]);
+        ctx.fill();
+
+        ctx.fillStyle = '#767c89';
+        ctx.font = "600 11.5px 'SaveShotAssetUI', Roboto, sans-serif";
+        ctx.fillText('Timestamp', 52, 279);
+        ctx.fillText('Event Type', 210, 279);
+        ctx.fillText('Result', 720, 279);
+
+        const rows = [
+          ['10:42:11.04', 'payment_intent.succeeded', '200 OK', '#15803d'],
+          ['10:42:14.89', 'webhook.delivery.retry_failed (NaN delay)', '502 Error', '#dc2626'],
+        ];
+        rows.forEach(([ts, ev, status, col], idx) => {
+          const y = 318 + idx * 44;
+          if (idx === 1) {
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.04)';
+            ctx.fillRect(35, y - 24, 810, 44);
+          }
+          ctx.fillStyle = '#525866';
+          ctx.font = "400 12.5px 'SaveShotAssetMono', monospace";
+          ctx.fillText(ts, 52, y);
+          ctx.fillStyle = '#141518';
+          ctx.fillText(ev, 210, y);
+          ctx.fillStyle = col;
+          ctx.font = "600 12.5px 'SaveShotAssetUI', Roboto, sans-serif";
+          ctx.fillText(status, 720, y);
+        });
+
+        const ops = [
+          { tool: 'redact', x1: 102, y1: 141, x2: 344, y2: 162 },
+          { tool: 'redact', x1: 102, y1: 173, x2: 274, y2: 194 },
+          { tool: 'box', color: '#ef4444', strokeWidth: 3.5, x1: 444, y1: 100, x2: 848, y2: 226 },
+          { tool: 'arrow', color: '#ef4444', strokeWidth: 4, x1: 360, y1: 238, x2: 436, y2: 184 },
+          { tool: 'text', color: '#ef4444', fontSize: 16, x: 224, y: 230, text: 'Null backoff bug' },
+        ];
+        for (const op of ops) {
+          renderAnnotation(ctx, op, W, H);
+        }
+      })();
     </script>
   `;
 
@@ -525,16 +601,23 @@ function stageRealExtensionFiles(stageDir) {
       .replace('</body>', `${editorStageScript}</body>`)
   );
 
-  // Stage real pages/welcome.html in connected state so header + status + 4 steps + shortcuts fit cleanly
+  // Stage real pages/welcome.html showing the Pin-to-Chrome guide + connected account + 4 steps + shortcuts
   const rawWelcomeHtml = fs
     .readFileSync(path.join(stageDir, 'pages/welcome.html'), 'utf8')
     .replace(/<script\b[^>]*><\/script>/g, '');
 
   const welcomeStageCss = `
-    body { padding: 24px 24px 32px !important; background: var(--ss-page-bg) !important; }
-    .container { max-width: 760px !important; gap: 15px !important; }
-    .welcome-card { padding: 14px 18px !important; }
-    .steps-grid { gap: 10px !important; }
+    html, body { margin: 0 !important; overflow: hidden !important; background: var(--ss-page-bg) !important; }
+    body { padding: 12px 24px 16px !important; }
+    .container { max-width: 880px !important; gap: 8px !important; }
+    .welcome-card { padding: 10px 16px !important; }
+    .pin-badge { margin-bottom: 3px !important; }
+    .steps-grid { gap: 8px !important; }
+    .step-card { gap: 3px !important; }
+    .shortcuts-card { gap: 7px !important; }
+    .shortcut-rows { gap: 5px !important; }
+    .shortcut-row { height: 30px !important; }
+    .shortcuts-card ~ * { display: none !important; }
   `;
 
   const welcomeStageScript = `
@@ -544,6 +627,7 @@ function stageRealExtensionFiles(stageDir) {
         img.src = '../icons/icon128.png';
       }
       document.getElementById('ext-version').textContent = ${JSON.stringify(`v${SITE_COPY.version}`)};
+      document.getElementById('pin-nudge-card').hidden = false;
       document.getElementById('account-dot').classList.add('connected');
       document.getElementById('account-heading').textContent = 'Connected as alex@workspace.io';
       document.getElementById('account-detail').textContent = ${JSON.stringify(
@@ -551,8 +635,8 @@ function stageRealExtensionFiles(stageDir) {
       )};
       document.getElementById('sign-in-btn').hidden = true;
       document.getElementById('open-drive-btn').hidden = false;
-      document.getElementById('shortcut-region').textContent = ${JSON.stringify(SITE_COPY.shortcuts.region.display)};
-      document.getElementById('shortcut-visible').textContent = ${JSON.stringify(SITE_COPY.shortcuts.visible.display)};
+      document.getElementById('shortcut-region').textContent = 'Custom shortcut';
+      document.getElementById('shortcut-visible').textContent = 'Custom shortcut';
     </script>
   `;
 
@@ -566,13 +650,12 @@ function stageRealExtensionFiles(stageDir) {
 
 /**
  * Shared design-system CSS for all 7 Chrome Web Store assets.
- * Directly consumes SaveShot's tokens.css variables for 100% palette, border,
- * radius, and typography consistency across every promotional tile and slide.
+ * Directly consumes SaveShot's tokens.css variables + embedded Roboto TTFs.
  */
-function buildSlideCommonCss(tokensCss) {
+function buildSlideCommonCss(tokensCss, fontBridgeCss) {
   return `
-    ${FONT_BRIDGE_CSS}
     ${tokensCss}
+    ${fontBridgeCss}
 
     html, body {
       margin: 0;
@@ -635,7 +718,7 @@ function buildSlideCommonCss(tokensCss) {
       font-size: 30px;
       font-weight: 700;
       line-height: 38px;
-      letter-spacing: -0.024em;
+      letter-spacing: -0.022em;
       color: var(--ss-text);
       white-space: nowrap;
     }
@@ -650,7 +733,7 @@ function buildSlideCommonCss(tokensCss) {
       white-space: nowrap;
     }
 
-    /* Elevated Browser / App Showcase Shell (starts at exact y = 160px on slides) */
+    /* Elevated Browser / App Showcase Shell */
     .cws-frame {
       width: 1136px;
       flex: 1;
@@ -665,15 +748,18 @@ function buildSlideCommonCss(tokensCss) {
       position: relative;
     }
 
-    .cws-popup-img {
+    /* Live Vector Iframe Surfaces (zero intermediate bitmap resampling!) */
+    .cws-popup-frame {
       display: block;
       width: 352px;
-      height: auto;
+      border: 0;
+      background: transparent;
       border-radius: var(--ss-radius-shell);
       box-shadow: 0 22px 50px rgba(15, 18, 24, 0.18), 0 2px 8px rgba(15, 18, 24, 0.06);
+      overflow: hidden;
     }
 
-    .cws-popup-img.dark-shadow {
+    .cws-popup-frame.dark-shadow {
       box-shadow: 0 24px 56px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.20);
     }
 
@@ -780,13 +866,14 @@ export async function generateAllStoreAssets() {
   fs.mkdirSync(outDir, { recursive: true });
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-assets-'));
   const stageDir = path.join(tempRoot, 'ext');
-  const raw2xDir = path.join(tempRoot, 'raw2x');
+  const raw3xDir = path.join(tempRoot, 'raw3x');
   const userDataDir = path.join(tempRoot, 'profile');
   fs.mkdirSync(stageDir, { recursive: true });
-  fs.mkdirSync(raw2xDir, { recursive: true });
+  fs.mkdirSync(raw3xDir, { recursive: true });
   fs.mkdirSync(userDataDir, { recursive: true });
 
-  stageRealExtensionFiles(stageDir);
+  const fontBridgeCss = buildFontBridgeCss();
+  stageRealExtensionFiles(stageDir, fontBridgeCss);
 
   const tokensCss = fs.readFileSync(path.join(rootDir, 'styles/tokens.css'), 'utf8');
   const iconDataUri = `data:image/png;base64,${fs
@@ -795,48 +882,28 @@ export async function generateAllStoreAssets() {
   const thumbLight = createMiniThumbDataUri('#1a73e8', false);
   const thumbDark = createMiniThumbDataUri('#1a73e8', true);
 
+  const popupLightUrl = `file://${path.join(stageDir, 'popup/staged-light.html')}`;
+  const popupDarkUrl = `file://${path.join(stageDir, 'popup/staged-dark.html')}`;
+  const popupSignedOutUrl = `file://${path.join(stageDir, 'popup/staged-signed-out.html')}`;
+  const editorUrl = `file://${path.join(stageDir, 'pages/staged-editor.html')}`;
+  const welcomeUrl = `file://${path.join(stageDir, 'pages/staged-welcome.html')}`;
+
   const cdp = await launchChromiumCdp(userDataDir);
   try {
-    // Stage 1: Capture real extension UI surfaces at 2x Retina
-    const popupLight = await captureElementPngDataUri(
+    // Measure exact live heights of staged popups so seamless iframes never clip or scroll
+    const popupConnectedH = await measureIframeHeight(cdp, popupLightUrl, '#popup-shell', 400, 600);
+    const popupSignedOutH = await measureIframeHeight(
       cdp,
-      `file://${path.join(stageDir, 'popup/staged-light.html')}`,
+      popupSignedOutUrl,
       '#popup-shell',
-      500,
+      400,
       600
-    );
-    const popupDark = await captureElementPngDataUri(
-      cdp,
-      `file://${path.join(stageDir, 'popup/staged-dark.html')}`,
-      '#popup-shell',
-      500,
-      600
-    );
-    const popupSignedOut = await captureElementPngDataUri(
-      cdp,
-      `file://${path.join(stageDir, 'popup/staged-signed-out.html')}`,
-      '#popup-shell',
-      500,
-      600
-    );
-    const editorShot = await captureElementPngDataUri(
-      cdp,
-      `file://${path.join(stageDir, 'pages/staged-editor.html')}`,
-      '.editor-app',
-      1136,
-      636
-    );
-    const welcomeShot = await captureElementPngDataUri(
-      cdp,
-      `file://${path.join(stageDir, 'pages/staged-welcome.html')}`,
-      'body',
-      1136,
-      636
     );
 
-    const commonCss = buildSlideCommonCss(tokensCss);
+    const commonCss = buildSlideCommonCss(tokensCss, fontBridgeCss);
+    const marqueeEditorScale = 590 / 1136;
 
-    // Stage 2: Build all 7 Chrome Web Store assets with unified design & typography
+    // Build all 7 Chrome Web Store assets with single-pass live vector rendering
     const assetPages = [
       {
         relPath: 'store-assets/promo-small-440x280.png',
@@ -861,7 +928,7 @@ export async function generateAllStoreAssets() {
             font-size: 24px;
             font-weight: 700;
             line-height: 28px;
-            letter-spacing: -0.025em;
+            letter-spacing: -0.022em;
             color: var(--ss-text);
           }
           .promo-sm-tag {
@@ -916,7 +983,7 @@ export async function generateAllStoreAssets() {
                 Capture any area or tab, annotate or redact in Chrome, save to Drive with the link copied, or download locally.
               </p>
               <div style="display:flex;gap:6px;margin-top:14px;">
-                <span class="ss-kbd">${SITE_COPY.shortcuts.region.key} &middot; Area</span>
+                <span class="ss-kbd">Area &amp; Tab</span>
                 <span class="ss-kbd">Annotate &amp; Redact</span>
                 <span class="ss-kbd">drive.file</span>
               </div>
@@ -926,7 +993,7 @@ export async function generateAllStoreAssets() {
                 <span class="promo-sm-dot"></span>
                 <span>Saved to Drive &middot; Link copied</span>
               </span>
-              <span class="ss-kbd">100% Local</span>
+              <span class="ss-kbd">No Tracking</span>
             </div>
           </div>
         </body></html>`,
@@ -961,14 +1028,14 @@ export async function generateAllStoreAssets() {
           .mq-brand-name {
             font-size: 24px;
             font-weight: 700;
-            letter-spacing: -0.024em;
+            letter-spacing: -0.022em;
             color: var(--ss-text);
           }
           .mq-h1 {
             font-size: 38px;
             font-weight: 700;
             line-height: 46px;
-            letter-spacing: -0.028em;
+            letter-spacing: -0.024em;
             color: var(--ss-text);
           }
           .mq-sub {
@@ -1020,10 +1087,13 @@ export async function generateAllStoreAssets() {
             overflow: hidden;
             background: var(--ss-bg);
           }
-          .mq-editor-card img {
-            width: 100%;
-            height: auto;
+          .mq-editor-frame {
+            width: 1136px;
+            height: 636px;
+            border: 0;
             display: block;
+            transform: scale(${marqueeEditorScale.toFixed(6)});
+            transform-origin: top left;
           }
           .mq-popup-wrap {
             position: absolute;
@@ -1042,17 +1112,17 @@ export async function generateAllStoreAssets() {
                 Select any area or tab, annotate or redact sensitive details in Chrome, copy your Drive link automatically, or download locally in one click.
               </p>
               <div class="mq-meta-row">
-                <span class="mq-chip"><span class="mq-chip-dot"></span>100% Local in Chrome</span>
+                <span class="mq-chip"><span class="mq-chip-dot"></span>Privacy-First</span>
                 <span class="mq-chip">Narrow drive.file Scope</span>
                 <span class="mq-chip">No External Servers</span>
               </div>
             </div>
             <div class="mq-right">
               <div class="mq-editor-card">
-                <img src="${editorShot.dataUri}" alt="" />
+                <iframe class="mq-editor-frame" src="${editorUrl}" scrolling="no"></iframe>
               </div>
               <div class="mq-popup-wrap">
-                <img class="cws-popup-img" src="${popupLight.dataUri}" alt="" />
+                <iframe class="cws-popup-frame" src="${popupLightUrl}" style="height:${popupConnectedH}px;" scrolling="no"></iframe>
               </div>
             </div>
           </div>
@@ -1117,7 +1187,6 @@ export async function generateAllStoreAssets() {
             inset: 0;
             background: rgba(15, 18, 24, 0.30);
           }
-          /* Authentic selector.js HUD pill */
           .selector-hud {
             position: absolute;
             top: 18px;
@@ -1216,7 +1285,7 @@ export async function generateAllStoreAssets() {
               iconDataUri,
               'Area & Tab Capture',
               'Select any screen area or capture the visible tab',
-              `Drag to crop with pixel-exact zoom accuracy (${SITE_COPY.shortcuts.region.key}) or press ${SITE_COPY.shortcuts.visible.key} to save straight to Google Drive.`
+              'Drag to crop with pixel-exact zoom accuracy, capture the visible tab in one click, or use customizable shortcuts.'
             )}
             <div class="cws-frame">
               <div class="browser-bar">
@@ -1267,7 +1336,7 @@ export async function generateAllStoreAssets() {
                 </div>
                 <div class="crop-dim-pill">1180 × 680</div>
                 <div style="position:absolute;right:34px;top:16px;z-index:5;">
-                  <img class="cws-popup-img" src="${popupLight.dataUri}" alt="" />
+                  <iframe class="cws-popup-frame" src="${popupLightUrl}" style="height:${popupConnectedH}px;" scrolling="no"></iframe>
                 </div>
               </div>
             </div>
@@ -1287,7 +1356,7 @@ export async function generateAllStoreAssets() {
               'Opens automatically so you can add arrows, shapes, text, or pixel redactions, update Drive, or download a PNG.'
             )}
             <div class="cws-frame">
-              <img src="${editorShot.dataUri}" style="width:1136px;height:auto;display:block;" alt="" />
+              <iframe src="${editorUrl}" style="width:1136px;height:640px;border:0;display:block;" scrolling="no"></iframe>
             </div>
           </div>
         </body></html>`,
@@ -1375,12 +1444,12 @@ export async function generateAllStoreAssets() {
             ${renderSlideHeader(
               iconDataUri,
               'Privacy First',
-              '100% local in Chrome with no external servers or tracking',
+              'Privacy-first design with no external servers or tracking',
               "Uploads go straight from Chrome to Google's official Drive API under the narrow drive.file permission."
             )}
             <div class="priv-layout">
               <div>
-                <img class="cws-popup-img" src="${popupSignedOut.dataUri}" alt="" />
+                <iframe class="cws-popup-frame" src="${popupSignedOutUrl}" style="height:${popupSignedOutH}px;" scrolling="no"></iframe>
               </div>
               <div class="priv-right">
                 <div class="flow-card">
@@ -1466,7 +1535,7 @@ export async function generateAllStoreAssets() {
             )}
             <div class="themes-grid">
               <div class="theme-col">
-                <img class="cws-popup-img" src="${popupLight.dataUri}" alt="" />
+                <iframe class="cws-popup-frame" src="${popupLightUrl}" style="height:${popupConnectedH}px;" scrolling="no"></iframe>
                 <div class="cws-toast">
                   <div class="cws-toast-row">
                     <img class="cws-toast-thumb" src="${thumbLight}" alt="" />
@@ -1485,7 +1554,7 @@ export async function generateAllStoreAssets() {
               </div>
 
               <div class="theme-col">
-                <img class="cws-popup-img dark-shadow" src="${popupDark.dataUri}" alt="" />
+                <iframe class="cws-popup-frame dark-shadow" src="${popupDarkUrl}" style="height:${popupConnectedH}px;" scrolling="no"></iframe>
                 <div class="cws-toast dark">
                   <div class="cws-toast-row">
                     <img class="cws-toast-thumb" src="${thumbDark}" alt="" />
@@ -1516,10 +1585,10 @@ export async function generateAllStoreAssets() {
               iconDataUri,
               'Quick Setup & Shortcuts',
               'Ready in seconds with customizable keyboard shortcuts',
-              'Connect Google Drive once, review the 4-step workflow, or customize shortcuts anytime.'
+              'Pin SaveShot to Chrome, connect Google Drive anytime, or customize shortcuts in one click.'
             )}
             <div class="cws-frame" style="background:var(--ss-page-bg);">
-              <img src="${welcomeShot.dataUri}" style="width:1136px;height:auto;display:block;" alt="" />
+              <iframe src="${welcomeUrl}" style="width:1136px;height:640px;border:0;display:block;" scrolling="no"></iframe>
             </div>
           </div>
         </body></html>`,
@@ -1529,23 +1598,23 @@ export async function generateAllStoreAssets() {
     for (const page of assetPages) {
       const baseName = path.basename(page.relPath);
       const htmlPath = path.join(tempRoot, `${baseName}.html`);
-      const rawPngPath = path.join(raw2xDir, baseName);
+      const rawPngPath = path.join(raw3xDir, baseName);
       fs.writeFileSync(htmlPath, page.html, 'utf8');
-      await captureFullViewport2x(cdp, htmlPath, page.width, page.height, rawPngPath);
+      await captureFullViewport3x(cdp, htmlPath, page.width, page.height, rawPngPath);
     }
   } finally {
     cdp.ws.close();
     cdp.proc.kill('SIGKILL');
   }
 
-  // Stage 3: Downsample 2x Retina captures via Lanczos to exact 1x dimensions in strict 24-bit RGB (no alpha)
+  // Downsample single-pass 3x Retina captures via Lanczos + subtle crisp edge sharpening to exact CWS 24-bit RGB specs
   execFileSync(
     'python3',
     [
       '-c',
       `
 import json, os, sys
-from PIL import Image
+from PIL import Image, ImageFilter
 
 raw_dir, out_dir, specs_json = sys.argv[1], sys.argv[2], sys.argv[3]
 specs = json.loads(specs_json)
@@ -1564,6 +1633,7 @@ for rel_path, target_w, target_h in specs:
         im = bg
     if im.size != (target_w, target_h):
         im = im.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        im = im.filter(ImageFilter.UnsharpMask(radius=0.55, percent=36, threshold=2))
     im.save(dst, format='PNG', optimize=True)
     with open(dst, 'rb') as f:
         hdr = f.read(26)
@@ -1573,7 +1643,7 @@ for rel_path, target_w, target_h in specs:
     assert (w, h, ct) == (target_w, target_h, 2), f"Invalid PNG {fname}: {(w, h, ct)}"
     print(f"Built {rel_path} ({w}x{h} 24-bit RGB, {os.path.getsize(dst)} bytes)")
 `,
-      raw2xDir,
+      raw3xDir,
       outDir,
       JSON.stringify(STORE_ASSET_SPECS),
     ],
@@ -1588,7 +1658,8 @@ for rel_path, target_w, target_h in specs:
     outputHashes[relPath] = sha256File(path.join(rootDir, relPath));
   }
   const manifestData = {
-    comment: 'Generated by npm run build:assets (scripts/generate-store-assets.mjs). Do not edit manually.',
+    comment:
+      'Generated by npm run build:assets (scripts/generate-store-assets.mjs). Do not edit manually.',
     sourceHashes: computeAssetSourceHashes(rootDir),
     outputHashes,
   };

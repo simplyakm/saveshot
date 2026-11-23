@@ -760,13 +760,17 @@ els.downloadBtn.addEventListener('click', async () => {
   }, 'image/png');
 });
 
+let copyLinkTimer = null;
+
 els.copyLinkBtn.addEventListener('click', async () => {
   const safeLink = safeHttpsUrl(state.webViewLink);
   if (!safeLink) return;
   try {
     await navigator.clipboard.writeText(safeLink);
+    if (copyLinkTimer) clearTimeout(copyLinkTimer);
     els.copyLinkBtn.textContent = 'Copied!';
-    setTimeout(() => {
+    copyLinkTimer = setTimeout(() => {
+      copyLinkTimer = null;
       els.copyLinkBtn.textContent = 'Copy link';
     }, 1600);
   } catch {
@@ -971,6 +975,7 @@ window.addEventListener('beforeunload', (event) => {
 window.addEventListener('pagehide', () => {
   clearUndoStack();
   state.initialBitmap?.close?.();
+  state.initialBitmap = null;
 });
 
 async function initEditor() {

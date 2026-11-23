@@ -40,6 +40,8 @@
   --ss-accent-border: rgba(26, 115, 232, 0.28);
   --ss-accent-text: #155fc4;
   --ss-on-accent: #ffffff;
+  --ss-connect-bg: rgba(26, 115, 232, 0.055);
+  --ss-connect-border: rgba(26, 115, 232, 0.24);
 
   --ss-green: #15803d;
   --ss-green-soft: rgba(21, 128, 61, 0.10);
@@ -97,6 +99,8 @@
     --ss-accent-border: rgba(91, 157, 249, 0.34);
     --ss-accent-text: #82b5fd;
     --ss-on-accent: #0d131f;
+    --ss-connect-bg: rgba(91, 157, 249, 0.09);
+    --ss-connect-border: rgba(91, 157, 249, 0.28);
 
     --ss-green: #4ade80;
     --ss-green-soft: rgba(74, 222, 128, 0.13);
@@ -143,6 +147,8 @@
   --ss-accent-border: rgba(91, 157, 249, 0.34);
   --ss-accent-text: #82b5fd;
   --ss-on-accent: #0d131f;
+  --ss-connect-bg: rgba(91, 157, 249, 0.09);
+  --ss-connect-border: rgba(91, 157, 249, 0.28);
 
   --ss-green: #4ade80;
   --ss-green-soft: rgba(74, 222, 128, 0.13);

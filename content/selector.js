@@ -353,17 +353,35 @@
       e.stopImmediatePropagation();
     }
 
-    function triggerFullTabCapture() {
-      installTrailingClickShield();
-      clearActiveOverlay();
+    function afterOverlayRepaint(delayMs, callback) {
+      if (document.hidden) {
+        callback();
+        return;
+      }
+      let fired = false;
+      const run = () => {
+        if (fired) return;
+        fired = true;
+        callback();
+      };
+      const fallbackTimer = setTimeout(run, 120);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setTimeout(() => {
-            chrome.runtime
-              .sendMessage({ type: 'CAPTURE_VISIBLE_FROM_OVERLAY' })
-              .catch(() => {});
-          }, 35);
+            clearTimeout(fallbackTimer);
+            run();
+          }, delayMs);
         });
+      });
+    }
+
+    function triggerFullTabCapture() {
+      installTrailingClickShield();
+      clearActiveOverlay();
+      afterOverlayRepaint(35, () => {
+        chrome.runtime
+          .sendMessage({ type: 'CAPTURE_VISIBLE_FROM_OVERLAY' })
+          .catch(() => {});
       });
     }
 
@@ -442,18 +460,14 @@
         return;
       }
 
-      // Wait for two paint frames + short settle so the compositor paints a clean frame without the overlay
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setTimeout(() => {
-            chrome.runtime
-              .sendMessage({
-                type: 'REGION_SELECTED',
-                selection: selectionPayload,
-              })
-              .catch(() => {});
-          }, 35);
-        });
+      // Wait for two paint frames + short settle (with occlusion fallback) so overlay never appears in shot
+      afterOverlayRepaint(35, () => {
+        chrome.runtime
+          .sendMessage({
+            type: 'REGION_SELECTED',
+            selection: selectionPayload,
+          })
+          .catch(() => {});
       });
     }
 

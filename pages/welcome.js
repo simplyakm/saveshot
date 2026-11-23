@@ -1,5 +1,6 @@
 import {
-  buildFeedbackPayload,
+  DEFAULT_CWS_SUPPORT_URL,
+  formatVersionInfoLine,
   getEnvironmentSummary,
   getRepoUrl,
 } from '../lib/feedback.js';
@@ -12,6 +13,9 @@ import {
 
 const els = {
   extVersion: document.getElementById('ext-version'),
+  pinNudgeCard: document.getElementById('pin-nudge-card'),
+  pinDoneCard: document.getElementById('pin-done-card'),
+  statusCard: document.getElementById('status-card'),
   accountDot: document.getElementById('account-dot'),
   accountHeading: document.getElementById('account-heading'),
   accountDetail: document.getElementById('account-detail'),
@@ -22,51 +26,54 @@ const els = {
   shortcutVisible: document.getElementById('shortcut-visible'),
   shortcutRegion: document.getElementById('shortcut-region'),
   editShortcutsBtn: document.getElementById('edit-shortcuts-btn'),
-  tabBug: document.getElementById('tab-bug'),
-  tabFeature: document.getElementById('tab-feature'),
-  fbTitle: document.getElementById('fb-title'),
-  fbDetailsLabel: document.getElementById('fb-details-label'),
-  fbDetails: document.getElementById('fb-details'),
-  fbIncludeDiag: document.getElementById('fb-include-diag'),
-  diagPreview: document.getElementById('diag-preview'),
-  openGithubIssueBtn: document.getElementById('open-github-issue-btn'),
-  copyReportBtn: document.getElementById('copy-report-btn'),
+  versionInfoText: document.getElementById('version-info-text'),
+  copyVersionBtn: document.getElementById('copy-version-btn'),
+  cwsSupportLink: document.getElementById('cws-support-link'),
   repoIssuesLink: document.getElementById('repo-issues-link'),
 };
 
-let feedbackKind = 'bug';
 let lastErrorCode = '';
+let wasUnpinnedDuringSession = false;
+let copyVersionTimer = null;
 
-function setFeedbackKind(kind) {
-  feedbackKind = kind === 'feature' ? 'feature' : 'bug';
-  const isBug = feedbackKind === 'bug';
-  els.tabBug.classList.toggle('active', isBug);
-  els.tabFeature.classList.toggle('active', !isBug);
+function applyToolbarPinState(isOnToolbar) {
+  if (typeof isOnToolbar !== 'boolean') return;
+  if (!isOnToolbar) {
+    wasUnpinnedDuringSession = true;
+    els.pinNudgeCard.hidden = false;
+    els.pinDoneCard.hidden = true;
+    return;
+  }
 
-  els.fbDetailsLabel.textContent = isBug ? 'What happened?' : 'What would you like to add?';
-  els.fbTitle.placeholder = isBug
-    ? 'Example: Region capture shifts when page is scrolled'
-    : 'Example: Option to save screenshots as JPEG';
-  els.fbDetails.placeholder = isBug
-    ? 'Tell us what steps you took and what you expected to happen.'
-    : 'Describe how the feature should work and why it would be useful.';
-
-  updateDiagnosticPreview();
+  els.pinNudgeCard.hidden = true;
+  els.pinDoneCard.hidden = !wasUnpinnedDuringSession;
 }
 
-function updateDiagnosticPreview() {
+async function refreshPinStatus() {
+  if (typeof chrome?.action?.getUserSettings !== 'function') return;
+  try {
+    const settings = await chrome.action.getUserSettings();
+    applyToolbarPinState(settings?.isOnToolbar);
+  } catch {
+    // Ignore if browser build omits getUserSettings
+  }
+}
+
+function updateVersionStrip() {
   const env = getEnvironmentSummary();
-  els.diagPreview.hidden = !els.fbIncludeDiag.checked;
-  els.diagPreview.textContent = [
-    `SaveShot version: ${env.extensionVersion}`,
-    `Browser: ${env.browser} (${env.os})`,
-    `Last error code: ${lastErrorCode || 'None'}`,
-  ].join('\n');
+  els.versionInfoText.textContent = formatVersionInfoLine({
+    env,
+    lastErrorCode,
+  });
 }
 
 async function loadStatus() {
   const env = getEnvironmentSummary();
   els.extVersion.textContent = `v${env.extensionVersion}`;
+  els.cwsSupportLink.href = safeHttpsUrl(
+    els.cwsSupportLink.getAttribute('href'),
+    DEFAULT_CWS_SUPPORT_URL
+  );
   els.repoIssuesLink.href = safeHttpsUrl(
     `${getRepoUrl()}/issues`,
     'https://github.com/simplyakm/saveshot/issues'
@@ -76,15 +83,16 @@ async function loadStatus() {
   if (params.get('error')) {
     lastErrorCode = params.get('error');
   }
-  if (params.get('kind')) {
-    setFeedbackKind(params.get('kind'));
-  }
+  updateVersionStrip();
 
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {
       let hasUnset = false;
+      let sawRegion = false;
+      let sawVisible = false;
       for (const cmd of commands || []) {
         if (cmd.name === 'capture-visible') {
+          sawVisible = true;
           if (cmd.shortcut) {
             els.shortcutVisible.textContent = formatShortcutDisplay(cmd.shortcut);
           } else {
@@ -92,6 +100,7 @@ async function loadStatus() {
             hasUnset = true;
           }
         } else if (cmd.name === 'capture-region') {
+          sawRegion = true;
           if (cmd.shortcut) {
             els.shortcutRegion.textContent = formatShortcutDisplay(cmd.shortcut);
           } else {
@@ -99,6 +108,14 @@ async function loadStatus() {
             hasUnset = true;
           }
         }
+      }
+      if (!sawRegion) {
+        els.shortcutRegion.textContent = 'Not set';
+        hasUnset = true;
+      }
+      if (!sawVisible) {
+        els.shortcutVisible.textContent = 'Not set';
+        hasUnset = true;
       }
       const unsetHint = document.getElementById('shortcut-unset-hint');
       if (unsetHint) {
@@ -112,13 +129,14 @@ async function loadStatus() {
     if (res.lastErrorCode && !lastErrorCode) {
       lastErrorCode = res.lastErrorCode;
     }
-    updateDiagnosticPreview();
+    updateVersionStrip();
 
     if (!res.session?.signedIn) {
+      els.statusCard.classList.add('unconnected');
       els.accountDot.classList.remove('connected');
-      els.accountHeading.textContent = 'Google Drive not connected yet';
+      els.accountHeading.textContent = 'Autosave to your Google Drive';
       els.accountDetail.textContent =
-        'Capture, edit, and download locally right now, or connect Google Drive for autosave and link sharing.';
+        'Connect once to autosave shots to "Chrome_SaveShot_ScreenShots", or capture locally anytime.';
       els.signInBtn.hidden = false;
       els.openDriveBtn.hidden = true;
       els.devSetupNotice.hidden = !res.session?.needsSetup;
@@ -127,6 +145,7 @@ async function loadStatus() {
 
     const email = res.session.profile?.email || res.session.profile?.name || 'Google account';
     const folderName = res.settings?.folderName || 'Chrome_SaveShot_ScreenShots';
+    els.statusCard.classList.remove('unconnected');
     els.accountDot.classList.add('connected');
     els.accountHeading.textContent = `Connected as ${email}`;
     els.accountDetail.textContent = `Screenshots save to "${folderName}" in your Google Drive.`;
@@ -138,7 +157,7 @@ async function loadStatus() {
     );
     els.devSetupNotice.hidden = true;
   } catch {
-    updateDiagnosticPreview();
+    updateVersionStrip();
   }
 }
 
@@ -185,47 +204,43 @@ els.editShortcutsBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });
 
-els.tabBug.addEventListener('click', () => setFeedbackKind('bug'));
-els.tabFeature.addEventListener('click', () => setFeedbackKind('feature'));
-els.fbIncludeDiag.addEventListener('change', updateDiagnosticPreview);
-
-els.openGithubIssueBtn.addEventListener('click', () => {
-  const { issueUrl } = buildFeedbackPayload({
-    kind: feedbackKind,
-    title: els.fbTitle.value,
-    details: els.fbDetails.value,
+els.copyVersionBtn.addEventListener('click', async () => {
+  const line = formatVersionInfoLine({
+    env: getEnvironmentSummary(),
     lastErrorCode,
-    includeDiagnostics: els.fbIncludeDiag.checked,
-  });
-  chrome.tabs.create({ url: issueUrl });
-});
-
-els.copyReportBtn.addEventListener('click', async () => {
-  const { title, body } = buildFeedbackPayload({
-    kind: feedbackKind,
-    title: els.fbTitle.value,
-    details: els.fbDetails.value,
-    lastErrorCode,
-    includeDiagnostics: els.fbIncludeDiag.checked,
   });
   try {
-    await navigator.clipboard.writeText(`${title}\n\n${body}`);
-    els.copyReportBtn.textContent = 'Copied!';
-    setTimeout(() => {
-      els.copyReportBtn.textContent = 'Copy report text';
+    await navigator.clipboard.writeText(line);
+    if (copyVersionTimer) clearTimeout(copyVersionTimer);
+    els.copyVersionBtn.textContent = 'Copied!';
+    copyVersionTimer = setTimeout(() => {
+      copyVersionTimer = null;
+      els.copyVersionBtn.textContent = 'Copy version info';
     }, 1800);
   } catch {
-    els.copyReportBtn.textContent = 'Could not copy';
+    els.copyVersionBtn.textContent = 'Could not copy';
   }
+});
+
+if (chrome?.action?.onUserSettingsChanged?.addListener) {
+  chrome.action.onUserSettingsChanged.addListener((change) => {
+    applyToolbarPinState(change?.isOnToolbar);
+  });
+}
+
+window.addEventListener('focus', refreshPinStatus);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshPinStatus();
 });
 
 if (chrome?.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && (changes.signedOut || changes.userProfile)) {
+    if (areaName === 'local' && (changes.signedOut || changes.userProfile || changes.settings)) {
       loadStatus();
     }
   });
 }
 
 initThemeSync();
+refreshPinStatus();
 loadStatus();

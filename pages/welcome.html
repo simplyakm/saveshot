@@ -22,8 +22,50 @@
         <span class="ss-kbd" id="ext-version">v1.1.1</span>
       </header>
 
+      <!-- Smart Live Pin-to-Chrome Nudge Card (shown only when unpinned) -->
+      <section class="welcome-card pin-nudge-card" id="pin-nudge-card" hidden>
+        <div class="pin-nudge-copy">
+          <span class="pin-badge">Recommended first step &uarr;</span>
+          <h2 class="ss-title-sm">Pin SaveShot to your Chrome toolbar</h2>
+          <p class="ss-body-regular pin-nudge-desc">
+            Click Chrome's <strong>Extensions</strong> puzzle icon in the top-right corner, then click the <strong>Pin</strong> icon next to SaveShot for 1-click capture.
+          </p>
+        </div>
+
+        <div class="toolbar-demo" aria-hidden="true">
+          <span class="tb-step">
+            <!-- Official Google Material `extension` upright puzzle piece -->
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.5 11.5H18.5V7a1.5 1.5 0 0 0-1.5-1.5h-4.5V3.7a1.7 1.7 0 0 0-3.4 0V5.5H4.5A1.5 1.5 0 0 0 3 7v4.3h1.5a1.7 1.7 0 0 1 0 3.4H3V19a1.5 1.5 0 0 0 1.5 1.5h4.3V19a1.7 1.7 0 0 1 3.4 0v1.5H17a1.5 1.5 0 0 0 1.5-1.5v-4.1h2a1.7 1.7 0 0 0 0-3.4Z"></path>
+            </svg>
+            <span>Extensions</span>
+          </span>
+
+          <span class="tb-arrow">&rarr;</span>
+
+          <span class="tb-step">
+            <img src="../icons/icon32.png" alt="" width="16" height="16" />
+            <span>SaveShot</span>
+            <span class="tb-pin-active">
+              <!-- Official Google Material `keep` upright pin icon -->
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"></path>
+              </svg>
+            </span>
+          </span>
+        </div>
+      </section>
+
+      <!-- Live Celebration Card when user pins SaveShot while page is open -->
+      <section class="pin-done-card" id="pin-done-card" hidden>
+        <span class="pin-check" aria-hidden="true">&#10003;</span>
+        <p class="ss-body-regular pin-done-text">
+          <strong>Pinned to your Chrome toolbar!</strong> Click the SaveShot icon anytime to capture an area or tab.
+        </p>
+      </section>
+
       <!-- Live Account / Setup Card -->
-      <section class="welcome-card status-card">
+      <section class="welcome-card status-card" id="status-card">
         <div class="status-left">
           <div class="status-dot" id="account-dot"></div>
           <div>
@@ -106,11 +148,11 @@
         <div class="shortcut-rows">
           <div class="shortcut-row">
             <span class="ss-body">Select area</span>
-            <kbd class="ss-kbd" id="shortcut-region">Alt + Shift + S</kbd>
+            <kbd class="ss-kbd" id="shortcut-region">Custom shortcut</kbd>
           </div>
           <div class="shortcut-row">
             <span class="ss-body">Visible tab</span>
-            <kbd class="ss-kbd" id="shortcut-visible">Alt + Shift + V</kbd>
+            <kbd class="ss-kbd" id="shortcut-visible">Custom shortcut</kbd>
           </div>
         </div>
         <p class="ss-meta shortcut-hint" id="shortcut-unset-hint" hidden>
@@ -118,10 +160,10 @@
         </p>
       </section>
 
-      <!-- Good to Know / FAQ -->
+      <!-- Good to Know / FAQ (Synced from content-source/site-copy.mjs) -->
       <section class="section">
         <h2 class="ss-meta section-title">Good to know</h2>
-        <div class="welcome-card faq-list">
+        <div class="welcome-card faq-list" id="faq-list">
           <div class="faq-item">
             <h3 class="ss-title-sm">Do I need to sign in to capture and download screenshots?</h3>
             <p class="ss-body-regular">
@@ -131,19 +173,25 @@
           <div class="faq-item">
             <h3 class="ss-title-sm">Does SaveShot use any external servers or track my data?</h3>
             <p class="ss-body-regular">
-              No. SaveShot runs 100% locally in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow <code>drive.file</code> scope, it cannot see any other files in your Drive.
+              No. SaveShot runs in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow <code>drive.file</code> scope, it cannot see any other files in your Drive.
             </p>
           </div>
           <div class="faq-item">
-            <h3 class="ss-title-sm">Can I redact sensitive details before the first upload?</h3>
+            <h3 class="ss-title-sm">Can I redact sensitive details before uploading to Google Drive?</h3>
             <p class="ss-body-regular">
-              Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on <strong>Open editor before uploading</strong> in Settings.
+              Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on <strong>Open editor before uploading</strong> in Settings (or capture while signed out).
             </p>
           </div>
           <div class="faq-item">
-            <h3 class="ss-title-sm">Why are buttons disabled on some tabs?</h3>
+            <h3 class="ss-title-sm">How do keyboard shortcuts work?</h3>
             <p class="ss-body-regular">
-              Chrome blocks all extensions from running on internal pages like <code>chrome://settings</code> and on the Chrome Web Store. For local PDFs or <code>file://</code> pages, turn on <strong>Allow access to file URLs</strong> in SaveShot's settings at <code>chrome://extensions</code>.
+              SaveShot supports customizable shortcuts for both <strong>Select area</strong> and <strong>Visible tab</strong>. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at <code>chrome://extensions/shortcuts</code>.
+            </p>
+          </div>
+          <div class="faq-item">
+            <h3 class="ss-title-sm">Why are capture buttons disabled on some tabs?</h3>
+            <p class="ss-body-regular">
+              Chrome blocks all extensions from running on internal pages like <code>chrome://settings</code> and on the Chrome Web Store. For local PDFs or <code>file://</code> pages, turn on <strong>Allow access to file URLs</strong> in SaveShot's details at <code>chrome://extensions</code>.
             </p>
           </div>
           <div class="faq-item">
@@ -155,80 +203,65 @@
           <div class="faq-item">
             <h3 class="ss-title-sm">How does Incognito mode work?</h3>
             <p class="ss-body-regular">
-              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots still upload directly to your Google Drive while page URLs and local upload history are left out for privacy.
+              If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.
             </p>
           </div>
         </div>
       </section>
 
-      <!-- Bug Report & Feature Request Section -->
+      <!-- Bug Report & Feature Request Section (W1) -->
       <section class="section" id="feedback">
         <h2 class="ss-meta section-title">Report a bug or request a feature</h2>
         <div class="welcome-card feedback-card">
-          <p class="ss-body-regular">
-            Found something broken or want a new option? Open a pre-filled issue on GitHub, or copy the report text if you prefer not to use GitHub.
-          </p>
+          <div class="feedback-copy">
+            <h3 class="ss-title-sm">Found a bug or want a feature?</h3>
+            <p class="ss-body-regular">
+              Report an issue or suggest a feature on the Chrome Web Store Support page, or open an issue on GitHub.
+            </p>
+          </div>
 
-          <div class="ss-segmented feedback-tabs" role="tablist">
-            <button type="button" class="ss-seg-item active" id="tab-bug" data-kind="bug">
-              Bug report
+          <div class="version-strip" id="version-strip">
+            <span class="version-info-text" id="version-info-text">SaveShot v1.1.1</span>
+            <button type="button" class="ss-btn ss-btn-sm ss-btn-secondary" id="copy-version-btn">
+              Copy version info
             </button>
-            <button type="button" class="ss-seg-item" id="tab-feature" data-kind="feature">
-              Feature request
-            </button>
-          </div>
-
-          <div class="form-field">
-            <label for="fb-title" class="ss-body">Short summary</label>
-            <input
-              type="text"
-              class="ss-input"
-              id="fb-title"
-              maxlength="120"
-              placeholder="Example: Region capture shifts when page is scrolled"
-            />
-          </div>
-
-          <div class="form-field">
-            <label for="fb-details" class="ss-body" id="fb-details-label">What happened?</label>
-            <textarea
-              class="ss-textarea"
-              id="fb-details"
-              rows="4"
-              placeholder="Tell us what steps you took and what you expected to happen."
-            ></textarea>
-          </div>
-
-          <div class="diag-box">
-            <label class="checkbox-label">
-              <input type="checkbox" class="diag-checkbox" id="fb-include-diag" checked />
-              <span class="ss-body-regular">Include basic browser and version info (no personal data or URLs)</span>
-            </label>
-            <pre class="diag-preview" id="diag-preview"></pre>
           </div>
 
           <div class="feedback-actions">
-            <button type="button" class="ss-btn ss-btn-primary" id="open-github-issue-btn">
-              Open pre-filled GitHub issue
-            </button>
-            <button type="button" class="ss-btn ss-btn-secondary" id="copy-report-btn">
-              Copy report text
-            </button>
             <a
-              class="ss-body ss-author-link"
+              class="ss-btn ss-btn-primary"
+              id="cws-support-link"
+              href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span>Report on Chrome Web Store</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+            </a>
+            <a
+              class="ss-btn ss-btn-secondary"
               id="repo-issues-link"
               href="https://github.com/simplyakm/saveshot/issues"
               target="_blank"
               rel="noopener noreferrer"
             >
-              View existing issues
+              <span>Raise on GitHub</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
             </a>
           </div>
         </div>
       </section>
 
       <footer class="welcome-footer ss-meta">
-        <span>SaveShot &middot; 100% local in Chrome</span>
+        <span id="welcome-footer-left">SaveShot · Privacy-first screenshot tool</span>
         <nav class="welcome-footer-links" aria-label="SaveShot links">
           <a
             href="https://simplyakm.github.io/saveshot/"

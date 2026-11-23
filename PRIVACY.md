@@ -2,7 +2,7 @@
 
 **Last updated:** November 22, 2026
 
-SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
+SaveShot is a privacy-first Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot operates with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
 
 ## What data SaveShot accesses
 
@@ -39,4 +39,4 @@ SaveShot's use and transfer of information received from Google APIs adheres to 
 
 ## Contact
 
-If you have questions about this policy or want to report a privacy issue, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).
+If you have questions about this policy or want to report a privacy issue, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).

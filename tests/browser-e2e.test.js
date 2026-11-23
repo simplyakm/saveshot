@@ -295,6 +295,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           hasHelpBtn: Boolean(document.getElementById('help-btn')),
           hasOpenDriveBtn: Boolean(document.getElementById('open-drive-btn')),
           hasBugFooterBtn: Boolean(document.getElementById('footer-bug-btn')),
+          signedOutBg: getComputedStyle(document.getElementById('signed-out-view')).backgroundColor,
         };
       })()`
     );
@@ -308,6 +309,11 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       popupCheck.signedOutCopy,
       'Never lose a shot, with easy download and link sharing. Privacy-first, no external servers or tracking.'
     );
+    assert.match(
+      popupCheck.signedOutBg,
+      /^rgba\(26,\s*115,\s*232,/,
+      'Popup signed-out card must use soft blue tint background'
+    );
     assert.equal(popupCheck.setupBannerVisible, expectedNeedsSetup);
     assert.equal(popupCheck.settingsBtnVisible, true, 'Settings gear must be accessible when signed out');
     assert.equal(popupCheck.openDriveHidden, true);
@@ -320,7 +326,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(popupCheck.hasOpenDriveBtn, true);
     assert.equal(popupCheck.hasBugFooterBtn, true);
 
-    // Verify Welcome / Help page opened automatically on extension install, binds both shortcuts, and shows 4 steps
+    // Verify Welcome / Help page opened automatically on extension install, binds both shortcuts, and shows Pin nudge + 7 FAQs + W1 support
     const { targetInfos: postInstallTargets } = await cdp.send('Target.getTargets');
     const welcomeTarget = postInstallTargets.find(
       (t) => t.type === 'page' && t.url.endsWith('/pages/welcome.html')
@@ -330,30 +336,148 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       targetId: welcomeTarget.targetId,
       flatten: true,
     });
-    await new Promise((r) => setTimeout(r, 250));
+    for (let i = 0; i < 25; i += 1) {
+      const welcomeSettled = await evalIn(
+        welcomeSession,
+        `document.getElementById('account-heading')?.textContent?.trim() !== 'Checking Google account...'`
+      );
+      if (welcomeSettled) break;
+      await new Promise((r) => setTimeout(r, 80));
+    }
     const welcomeCheck = await evalIn(
       welcomeSession,
       `(() => ({
         title: document.querySelector('h1')?.textContent,
         subtitle: document.querySelector('.hero .subtitle')?.textContent?.trim() || '',
+        pinNudgeVisible: !document.getElementById('pin-nudge-card')?.hidden,
+        pinDoneHidden: Boolean(document.getElementById('pin-done-card')?.hidden),
+        statusUnconnected: document.getElementById('status-card')?.classList.contains('unconnected'),
+        statusBg: getComputedStyle(document.getElementById('status-card')).backgroundColor,
+        accountHeading: document.getElementById('account-heading')?.textContent?.trim() || '',
         stepTitles: Array.from(document.querySelectorAll('.step-card h3'), (el) => el.textContent.trim()),
         shortcutRegionText: document.getElementById('shortcut-region')?.textContent?.trim() || '',
         shortcutVisibleText: document.getElementById('shortcut-visible')?.textContent?.trim() || '',
         unsetHintHidden: document.getElementById('shortcut-unset-hint')?.hidden,
+        faqCount: document.querySelectorAll('#faq-list .faq-item').length,
         hasFeedbackSection: Boolean(document.getElementById('feedback')),
-        diagText: document.getElementById('diag-preview')?.textContent || '',
+        versionStripText: document.getElementById('version-info-text')?.textContent?.trim() || '',
+        cwsHref: document.getElementById('cws-support-link')?.href || '',
+        ghIssuesHref: document.getElementById('repo-issues-link')?.href || '',
+        footerLeft: document.getElementById('welcome-footer-left')?.textContent?.trim() || '',
+        footerLinksCount: document.querySelectorAll('.welcome-footer-links a').length,
       }))()`
     );
     assert.equal(welcomeCheck.title, 'SaveShot');
     assert.match(welcomeCheck.subtitle, /download locally/i);
     assert.match(welcomeCheck.subtitle, /no external servers or tracking/i);
+    assert.equal(welcomeCheck.pinNudgeVisible, true, 'Fresh unpinned install must show Pin SaveShot card');
+    assert.equal(welcomeCheck.pinDoneHidden, true, 'Pin celebration card must be hidden while unpinned');
+    assert.equal(welcomeCheck.statusUnconnected, true, 'Signed-out Welcome status card must have .unconnected');
+    assert.match(
+      welcomeCheck.statusBg,
+      /^rgba\(26,\s*115,\s*232,/,
+      'Welcome signed-out status card must use soft blue tint background'
+    );
+    assert.equal(welcomeCheck.accountHeading, 'Autosave to your Google Drive');
     assert.equal(welcomeCheck.stepTitles.length, 4, 'Welcome How it works must show all 4 steps including Editing');
     assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or download'));
     assert.equal(welcomeCheck.shortcutRegionText, 'Alt + Shift + S');
     assert.equal(welcomeCheck.shortcutVisibleText, 'Alt + Shift + V');
     assert.equal(welcomeCheck.unsetHintHidden, true, 'Both default shortcuts must bind cleanly on fresh install');
+    assert.equal(welcomeCheck.faqCount, 7, 'Welcome Good to know must show all 7 synced FAQs');
     assert.equal(welcomeCheck.hasFeedbackSection, true);
-    assert.match(welcomeCheck.diagText, /SaveShot version:/);
+    assert.match(
+      welcomeCheck.versionStripText,
+      /^SaveShot v1\.1\.1 \u00b7 Chrome .* \u00b7 Last error: None$/
+    );
+    assert.equal(
+      welcomeCheck.cwsHref,
+      'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support'
+    );
+    assert.equal(welcomeCheck.ghIssuesHref, 'https://github.com/simplyakm/saveshot/issues');
+    assert.equal(welcomeCheck.footerLeft, 'SaveShot \u00b7 Privacy-first screenshot tool');
+    assert.equal(welcomeCheck.footerLinksCount, 5, 'Welcome footer must stay decluttered with 5 right-side links');
+
+    // Verify live Pin-to-Chrome celebration when user pins while welcome.html is open, plus Copy version info button
+    const livePinAndCopyCheck = await evalIn(
+      welcomeSession,
+      `(async () => {
+        let copiedText = '';
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: async (t) => {
+              copiedText = t;
+            },
+          },
+        });
+        document.getElementById('copy-version-btn').click();
+        await new Promise((r) => setTimeout(r, 30));
+        const btnLabelAfterCopy = document.getElementById('copy-version-btn').textContent.trim();
+
+        const origGetUserSettings = chrome.action.getUserSettings.bind(chrome.action);
+        chrome.action.getUserSettings = async () => ({ isOnToolbar: true });
+        window.dispatchEvent(new Event('focus'));
+        await new Promise((r) => setTimeout(r, 40));
+        const pinNudgeHiddenAfterPin = document.getElementById('pin-nudge-card').hidden;
+        const pinDoneVisibleAfterPin = !document.getElementById('pin-done-card').hidden;
+        const pinDoneText = document.getElementById('pin-done-card').textContent.replace(/\\s+/g, ' ').trim();
+        chrome.action.getUserSettings = origGetUserSettings;
+
+        return {
+          copiedText,
+          btnLabelAfterCopy,
+          pinNudgeHiddenAfterPin,
+          pinDoneVisibleAfterPin,
+          pinDoneText,
+        };
+      })()`
+    );
+    assert.equal(livePinAndCopyCheck.btnLabelAfterCopy, 'Copied!');
+    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.1\.1 \u00b7 Chrome .* \u00b7 Last error: None$/);
+    assert.equal(livePinAndCopyCheck.pinNudgeHiddenAfterPin, true, 'Pin nudge must hide once pinned');
+    assert.equal(livePinAndCopyCheck.pinDoneVisibleAfterPin, true, 'Pin celebration must appear when pinned live');
+    assert.match(livePinAndCopyCheck.pinDoneText, /Pinned to your Chrome toolbar!/);
+
+    // Verify opening Help later when ALREADY pinned hides both pin cards, and ?error= populates version strip
+    const { targetId: pinnedHelpTargetId } = await cdp.send('Target.createTarget', {
+      url: 'about:blank',
+      background: true,
+    });
+    const { sessionId: pinnedHelpSession } = await cdp.send('Target.attachToTarget', {
+      targetId: pinnedHelpTargetId,
+      flatten: true,
+    });
+    await cdp.send('Page.enable', {}, pinnedHelpSession);
+    await cdp.send(
+      'Page.addScriptToEvaluateOnNewDocument',
+      {
+        source: `
+          if (chrome?.action) {
+            chrome.action.getUserSettings = async () => ({ isOnToolbar: true });
+          }
+        `,
+      },
+      pinnedHelpSession
+    );
+    await cdp.send(
+      'Page.navigate',
+      { url: `chrome-extension://${extId}/pages/welcome.html?error=DRIVE_QUOTA_EXCEEDED#feedback` },
+      pinnedHelpSession
+    );
+    await new Promise((r) => setTimeout(r, 250));
+    const alreadyPinnedAudit = await evalIn(
+      pinnedHelpSession,
+      `(() => ({
+        pinNudgeHidden: document.getElementById('pin-nudge-card').hidden,
+        pinDoneHidden: document.getElementById('pin-done-card').hidden,
+        versionText: document.getElementById('version-info-text').textContent.trim(),
+      }))()`
+    );
+    assert.equal(alreadyPinnedAudit.pinNudgeHidden, true, 'Pin nudge must stay hidden when already pinned');
+    assert.equal(alreadyPinnedAudit.pinDoneHidden, true, 'Pin celebration must not show when already pinned before opening');
+    assert.match(alreadyPinnedAudit.versionText, /Last error: DRIVE_QUOTA_EXCEEDED$/);
+    await cdp.send('Target.closeTarget', { targetId: pinnedHelpTargetId });
 
     // Get test tabId & windowId so we always capture the active calibration tab
     const testTabInfo = await evalIn(
@@ -589,11 +713,14 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       'Page Escape listener must not fire'
     );
 
-    // Re-open overlay and drag directly across #underlying-btn -> verify button is NOT clicked!
-    await evalIn(
-      swSession,
-      `chrome.tabs.sendMessage(${testTabInfo.tabId}, { type: 'START_REGION_SELECT' })`
+    // Re-open overlay via START_REGION_CAPTURE and drag directly across #underlying-btn -> verify button is NOT clicked!
+    const startHostileDrag = await evalIn(
+      extPageSession,
+      `new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'START_REGION_CAPTURE', tabId: ${testTabInfo.tabId} }, resolve);
+      })`
     );
+    assert.equal(startHostileDrag.ok, true);
     await cdp.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x: 110, y: 110, button: 'left', clickCount: 1 },
@@ -1414,12 +1541,27 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(themeSyncAudit.popupThemeAttr, 'dark');
     assert.equal(themeSyncAudit.popupBg, 'rgb(28, 29, 32)', 'Dark mode must apply neutral graphite #1c1d20');
 
-    const [editorThemeAfter, welcomeThemeAfter] = await Promise.all([
+    const [editorThemeAfter, welcomeSignedInState] = await Promise.all([
       evalIn(editorSession, `document.documentElement.dataset.theme`),
-      evalIn(welcomeSession, `document.documentElement.dataset.theme`),
+      evalIn(
+        welcomeSession,
+        `(() => ({
+          theme: document.documentElement.dataset.theme,
+          unconnected: document.getElementById('status-card').classList.contains('unconnected'),
+          dotConnected: document.getElementById('account-dot').classList.contains('connected'),
+          heading: document.getElementById('account-heading').textContent.trim(),
+        }))()`
+      ),
     ]);
     assert.equal(editorThemeAfter, 'dark', 'Open Editor tab must live-sync to dark theme');
-    assert.equal(welcomeThemeAfter, 'dark', 'Open Welcome tab must live-sync to dark theme');
+    assert.equal(welcomeSignedInState.theme, 'dark', 'Open Welcome tab must live-sync to dark theme');
+    assert.equal(
+      welcomeSignedInState.unconnected,
+      false,
+      'Signed-in Welcome status card must drop .unconnected soft blue tint'
+    );
+    assert.equal(welcomeSignedInState.dotConnected, true, 'Signed-in Welcome status dot must be green');
+    assert.equal(welcomeSignedInState.heading, 'Connected as e2e@example.com');
 
     // Reset Appearance back to Auto
     await evalIn(
@@ -1505,7 +1647,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               );
               chrome.runtime.sendMessage({ type: 'SIGN_OUT' }, (res) => {
                 chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_FROM_OVERLAY' }, (unauthCap) => {
-                  resolve({ buttons, signOutAttempt: res, unauthCap });
+                  chrome.runtime.sendMessage(
+                    {
+                      type: 'REGION_SELECTED',
+                      selection: {
+                        x: 10,
+                        y: 10,
+                        width: 50,
+                        height: 50,
+                        viewportWidth: 800,
+                        viewportHeight: 600,
+                        devicePixelRatio: 1,
+                      },
+                    },
+                    (unauthRegion) => {
+                      resolve({ buttons, signOutAttempt: res, unauthCap, unauthRegion });
+                    }
+                  );
                 });
               });
             }),
@@ -1525,6 +1683,12 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       realSenderSecurityCheck.unauthCap.code,
       'NO_ACTIVE_REGION_SESSION',
       'Real Chromium content-script world must not trigger CAPTURE_VISIBLE_FROM_OVERLAY without an active region session'
+    );
+    assert.equal(realSenderSecurityCheck.unauthRegion.ok, false);
+    assert.equal(
+      realSenderSecurityCheck.unauthRegion.code,
+      'NO_ACTIVE_REGION_SESSION',
+      'Real Chromium content-script world must not trigger REGION_SELECTED without an active region session'
     );
 
     // Verify a brand-new Editor tab also opened automatically right after upload with "Saved to Google Drive"
@@ -1719,19 +1883,27 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     );
     assert.equal(e2eRevoked, true, 'Signing out in Chromium must revoke OAuth token at oauth2.googleapis.com/revoke');
 
-    let welcomeSignedOutHeading = '';
+    let welcomeSignedOutState = { heading: '', unconnected: false };
     for (let i = 0; i < 20; i += 1) {
-      welcomeSignedOutHeading = await evalIn(
+      welcomeSignedOutState = await evalIn(
         welcomeSession,
-        `document.getElementById('account-heading')?.textContent?.trim() || ''`
+        `(() => ({
+          heading: document.getElementById('account-heading')?.textContent?.trim() || '',
+          unconnected: Boolean(document.getElementById('status-card')?.classList.contains('unconnected')),
+        }))()`
       );
-      if (welcomeSignedOutHeading === 'Google Drive not connected yet') break;
+      if (welcomeSignedOutState.heading === 'Autosave to your Google Drive') break;
       await new Promise((r) => setTimeout(r, 60));
     }
     assert.equal(
-      welcomeSignedOutHeading,
-      'Google Drive not connected yet',
+      welcomeSignedOutState.heading,
+      'Autosave to your Google Drive',
       'Open Welcome tab must live-sync to disconnected state after popup Sign out'
+    );
+    assert.equal(
+      welcomeSignedOutState.unconnected,
+      true,
+      'Open Welcome tab must restore .unconnected soft blue tint after Sign out'
     );
 
     // 5F. Signed-Out Editor Live Sync, Logged-Out Unsaved Warning Suppression, Help Button, & Local Capture -> Save to Google Drive Upgrade

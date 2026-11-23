@@ -1,5 +1,5 @@
 /**
- * Centralized source of truth for SaveShot product copy, URLs, features,
+ * Centralized source of truth for SaveShot product copy, URLs, features, FAQs,
  * Privacy Policy, Terms of Service, README, GitHub Pages site, and Store SEO.
  *
  * After editing this file, run:
@@ -13,18 +13,20 @@ export const SITE_COPY = {
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation
   shortDescription:
-    'Capture and edit screenshots to Google Drive or download locally. 100% local in Chrome, no external servers or tracking.',
+    'Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking.',
 
   tagline: 'Private screenshots straight to Google Drive or your computer.',
 
   overviewLead:
-    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs locally in Chrome with no external servers, no tracking, and no external dependencies.',
+    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.',
 
   urls: {
     chromeWebStore:
       'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf',
     chromeWebStoreReviews:
       'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/reviews',
+    chromeWebStoreSupport:
+      'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support',
     homepage: 'https://simplyakm.github.io/saveshot/',
     thanksHtml: 'https://simplyakm.github.io/saveshot/thanks.html',
     privacyHtml: 'https://simplyakm.github.io/saveshot/privacy.html',
@@ -44,42 +46,41 @@ export const SITE_COPY = {
 
   defaultFolderName: 'Chrome_SaveShot_ScreenShots',
 
+  // Internal manifest.json suggested_key defaults only; never hardcoded in static user copy
   shortcuts: {
     region: {
       key: 'Alt+Shift+S',
-      display: 'Alt + Shift + S',
       label: 'Select area',
-      manifestDescription: 'Select a screen area and save to Google Drive',
+      manifestDescription: 'Select a screen area with SaveShot',
     },
     visible: {
       key: 'Alt+Shift+V',
-      display: 'Alt + Shift + V',
       label: 'Visible tab',
-      manifestDescription: 'Capture visible tab and save to Google Drive',
+      manifestDescription: 'Capture visible tab with SaveShot',
     },
   },
 
   // Shared feature cards / bullets used across README.md, docs/index.html, and Store SEO
   features: [
     {
-      title: 'Select area (`Alt+Shift+S`)',
+      title: 'Select area or full tab',
       webTitle: 'Select Area or Full Tab',
       summary:
-        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press `Enter` for the full tab, or press `Alt+Shift+V` to capture the visible tab in one click, even before signing in.',
+        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press `Enter` for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.',
       readmeBullet:
-        '**Select area (`Alt+Shift+S`)**: Drag a box over any part of a page to crop just that section, or press `Enter` to capture the full tab.',
+        '**Select area or full tab**: Drag a box over any part of a page to crop just that section, press `Enter` to capture the full tab, or capture the visible tab in one click.',
     },
     {
-      title: 'Visible tab (`Alt+Shift+V`)',
+      title: 'Annotate, redact & download',
       webTitle: 'Annotate, Redact & Download',
       summary:
         'Opens automatically in a new tab so you can add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Download** a PNG to your computer with no sign-in required, or save straight to Google Drive.',
       readmeBullet:
-        '**Visible tab (`Alt+Shift+V`)**: Captures what is currently visible in the active tab.',
+        '**Customizable keyboard shortcuts**: Trigger area selection or visible-tab capture from the keyboard, and customize your preferred keys anytime at `chrome://extensions/shortcuts`.',
     },
     {
-      title: '100% Local in Chrome',
-      webTitle: '100% Local in Chrome',
+      title: 'No External Servers',
+      webTitle: 'No External Servers',
       summary:
         'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
         'Chrome_SaveShot_ScreenShots` and copy the share link automatically. SaveShot has no private servers, analytics, or ads.',
@@ -99,20 +100,69 @@ export const SITE_COPY = {
   readmeExtraBullets: [
     '**Recent history**: Keeps your last 8 Google Drive screenshots in the popup for quick access, and clears them automatically when you sign out.',
     '**Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.',
-    '**Strict privacy & narrow permissions**: Uses only `activeTab` and Google\'s narrow `drive.file` scope. SaveShot runs 100% locally in Chrome, sends zero requests to any private or third-party server, and cannot access any other files in your Google Drive.',
+    '**Strict privacy & narrow permissions**: Uses only `activeTab` and Google\'s narrow `drive.file` scope. SaveShot runs in Chrome with zero requests to any private or third-party server, and cannot access any other files in your Google Drive.',
   ],
 
+  // Shared 7 FAQs rendered across both docs/index.html and pages/welcome.html
+  faqs: [
+    {
+      question: 'Do I need to sign in to capture and download screenshots?',
+      answer:
+        'No. You can capture an area or visible tab, annotate or redact it in the editor, and click **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
+    },
+    {
+      question: 'Does SaveShot use any external servers or track my data?',
+      answer:
+        'No. SaveShot runs in Chrome and uploads directly to Google Drive\'s official API. There are no SaveShot servers, no analytics, and no tracking. With Google\'s narrow `drive.file` scope, it cannot see any other files in your Drive.',
+    },
+    {
+      question: 'Can I redact sensitive details before uploading to Google Drive?',
+      answer:
+        'Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on **Open editor before uploading** in Settings (or capture while signed out).',
+    },
+    {
+      question: 'How do keyboard shortcuts work?',
+      answer:
+        'SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts`.',
+    },
+    {
+      question: 'Why are capture buttons disabled on some tabs?',
+      answer:
+        'Chrome blocks all extensions from running on internal pages like `chrome://settings` and on the Chrome Web Store. For local PDFs or `file://` pages, turn on **Allow access to file URLs** in SaveShot\'s details at `chrome://extensions`.',
+    },
+    {
+      question: 'What happens if my Google Drive is full or offline?',
+      answer:
+        'If an upload fails after taking a screenshot, SaveShot shows a **Save PNG locally** button so you can save the image to your computer without losing it.',
+    },
+    {
+      question: 'How does Incognito mode work?',
+      answer:
+        'If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.',
+    },
+  ],
+
+  // Shared Support / Bug Report & Feature Request card
+  supportCard: {
+    sectionTitle: 'Report a bug or request a feature',
+    heading: 'Found a bug or want a feature?',
+    body:
+      'Report an issue or suggest a feature on the Chrome Web Store Support page, or open an issue on GitHub.',
+    cwsCta: 'Report on Chrome Web Store',
+    githubCta: 'Raise on GitHub',
+  },
+
   readmeFeedbackParagraph:
-    'Click the **?** icon or **Report bug** at the bottom of the popup to open the built-in feedback form for bug reports and feature requests. It lets you open a pre-filled GitHub issue with basic version and error info, or copy the report as plain text.',
+    'Click **Help** or **Report bug** inside SaveShot to copy your version info in one click and report an issue or request a feature on the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
 
   readmePrivacySummary:
-    'SaveShot runs 100% locally in your browser. When you connect Google Drive, screenshots upload directly from Chrome to Google\'s official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates.',
+    'SaveShot runs in your browser with no external or middleman servers. When you connect Google Drive, screenshots upload directly from Chrome to Google\'s official Drive API (`https://www.googleapis.com`) under your own account. There are no SaveShot servers, no analytics, and no tracking, and SaveShot can only access the screenshots and folder it creates.',
 
   // Canonical Privacy Policy (generates both PRIVACY.md and docs/privacy.html identically)
   privacy: {
     heading: 'Privacy Policy for SaveShot',
     intro:
-      'SaveShot is a Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot runs 100% locally in Chrome with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.',
+      'SaveShot is a privacy-first Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot operates with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.',
     sections: [
       {
         heading: 'What data SaveShot accesses',
@@ -158,7 +208,7 @@ export const SITE_COPY = {
       {
         heading: 'Contact',
         paragraphs: [
-          'If you have questions about this policy or want to report a privacy issue, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).',
+          'If you have questions about this policy or want to report a privacy issue, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
         ],
       },
     ],
@@ -173,7 +223,7 @@ export const SITE_COPY = {
       {
         heading: '1. What SaveShot Does',
         paragraphs: [
-          'SaveShot is a free browser extension that runs locally in Chrome to capture screenshots, optionally annotate or redact them, download them to your computer, and upload them directly from your browser to your own Google Drive account using Google\'s official API. SaveShot does not operate external servers or user accounts.',
+          'SaveShot is a free, privacy-first browser extension that runs in Chrome to capture screenshots, optionally annotate or redact them, download them to your computer, and upload them directly from your browser to your own Google Drive account using Google\'s official API. SaveShot does not operate external servers or user accounts.',
         ],
       },
       {
@@ -193,7 +243,7 @@ export const SITE_COPY = {
       {
         heading: '4. Privacy',
         paragraphs: [
-          'Please review our [Privacy Policy]({{PRIVACY_LINK}}), which explains how SaveShot handles data locally in Chrome and interacts with Google Drive under the narrow `drive.file` permission.',
+          'Please review our [Privacy Policy]({{PRIVACY_LINK}}), which explains how SaveShot handles data in Chrome and interacts with Google Drive under the narrow `drive.file` permission.',
         ],
       },
       {
@@ -211,23 +261,23 @@ export const SITE_COPY = {
       {
         heading: '7. Changes & Contact',
         paragraphs: [
-          'We may update these Terms from time to time by updating the date at the top of this page. For questions or bug reports, use the built-in **Report bug** form inside SaveShot or reach out via [@_simplyakm](https://x.com/_simplyakm).',
+          'We may update these Terms from time to time by updating the date at the top of this page. For questions, bug reports, or feature requests, visit the [Chrome Web Store Support page](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support) or open an issue on [GitHub Issues](https://github.com/simplyakm/saveshot/issues).',
         ],
       },
     ],
   },
 
-  footerLeft: 'SaveShot · 100% local in Chrome',
+  footerLeft: 'SaveShot \u00b7 Privacy-first screenshot tool',
 
   heroThanksPrompt: 'Already using it?',
   heroThanksLinkLabel: 'Say thanks',
 
-  // Canonical Say Thanks / Support page (generates docs/thanks.html)
+  // Canonical Say Thanks page (generates docs/thanks.html)
   thanks: {
     pageTitle: 'Say Thanks - SaveShot',
     heading: 'Glad SaveShot saves you time.',
     lead:
-      'SaveShot is free, ad-free, and runs 100% locally in Chrome with no subscriptions or tracking. If it helps in your daily work, here are two simple ways to support it.',
+      'SaveShot is free, ad-free, and privacy-first with no external servers, subscriptions, or tracking. If it helps in your daily work, here are two simple ways to support it.',
     reviewCard: {
       heading: 'Leave a quick review',
       body:

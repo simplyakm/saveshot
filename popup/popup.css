@@ -58,11 +58,11 @@ body {
   border-radius: var(--ss-radius-xs);
 }
 
-/* Signed Out Connect Google Drive Card */
+/* Signed Out Connect Google Drive Card (Soft Blue Tint) */
 .connect-card {
   border-radius: var(--ss-radius-card);
-  background: var(--ss-surface);
-  border: 1px solid var(--ss-border);
+  background: var(--ss-connect-bg);
+  border: 1px solid var(--ss-connect-border);
   padding: 12px;
   display: flex;
   flex-direction: column;

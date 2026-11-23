@@ -7,15 +7,17 @@
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>SaveShot: Screenshot to Google Drive</title>
-    <meta name="description" content="Capture and edit screenshots to Google Drive or download locally. 100% local in Chrome, no external servers or tracking." />
+    <meta name="description" content="Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking." />
     <style>
       :root {
         --bg: #f5f6f8;
         --card: #ffffff;
+        --surface: #f5f6f8;
         --text: #141518;
         --sub: #525866;
         --muted: #767c89;
         --border: rgba(15, 18, 24, 0.09);
+        --border-strong: rgba(15, 18, 24, 0.15);
         --accent: #1a73e8;
         --accent-hover: #155fc4;
         --accent-soft: rgba(26, 115, 232, 0.09);
@@ -24,10 +26,12 @@
         :root {
           --bg: #131416;
           --card: #1c1d20;
+          --surface: #25262b;
           --text: #f3f4f6;
           --sub: #a6abb6;
           --muted: #7c828f;
           --border: rgba(255, 255, 255, 0.09);
+          --border-strong: rgba(255, 255, 255, 0.16);
           --accent: #5b9df9;
           --accent-hover: #428bf7;
           --accent-soft: rgba(91, 157, 249, 0.14);
@@ -90,7 +94,7 @@
         margin: 0 auto;
         display: flex;
         flex-direction: column;
-        gap: 24px;
+        gap: 22px;
       }
       .hero {
         background: var(--card);
@@ -147,9 +151,18 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        gap: 6px;
+        border: 1px solid transparent;
       }
       .btn:hover {
         text-decoration: none;
+      }
+      .btn-sm {
+        height: 34px;
+        padding: 0 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 500;
       }
       .btn-primary {
         background: var(--accent);
@@ -162,6 +175,14 @@
       }
       .btn-primary:hover {
         background: var(--accent-hover);
+      }
+      .btn-secondary {
+        background: var(--card);
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .btn-secondary:hover {
+        background: var(--surface);
       }
       .grid {
         display: grid;
@@ -191,6 +212,94 @@
         color: var(--sub);
         line-height: 1.55;
       }
+      .faq-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 15px;
+        padding: 24px 26px;
+      }
+      .faq-kicker {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .faq-card details {
+        border-top: 1px solid var(--border);
+        padding: 13px 0;
+      }
+      .faq-card details:first-of-type {
+        border-top: none;
+        padding-top: 4px;
+      }
+      .faq-card details:last-of-type {
+        padding-bottom: 2px;
+      }
+      .faq-card summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        user-select: none;
+      }
+      .faq-card summary::-webkit-details-marker {
+        display: none;
+      }
+      .faq-chevron {
+        width: 16px;
+        height: 16px;
+        color: var(--muted);
+        flex-shrink: 0;
+        transition: transform 150ms ease;
+      }
+      .faq-card details[open] .faq-chevron {
+        transform: rotate(180deg);
+      }
+      .faq-answer {
+        margin-top: 7px;
+        font-size: 13.5px;
+        line-height: 1.58;
+        color: var(--sub);
+        padding-right: 24px;
+      }
+      .support-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 15px;
+        padding: 22px 26px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+      }
+      .support-copy {
+        flex: 1;
+        min-width: 240px;
+      }
+      .support-copy h2 {
+        font-size: 15.5px;
+        font-weight: 650;
+        margin-bottom: 4px;
+      }
+      .support-copy p {
+        font-size: 13.5px;
+        color: var(--sub);
+        line-height: 1.55;
+      }
+      .support-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
     </style>
   </head>
   <body>
@@ -203,7 +312,7 @@
             <p class="lead">Private screenshots straight to Google Drive or your computer.</p>
           </div>
         </div>
-        <p class="lead">SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs locally in Chrome with no external servers, no tracking, and no external dependencies.</p>
+        <p class="lead">SaveShot is a privacy-first, lightweight Chrome extension for capturing, annotating, redacting, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.</p>
         <div class="actions">
           <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf">Add to Chrome</a>
           <span class="hero-thanks">Already using it? <a href="thanks.html">Say thanks &rarr;</a></span>
@@ -213,14 +322,14 @@
       <section class="grid">
         <div class="card">
           <h2>Select Area or Full Tab</h2>
-          <p>Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press <code>Enter</code> for the full tab, or press <code>Alt+Shift+V</code> to capture the visible tab in one click, even before signing in.</p>
+          <p>Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, press <code>Enter</code> for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.</p>
         </div>
         <div class="card">
           <h2>Annotate, Redact &amp; Download</h2>
           <p>Opens automatically in a new tab so you can add arrows, boxes, circles, lines, freehand strokes, text, custom <code>#HEX</code> colors, or solid black pixel redactions, rotate or flip, rename, <strong>Download</strong> a PNG to your computer with no sign-in required, or save straight to Google Drive.</p>
         </div>
         <div class="card">
-          <h2>100% Local in Chrome</h2>
+          <h2>No External Servers</h2>
           <p>When connected, screenshots upload over HTTPS directly from your browser to Google's official Drive API (<code>https://www.googleapis.com</code>) into <code>Chrome_SaveShot_ScreenShots</code> and copy the share link automatically. SaveShot has no private servers, analytics, or ads.</p>
         </div>
         <div class="card">
@@ -229,11 +338,73 @@
         </div>
       </section>
 
+      <section class="faq-card" id="faq">
+        <h2 class="faq-kicker">Frequently asked questions</h2>
+        <details open>
+          <summary>
+            <span>Do I need to sign in to capture and download screenshots?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">No. You can capture an area or visible tab, annotate or redact it in the editor, and click <strong>Download</strong> with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.</p>
+        </details>
+        <details>
+          <summary>
+            <span>Does SaveShot use any external servers or track my data?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">No. SaveShot runs in Chrome and uploads directly to Google Drive's official API. There are no SaveShot servers, no analytics, and no tracking. With Google's narrow <code>drive.file</code> scope, it cannot see any other files in your Drive.</p>
+        </details>
+        <details>
+          <summary>
+            <span>Can I redact sensitive details before uploading to Google Drive?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on <strong>Open editor before uploading</strong> in Settings (or capture while signed out).</p>
+        </details>
+        <details>
+          <summary>
+            <span>How do keyboard shortcuts work?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">SaveShot supports customizable shortcuts for both <strong>Select area</strong> and <strong>Visible tab</strong>. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at <code>chrome://extensions/shortcuts</code>.</p>
+        </details>
+        <details>
+          <summary>
+            <span>Why are capture buttons disabled on some tabs?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">Chrome blocks all extensions from running on internal pages like <code>chrome://settings</code> and on the Chrome Web Store. For local PDFs or <code>file://</code> pages, turn on <strong>Allow access to file URLs</strong> in SaveShot's details at <code>chrome://extensions</code>.</p>
+        </details>
+        <details>
+          <summary>
+            <span>What happens if my Google Drive is full or offline?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">If an upload fails after taking a screenshot, SaveShot shows a <strong>Save PNG locally</strong> button so you can save the image to your computer without losing it.</p>
+        </details>
+        <details>
+          <summary>
+            <span>How does Incognito mode work?</span>
+            <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </summary>
+          <p class="faq-answer">If you turn on <strong>Allow in Incognito</strong> in <code>chrome://extensions</code>, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.</p>
+        </details>
+      </section>
+
+      <section class="support-card" id="support">
+        <div class="support-copy">
+          <h2>Found a bug or want a feature?</h2>
+          <p>Report an issue or suggest a feature on the Chrome Web Store Support page, or open an issue on GitHub.</p>
+        </div>
+        <div class="support-actions">
+          <a class="btn btn-sm btn-primary" href="https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support" target="_blank" rel="noopener noreferrer"><span>Report on Chrome Web Store</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>
+          <a class="btn btn-sm btn-secondary" href="https://github.com/simplyakm/saveshot/issues" target="_blank" rel="noopener noreferrer"><span>Raise on GitHub</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>
+        </div>
+      </section>
+
       <footer class="site-footer">
-        <span>SaveShot · 100% local in Chrome</span>
+        <span>SaveShot · Privacy-first screenshot tool</span>
         <nav class="site-footer-links" aria-label="SaveShot links">
-          <a href="index.html">Website</a>
-          <span aria-hidden="true">&middot;</span>
           <a href="thanks.html">Say thanks</a>
           <span aria-hidden="true">&middot;</span>
           <a href="privacy.html">Privacy</a>

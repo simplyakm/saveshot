@@ -1,7 +1,7 @@
 {
   "name": "saveshot",
   "version": "1.1.1",
-  "description": "Capture and edit screenshots to Google Drive or download locally. 100% local in Chrome, no external servers or tracking.",
+  "description": "Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking.",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
