@@ -4,7 +4,6 @@
   "short_name": "SaveShot",
   "version": "1.1.1",
   "incognito": "spanning",
-  "homepage_url": "https://github.com/simplyakm/saveshot",
   "description": "Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking.",
   "icons": {
     "16": "icons/icon16.png",

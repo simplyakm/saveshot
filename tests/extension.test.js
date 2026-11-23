@@ -119,7 +119,6 @@ function installChromeMock({
       lastError: null,
       getManifest: () => ({
         version: '1.1.1',
-        homepage_url: 'https://github.com/simplyakm/saveshot',
         oauth2: { client_id: clientId },
       }),
       getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
@@ -291,6 +290,11 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.incognito, 'spanning');
+  assert.equal(
+    manifest.homepage_url,
+    undefined,
+    'manifest.json must omit homepage_url so Chrome links to the Chrome Web Store listing'
+  );
   assert.equal(manifest.background.type, 'module');
   assert.ok(fs.existsSync(path.join(rootDir, manifest.background.service_worker)));
   assert.ok(fs.existsSync(path.join(rootDir, manifest.action.default_popup)));

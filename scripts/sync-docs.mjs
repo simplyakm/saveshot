@@ -972,6 +972,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   manifest.name = SITE_COPY.extensionTitle;
   manifest.short_name = SITE_COPY.brandName;
   manifest.version = SITE_COPY.version;
+  delete manifest.homepage_url;
   manifest.description = SITE_COPY.shortDescription;
   manifest.action.default_title = SITE_COPY.extensionTitle;
   manifest.commands['capture-region'].suggested_key.default = SITE_COPY.shortcuts.region.key;
