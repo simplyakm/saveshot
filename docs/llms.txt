@@ -19,7 +19,7 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlig
 
 ## Official Links
 
-- [Chrome Web Store Listing](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf): Install SaveShot (SaveShot: Screenshot to Google Drive, v1.1.2).
+- [Chrome Web Store Listing](https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf): Install SaveShot (SaveShot: Screenshot to Google Drive, v1.2.1).
 - [Homepage](https://simplyakm.github.io/saveshot/): Product overview and frequently asked questions.
 - [Privacy Policy](https://simplyakm.github.io/saveshot/privacy.html): Data handling and Google API Services User Data Policy Limited Use disclosure.
 - [Terms of Service](https://simplyakm.github.io/saveshot/terms.html): Terms of use and Apache License 2.0 details.

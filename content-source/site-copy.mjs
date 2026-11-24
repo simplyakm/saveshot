@@ -8,7 +8,7 @@
 export const SITE_COPY = {
   brandName: 'SaveShot',
   extensionTitle: 'SaveShot: Screenshot to Google Drive',
-  version: '1.1.2',
+  version: '1.2.1',
   lastUpdated: 'November 23, 2026',
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation

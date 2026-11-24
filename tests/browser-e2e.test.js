@@ -390,7 +390,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(welcomeCheck.hasFeedbackSection, true);
     assert.match(
       welcomeCheck.versionStripText,
-      /^SaveShot v1\.1\.2 \u00b7 Chrome .* \u00b7 Last error: None$/
+      /^SaveShot v1\.2\.1 \u00b7 Chrome .* \u00b7 Last error: None$/
     );
     assert.equal(
       welcomeCheck.cwsHref,
@@ -438,7 +438,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       })()`
     );
     assert.equal(livePinAndCopyCheck.btnLabelAfterCopy, 'Copied!');
-    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.1\.2 \u00b7 Chrome .* \u00b7 Last error: None$/);
+    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.2\.1 \u00b7 Chrome .* \u00b7 Last error: None$/);
     assert.equal(livePinAndCopyCheck.pinNudgeHiddenAfterPin, true, 'Pin nudge must hide once pinned');
     assert.equal(livePinAndCopyCheck.pinDoneVisibleAfterPin, true, 'Pin celebration must appear when pinned live');
     assert.match(livePinAndCopyCheck.pinDoneText, /Pinned to your Chrome toolbar!/);

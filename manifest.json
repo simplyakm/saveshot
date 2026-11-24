@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SaveShot: Screenshot to Google Drive",
   "short_name": "SaveShot",
-  "version": "1.1.2",
+  "version": "1.2.1",
   "incognito": "spanning",
   "description": "Capture and edit screenshots to Google Drive or download locally. Privacy-first, with no external servers or tracking.",
   "icons": {

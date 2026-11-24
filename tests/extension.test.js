@@ -124,7 +124,7 @@ function installChromeMock({
     runtime: {
       lastError: null,
       getManifest: () => ({
-        version: '1.1.2',
+        version: '1.2.1',
         oauth2: { client_id: clientId },
       }),
       getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
@@ -883,7 +883,7 @@ test('feedback helper builds compact version info lines across OS/UA variants an
       'Linux'
     );
     const fallbackEnv = getEnvironmentSummary('CustomBrowser/1.0');
-    assert.equal(fallbackEnv.extensionVersion, '1.1.2');
+    assert.equal(fallbackEnv.extensionVersion, '1.2.1');
     assert.equal(fallbackEnv.browser, 'Chromium');
     assert.equal(fallbackEnv.os, 'Unknown OS');
   } finally {
@@ -2665,7 +2665,7 @@ test('all repository source, UI, and documentation files contain no em dashes or
 
   const { buildCwsZipBuffer, findLatestCwsZipName } = await import('../scripts/pack-cws.mjs');
   const { version, buffer } = buildCwsZipBuffer();
-  assert.equal(version, '1.1.2');
+  assert.equal(version, '1.2.1');
   const latestZipName = findLatestCwsZipName(rootDir, version);
   assert.ok(latestZipName, 'Expected epoch-stamped CWS zip in store-assets/');
   const zipOnDisk = fs.readFileSync(
@@ -3837,7 +3837,7 @@ test('contextMenus lifecycle: single top-level Take Screenshot item, concurrency
     resetInMemoryWorkerStateForTests();
     registerServiceWorkerListeners();
 
-    // 1. onInstalled ('update' from 1.1.1 -> 1.1.2) registers exactly 1 top-level item (no submenu, no welcome tab)
+    // 1. onInstalled ('update' from 1.1.1 -> 1.2.1) registers exactly 1 top-level item (no submenu, no welcome tab)
     for (const fn of mock.listeners.onInstalled) {
       await fn({ reason: 'update', previousVersion: '1.1.1' });
     }

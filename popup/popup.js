@@ -516,7 +516,7 @@ function showView(viewName, { signedIn = false, needsSetup = false } = {}) {
 }
 
 function initStaticMetadata() {
-  const version = chrome?.runtime?.getManifest?.()?.version || '1.1.2';
+  const version = chrome?.runtime?.getManifest?.()?.version || '1.2.1';
   els.popupVersion.textContent = `v${version}`;
 
   if (chrome?.commands?.getAll) {
