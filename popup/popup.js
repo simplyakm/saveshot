@@ -542,7 +542,14 @@ function initStaticMetadata() {
   }
 }
 
+let stateLoadSeq = 0;
+let stateLoadInFlight = false;
+let pendingRecentUploads = null;
+
 async function loadState({ showSpinner = true } = {}) {
+  const seq = ++stateLoadSeq;
+  stateLoadInFlight = true;
+  pendingRecentUploads = null;
   if (showSpinner) {
     showView('loading');
   }
@@ -552,6 +559,7 @@ async function loadState({ showSpinner = true } = {}) {
       type: 'GET_STATE',
       tabId: currentState.activeTabId,
     });
+    if (seq !== stateLoadSeq) return;
     if (!res.ok) throw new Error(res.error);
 
     currentState.capturable = res.capturable || {
@@ -568,6 +576,7 @@ async function loadState({ showSpinner = true } = {}) {
 
     if (!res.session?.signedIn) {
       currentState.signedIn = false;
+      pendingRecentUploads = null;
       renderRecentUploads([]);
       els.authError.hidden = true;
       updateCaptureAvailability();
@@ -580,18 +589,26 @@ async function loadState({ showSpinner = true } = {}) {
     }
 
     currentState.signedIn = true;
+    const recentToRender = pendingRecentUploads !== null ? pendingRecentUploads : res.recentUploads;
+    pendingRecentUploads = null;
     renderProfile(res.session.profile);
-    renderRecentUploads(res.recentUploads);
+    renderRecentUploads(recentToRender);
     updateCaptureAvailability();
     hideStatus();
     showView('main', { signedIn: true, needsSetup: false });
   } catch (err) {
+    if (seq !== stateLoadSeq) return;
     currentState.signedIn = false;
+    pendingRecentUploads = null;
     els.authError.textContent = err.message || 'Could not load SaveShot.';
     els.authError.className = 'ss-alert error';
     els.authError.hidden = false;
     updateCaptureAvailability();
     showView('main', { signedIn: false, needsSetup: false });
+  } finally {
+    if (seq === stateLoadSeq) {
+      stateLoadInFlight = false;
+    }
   }
 }
 
@@ -814,13 +831,22 @@ if (chrome?.storage?.onChanged?.addListener) {
     if (areaName !== 'local' || authActionInFlight) return;
     if (changes.signedOut || changes.userProfile) {
       loadState({ showSpinner: false });
+      if (changes.recentUploads) {
+        pendingRecentUploads = changes.recentUploads.newValue || [];
+      }
       return;
     }
     if (changes.settings?.newValue) {
       renderSettings(changes.settings.newValue);
     }
-    if (changes.recentUploads && currentState.signedIn) {
-      renderRecentUploads(changes.recentUploads.newValue || []);
+    if (changes.recentUploads) {
+      const nextUploads = changes.recentUploads.newValue || [];
+      if (stateLoadInFlight) {
+        pendingRecentUploads = nextUploads;
+      }
+      if (currentState.signedIn) {
+        renderRecentUploads(nextUploads);
+      }
     }
   });
 }

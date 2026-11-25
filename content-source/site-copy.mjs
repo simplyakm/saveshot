@@ -27,11 +27,10 @@ export const SITE_COPY = {
       'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/reviews',
     chromeWebStoreSupport:
       'https://chromewebstore.google.com/detail/eilmbilnlihhddjdmdpppalfnbnieppf/support',
-    homepage: 'https://simplyakm.github.io/saveshot/',
-    thanksHtml: 'https://simplyakm.github.io/saveshot/thanks.html',
-    privacyHtml: 'https://simplyakm.github.io/saveshot/privacy.html',
-    termsHtml: 'https://simplyakm.github.io/saveshot/terms.html',
-    topmateThanks: 'https://topmate.io/simplyakm/2420618',
+    homepage: 'https://saveshot.simplyakm.com/',
+    thanksHtml: 'https://saveshot.simplyakm.com/thanks.html',
+    privacyHtml: 'https://saveshot.simplyakm.com/privacy.html',
+    termsHtml: 'https://saveshot.simplyakm.com/terms.html',
     authorUrl: 'https://x.com/_simplyakm',
     authorHandle: '@_simplyakm',
     googleConnections: 'https://myaccount.google.com/connections',
@@ -273,18 +272,12 @@ export const SITE_COPY = {
     pageTitle: 'Say Thanks - SaveShot',
     heading: 'Glad SaveShot saves you time.',
     lead:
-      'SaveShot is free, ad-free, and privacy-first with no external servers, subscriptions, or tracking. If it helps in your daily work, here are two simple ways to support it.',
+      'SaveShot is free, ad-free, and privacy-first with no external servers, subscriptions, or tracking. If it helps in your daily work, a quick review on the Chrome Web Store goes a long way.',
     reviewCard: {
       heading: 'Leave a quick review',
       body:
         'Honest ratings and reviews on the Chrome Web Store are the biggest help for a small independent extension to get discovered by more people.',
       cta: 'Rate on Chrome Web Store',
-    },
-    thankYouCard: {
-      heading: 'Send a thank-you',
-      body:
-        'Never expected, always appreciated. If you want to back independent, privacy-first tools, you can send a small thank-you (and a note on how you use SaveShot).',
-      cta: 'Send a thank-you',
     },
   },
 };

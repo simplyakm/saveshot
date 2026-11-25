@@ -157,9 +157,15 @@ async function launchChromiumWithExtension(initialUrl) {
       try {
         cdp.close();
       } catch {}
-      proc.kill('SIGKILL');
-      fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      fs.rmSync(tmpExtDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      try {
+        proc.kill('SIGKILL');
+      } catch {}
+      try {
+        fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {}
+      try {
+        fs.rmSync(tmpExtDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {}
     },
   };
 }

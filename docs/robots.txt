@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://simplyakm.github.io/saveshot/sitemap.xml
+Sitemap: https://saveshot.simplyakm.com/sitemap.xml

@@ -262,7 +262,7 @@ ${homePart}          <a href="thanks.html">Say thanks</a>
       </footer>`;
 }
 
-function renderPolicyHtml(doc, pageTitle, copy) {
+function renderPolicyHtml(doc, pageTitle, copy, canonicalUrl) {
   const bodyParts = [];
   bodyParts.push(
     `        <a class="top-link" href="index.html"><img src="icon32.png" alt="" width="18" height="18" /><span>&larr; Back to ${escapeHtml(copy.brandName)}</span></a>`
@@ -306,6 +306,7 @@ function renderPolicyHtml(doc, pageTitle, copy) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="canonical" href="${escapeHtml(canonicalUrl)}" />
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>${escapeHtml(pageTitle)}</title>
@@ -417,6 +418,7 @@ function renderIndexHtml(copy) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="canonical" href="${escapeHtml(copy.urls.homepage)}" />
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <link rel="alternate" type="text/plain" href="llms.txt" title="SaveShot LLMs.txt" />
@@ -691,6 +693,7 @@ function renderThanksHtml(copy) {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="${escapeHtml(copy.googleSiteVerification)}" />
+    <link rel="canonical" href="${escapeHtml(copy.urls.thanksHtml)}" />
     <link rel="icon" type="image/png" sizes="32x32" href="icon32.png" />
     <link rel="icon" type="image/png" sizes="128x128" href="icon128.png" />
     <title>${escapeHtml(t.pageTitle)}</title>
@@ -735,21 +738,11 @@ ${SHARED_DOC_CSS}
         color: var(--sub);
         line-height: 1.58;
       }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-      }
-      @media (max-width: 600px) {
-        .grid {
-          grid-template-columns: 1fr;
-        }
-      }
       .card {
         background: var(--card);
         border: 1px solid var(--border);
         border-radius: 14px;
-        padding: 24px;
+        padding: 24px 28px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -797,14 +790,6 @@ ${SHARED_DOC_CSS}
       .btn-primary:hover {
         background: var(--accent-hover);
       }
-      .btn-secondary {
-        background: transparent;
-        color: var(--text);
-        border: 1px solid var(--border);
-      }
-      .btn-secondary:hover {
-        background: rgba(120, 126, 140, 0.08);
-      }
     </style>
   </head>
   <body>
@@ -816,22 +801,12 @@ ${SHARED_DOC_CSS}
         <p class="lead">${inlineMarkdownToHtml(t.lead)}</p>
       </section>
 
-      <section class="grid">
-        <div class="card">
-          <div class="card-top">
-            <h2>${escapeHtml(t.reviewCard.heading)}</h2>
-            <p>${inlineMarkdownToHtml(t.reviewCard.body)}</p>
-          </div>
-          <a class="btn btn-primary" href="${escapeHtml(copy.urls.chromeWebStoreReviews)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.reviewCard.cta)}</a>
+      <section class="card">
+        <div class="card-top">
+          <h2>${escapeHtml(t.reviewCard.heading)}</h2>
+          <p>${inlineMarkdownToHtml(t.reviewCard.body)}</p>
         </div>
-
-        <div class="card">
-          <div class="card-top">
-            <h2>${escapeHtml(t.thankYouCard.heading)}</h2>
-            <p>${inlineMarkdownToHtml(t.thankYouCard.body)}</p>
-          </div>
-          <a class="btn btn-secondary" href="${escapeHtml(copy.urls.topmateThanks)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.thankYouCard.cta)}</a>
-        </div>
+        <a class="btn btn-primary" href="${escapeHtml(copy.urls.chromeWebStoreReviews)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.reviewCard.cta)}</a>
       </section>
 
 ${renderWebFooterHtml(copy)}
@@ -1051,7 +1026,7 @@ ${copy.overviewLead}
 - [Privacy Policy](${copy.urls.privacyHtml}): Data handling and Google API Services User Data Policy Limited Use disclosure.
 - [Terms of Service](${copy.urls.termsHtml}): Terms of use and Apache License 2.0 details.
 - [Support and Bug Reports](${copy.urls.chromeWebStoreSupport}): Official Chrome Web Store support hub for bug reports and feature requests.
-- [Say Thanks](${copy.urls.thanksHtml}): Leave a Chrome Web Store review or send a thank-you.
+- [Say Thanks](${copy.urls.thanksHtml}): Leave a Chrome Web Store review.
 
 ## Frequently Asked Questions
 
@@ -1094,8 +1069,8 @@ export function buildGeneratedFiles(copy = SITE_COPY) {
     'TERMS.md': renderPolicyMarkdown(copy.terms, copy),
     'docs/index.html': renderIndexHtml(copy),
     'docs/thanks.html': renderThanksHtml(copy),
-    'docs/privacy.html': renderPolicyHtml(copy.privacy, `Privacy Policy - ${copy.brandName}`, copy),
-    'docs/terms.html': renderPolicyHtml(copy.terms, `Terms of Service - ${copy.brandName}`, copy),
+    'docs/privacy.html': renderPolicyHtml(copy.privacy, `Privacy Policy - ${copy.brandName}`, copy, copy.urls.privacyHtml),
+    'docs/terms.html': renderPolicyHtml(copy.terms, `Terms of Service - ${copy.brandName}`, copy, copy.urls.termsHtml),
     'docs/llms.txt': renderLlmsTxt(copy),
     'docs/robots.txt': renderRobotsTxt(copy),
     'docs/sitemap.xml': renderSitemapXml(copy),

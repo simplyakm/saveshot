@@ -15,10 +15,10 @@
 
 - **Primary Category**: `Productivity` -> `Workflow & Planning` *(or `Tools`)*
 - **Language**: `English`
-- **Official URL / Homepage**: `https://simplyakm.github.io/saveshot/`
-- **Privacy Policy URL**: `https://simplyakm.github.io/saveshot/privacy.html`
-- **Terms of Service URL**: `https://simplyakm.github.io/saveshot/terms.html`
-- **Support URL**: `https://simplyakm.github.io/saveshot/#support`
+- **Official URL / Homepage**: `https://saveshot.simplyakm.com/`
+- **Privacy Policy URL**: `https://saveshot.simplyakm.com/privacy.html`
+- **Terms of Service URL**: `https://saveshot.simplyakm.com/terms.html`
+- **Support URL**: `https://saveshot.simplyakm.com/#support`
 
 ---
 

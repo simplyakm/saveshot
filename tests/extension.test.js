@@ -2913,10 +2913,15 @@ test('all repository source, UI, and documentation files contain no em dashes or
     'docs/thanks.html must link directly to Chrome Web Store reviews tab'
   );
   assert.ok(
-    thanksHtml.includes(`href="${SITE_COPY.urls.topmateThanks}"`),
-    'docs/thanks.html must link to Topmate thank-you page'
+    !thanksHtml.includes('topmate.io') && !thanksHtml.includes('Send a thank-you'),
+    'docs/thanks.html must omit the removed Send a thank-you block'
   );
   assert.ok(!thanksHtml.includes('card-meta'), 'docs/thanks.html must not render card-meta badges');
+  assert.equal(
+    fs.readFileSync(path.join(rootDir, 'docs/CNAME'), 'utf8').trim(),
+    'saveshot.simplyakm.com',
+    'docs/CNAME must match the custom domain'
+  );
 
   const editorHtml = fs.readFileSync(path.join(rootDir, 'pages/editor.html'), 'utf8');
   assert.ok(!editorHtml.includes('<footer'), 'pages/editor.html must remain footer-free for full-height canvas');
