@@ -67,6 +67,38 @@ function connectCdp(wsUrl) {
   });
 }
 
+function resolveChromiumBinary() {
+  if (process.env.CHROMIUM_BIN && fs.existsSync(process.env.CHROMIUM_BIN)) {
+    return process.env.CHROMIUM_BIN;
+  }
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const name of ['chromium', 'chromium-browser']) {
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  const pwRoot = '/opt/ms-playwright';
+  if (fs.existsSync(pwRoot)) {
+    const dirs = fs
+      .readdirSync(pwRoot)
+      .filter((d) => d.startsWith('chromium-'))
+      .sort()
+      .reverse();
+    for (const dir of dirs) {
+      const candidate = path.join(pwRoot, dir, 'chrome-linux64', 'chrome');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  for (const name of ['google-chrome', 'google-chrome-stable']) {
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return 'chromium';
+}
+
 async function launchChromiumWithExtension(initialUrl) {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-chr-'));
   const tmpExtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-ext-'));
@@ -88,7 +120,7 @@ async function launchChromiumWithExtension(initialUrl) {
   fs.writeFileSync(mfPath, JSON.stringify(mf, null, 2));
 
   const proc = spawn(
-    'chromium',
+    resolveChromiumBinary(),
     [
       '--headless=new',
       '--no-sandbox',
@@ -208,7 +240,11 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     let pageTarget = null;
     for (let i = 0; i < 25; i += 1) {
       const { targetInfos } = await cdp.send('Target.getTargets');
-      swTarget = targetInfos.find((t) => t.type === 'service_worker');
+      swTarget = targetInfos.find(
+        (t) =>
+          t.type === 'service_worker' &&
+          t.url.endsWith('/background/service-worker.js')
+      );
       pageTarget = targetInfos.find(
         (t) => t.type === 'page' && t.url.startsWith(baseUrl)
       );
@@ -2341,6 +2377,457 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(popupLiveSignedIn.accountVisible, true, 'Popup must live-sync to signed-in Account card after Editor sign-in');
     assert.equal(popupLiveSignedIn.recentVisible, true, 'Popup must reveal Recent section after Editor sign-in');
     assert.equal(popupLiveSignedIn.recentItems, 1, 'Upgraded screenshot must appear in Popup Recent list');
+
+    // -------------------------------------------------------------------------
+    // 6. Real Chromium v1.2.1 E2E: Instant Editor Open + Parallel Background Drive Upload,
+    //    In-Flight Edit Race, In-Flight Save Deduplication, Failure Recovery, & "Only upload when I click Save"
+    // -------------------------------------------------------------------------
+    await evalIn(
+      swSession,
+      `(async () => {
+        const { settings } = await chrome.storage.local.get('settings');
+        await chrome.storage.local.set({
+          settings: { ...settings, autoCopyLink: true, editBeforeUpload: false },
+        });
+        globalThis.__v121PostCount = 0;
+        globalThis.__v121PatchCalls = [];
+        globalThis.__v121PostGate = null;
+        globalThis.__v121FailNextPost = false;
+
+        globalThis.__v121ArmGate = () => {
+          let resolve;
+          const promise = new Promise((r) => { resolve = r; });
+          globalThis.__v121PostGate = { promise, resolve };
+        };
+        globalThis.__v121ReleaseGate = () => {
+          const g = globalThis.__v121PostGate;
+          globalThis.__v121PostGate = null;
+          if (g) g.resolve();
+        };
+
+        const baseFetch = globalThis.fetch.bind(globalThis);
+        globalThis.fetch = async (url, opts = {}) => {
+          const u = String(url);
+          const method = opts.method || 'GET';
+
+          if (method === 'POST' && u.includes('/upload/drive/v3/files')) {
+            if (globalThis.__v121PostGate) {
+              const gate = globalThis.__v121PostGate;
+              await gate.promise;
+            }
+            if (globalThis.__v121FailNextPost) {
+              globalThis.__v121FailNextPost = false;
+              return new Response(
+                JSON.stringify({
+                  error: {
+                    message: 'The user Drive storage quota has been exceeded.',
+                    errors: [{ reason: 'storageQuotaExceeded' }],
+                  },
+                }),
+                { status: 403 }
+              );
+            }
+            globalThis.__v121PostCount += 1;
+            const id = 'v121_bg_file_' + globalThis.__v121PostCount;
+            const bodyText = await opts.body.text();
+            const m = bodyText.match(/"name":"([^"]+)"/);
+            return new Response(
+              JSON.stringify({
+                id,
+                name: m ? m[1] : 'BgShot_' + globalThis.__v121PostCount + '.png',
+                webViewLink: 'https://drive.google.com/file/d/' + id + '/view',
+                createdTime: new Date().toISOString(),
+              }),
+              { status: 200 }
+            );
+          }
+
+          if (method === 'PATCH' && (u.includes('/upload/drive/v3/files/') || u.includes('/drive/v3/files/'))) {
+            const parts = u.split('/files/');
+            const id = parts[1].split('?')[0];
+            let name = 'Patched.png';
+            if (u.includes('/upload/')) {
+              const bodyText = await opts.body.text();
+              const m = bodyText.match(/"name":"([^"]+)"/);
+              if (m) name = m[1];
+            } else {
+              name = JSON.parse(opts.body).name;
+            }
+            globalThis.__v121PatchCalls.push({ id, url: u, name });
+            return new Response(
+              JSON.stringify({
+                id,
+                name,
+                webViewLink: 'https://drive.google.com/file/d/' + id + '/view',
+                modifiedTime: new Date().toISOString(),
+              }),
+              { status: 200 }
+            );
+          }
+
+          return baseFetch(url, opts);
+        };
+      })()`
+    );
+
+    const openAndAttachNewEditor = async (captureExpr) => {
+      await evalIn(swSession, `chrome.tabs.update(${testTabInfo.tabId}, { active: true })`);
+      const beforeIds = new Set(
+        (await cdp.send('Target.getTargets')).targetInfos
+          .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+          .map((t) => t.targetId)
+      );
+      const capRes = await evalIn(extPageSession, captureExpr);
+      let newTarget = null;
+      for (let i = 0; i < 30; i += 1) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        newTarget = targetInfos.find(
+          (t) =>
+            t.type === 'page' &&
+            t.url.includes(`/pages/editor.html?session=${capRes.sessionId}`) &&
+            !beforeIds.has(t.targetId)
+        );
+        if (newTarget) break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      assert.ok(newTarget, 'New Editor tab must open immediately');
+      const { sessionId: edSess } = await cdp.send('Target.attachToTarget', {
+        targetId: newTarget.targetId,
+        flatten: true,
+      });
+      for (let i = 0; i < 30; i += 1) {
+        const ready = await evalIn(
+          edSess,
+          `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+        );
+        if (ready) break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      return { capRes, targetId: newTarget.targetId, edSess };
+    };
+
+    // 6A. Instant Editor Open + Live Status Sync ("Uploading to Google Drive..." -> "Saved to Google Drive · Link copied")
+    await evalIn(swSession, `globalThis.__v121ArmGate()`);
+    const instantCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+    assert.equal(instantCase.capRes.ok, true);
+    assert.equal(instantCase.capRes.openedEditor, true);
+    assert.equal(instantCase.capRes.uploadingInBackground, true);
+
+    const inFlightState6A = await evalIn(
+      instantCase.edSess,
+      `(() => {
+        window.__e2eCopiedLink = '';
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: async (text) => { window.__e2eCopiedLink = text; },
+            write: async () => {},
+          },
+        });
+        const pill = document.getElementById('status-pill');
+        return {
+          pillVisible: !pill.hidden,
+          pillText: pill.textContent.trim(),
+          saveDisabled: document.getElementById('save-drive-btn').disabled,
+          copyLinkHidden: document.getElementById('copy-link-btn').hidden,
+          openDriveHidden: document.getElementById('open-drive-link').hidden,
+          copyImageEnabled: !document.getElementById('copy-image-btn').disabled,
+          downloadEnabled: !document.getElementById('download-btn').disabled,
+        };
+      })()`
+    );
+    assert.equal(inFlightState6A.pillVisible, true);
+    assert.equal(inFlightState6A.pillText, 'Uploading to Google Drive...');
+    assert.equal(inFlightState6A.saveDisabled, true);
+    assert.equal(inFlightState6A.copyLinkHidden, true);
+    assert.equal(inFlightState6A.openDriveHidden, true);
+    assert.equal(inFlightState6A.copyImageEnabled, true);
+    assert.equal(inFlightState6A.downloadEnabled, true);
+
+    await evalIn(swSession, `globalThis.__v121ReleaseGate()`);
+    let settled6A = null;
+    for (let i = 0; i < 30; i += 1) {
+      settled6A = await evalIn(
+        instantCase.edSess,
+        `(() => ({
+          pillText: document.getElementById('status-pill').textContent.trim(),
+          copiedLink: window.__e2eCopiedLink || '',
+          copyLinkVisible: !document.getElementById('copy-link-btn').hidden,
+          openDriveVisible: !document.getElementById('open-drive-link').hidden,
+          openDriveHref: document.getElementById('open-drive-link').href,
+          saveDisabled: document.getElementById('save-drive-btn').disabled,
+          unsavedHidden: document.getElementById('unsaved-pill').hidden,
+        }))()`
+      );
+      if (settled6A.pillText.includes('Saved to Google Drive') && settled6A.copyLinkVisible) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(settled6A.pillText, 'Saved to Google Drive \u00b7 Link copied');
+    assert.equal(settled6A.copiedLink, 'https://drive.google.com/file/d/v121_bg_file_1/view');
+    assert.equal(settled6A.copyLinkVisible, true);
+    assert.equal(settled6A.openDriveVisible, true);
+    assert.equal(settled6A.openDriveHref, 'https://drive.google.com/file/d/v121_bg_file_1/view');
+    assert.equal(settled6A.saveDisabled, true);
+    assert.equal(settled6A.unsavedHidden, true);
+    await cdp.send('Target.closeTarget', { targetId: instantCase.targetId });
+
+    // 6B. In-Flight Edit Race: draw + rename while uploading -> upload succeeds -> preserves dirty state & shows "Unsaved changes · Click Save"
+    await evalIn(swSession, `globalThis.__v121ArmGate()`);
+    const editRaceCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+
+    const duringEdit6B = await evalIn(
+      editRaceCase.edSess,
+      `(async () => {
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 3, clientX: rect.left + 14, clientY: rect.top + 14 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 3, clientX: rect.left + 80, clientY: rect.top + 60 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 3, clientX: rect.left + 80, clientY: rect.top + 60 }));
+        await new Promise((r) => setTimeout(r, 35));
+
+        document.getElementById('rename-pencil-btn').click();
+        const fnInput = document.getElementById('filename-input');
+        fnInput.value = 'InFlight_Edited_Title';
+        fnInput.dispatchEvent(new Event('blur'));
+
+        return {
+          pillWhileUploading: document.getElementById('status-pill').textContent.trim(),
+          saveEnabledWhileUploading: !document.getElementById('save-drive-btn').disabled,
+          displayStem: document.getElementById('filename-display').textContent.trim(),
+        };
+      })()`
+    );
+    assert.equal(duringEdit6B.pillWhileUploading, 'Uploading to Google Drive...');
+    assert.equal(duringEdit6B.saveEnabledWhileUploading, true);
+    assert.equal(duringEdit6B.displayStem, 'InFlight_Edited_Title');
+
+    await evalIn(swSession, `globalThis.__v121ReleaseGate()`);
+    let settled6B = null;
+    for (let i = 0; i < 30; i += 1) {
+      settled6B = await evalIn(
+        editRaceCase.edSess,
+        `(() => ({
+          copyLinkVisible: !document.getElementById('copy-link-btn').hidden,
+          openDriveVisible: !document.getElementById('open-drive-link').hidden,
+          statusPillHidden: document.getElementById('status-pill').hidden,
+          unsavedVisible: !document.getElementById('unsaved-pill').hidden,
+          unsavedText: document.getElementById('unsaved-pill').textContent.replace(/\\s+/g, ' ').trim(),
+          displayStem: document.getElementById('filename-display').textContent.trim(),
+          saveEnabled: !document.getElementById('save-drive-btn').disabled,
+        }))()`
+      );
+      if (settled6B.copyLinkVisible && settled6B.unsavedVisible) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(settled6B.copyLinkVisible, true, 'Copy link must reveal once initial upload finishes');
+    assert.equal(settled6B.openDriveVisible, true, 'Open in Google Drive must reveal once initial upload finishes');
+    assert.equal(settled6B.statusPillHidden, true, 'Saved pill must not hide user dirty state');
+    assert.equal(settled6B.unsavedVisible, true, 'Unsaved changes pill must appear when user edited while uploading');
+    assert.match(settled6B.unsavedText, /Unsaved changes.*Click Save/);
+    assert.equal(settled6B.displayStem, 'InFlight_Edited_Title', 'User rename must not be overwritten by background upload completion');
+    assert.equal(settled6B.saveEnabled, true);
+    await cdp.send('Target.closeTarget', { targetId: editRaceCase.targetId });
+
+    // 6C. In-Flight Save Deduplication: user draws while upload is in flight and clicks Save -> awaits upload then PATCHes exact fileId (0 duplicate Drive files)
+    const postsBefore6C = await evalIn(swSession, `globalThis.__v121PostCount`);
+    const patchesBefore6C = await evalIn(swSession, `globalThis.__v121PatchCalls.length`);
+    await evalIn(swSession, `globalThis.__v121ArmGate()`);
+    const dedupCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+
+    const clickedSaveInFlight = await evalIn(
+      dedupCase.edSess,
+      `(async () => {
+        const preview = document.getElementById('preview-canvas');
+        const rect = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 4, clientX: rect.left + 18, clientY: rect.top + 18 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 4, clientX: rect.left + 90, clientY: rect.top + 65 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 4, clientX: rect.left + 90, clientY: rect.top + 65 }));
+        await new Promise((r) => setTimeout(r, 35));
+
+        document.getElementById('save-drive-btn').click();
+        await new Promise((r) => setTimeout(r, 35));
+        return {
+          dialogOpen: document.getElementById('confirm-replace-dialog').open,
+          pillText: document.getElementById('status-pill').textContent.trim(),
+        };
+      })()`
+    );
+    assert.equal(clickedSaveInFlight.dialogOpen, false, 'Saving while initial upload is in flight should not block on Replace modal');
+    assert.equal(clickedSaveInFlight.pillText, 'Saving to Google Drive...');
+
+    // Verify zero PATCH calls have fired while initial POST is still held by gate
+    const patchesWhileHeld = await evalIn(swSession, `globalThis.__v121PatchCalls.length`);
+    assert.equal(patchesWhileHeld, patchesBefore6C);
+
+    await evalIn(swSession, `globalThis.__v121ReleaseGate()`);
+    let settled6C = null;
+    for (let i = 0; i < 35; i += 1) {
+      settled6C = await evalIn(
+        dedupCase.edSess,
+        `(() => ({
+          pillText: document.getElementById('status-pill').textContent.trim(),
+          saveDisabled: document.getElementById('save-drive-btn').disabled,
+          copyLinkVisible: !document.getElementById('copy-link-btn').hidden,
+          openHref: document.getElementById('open-drive-link').href,
+        }))()`
+      );
+      if (settled6C.pillText.includes('Replaced in Google Drive')) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.match(settled6C.pillText, /Replaced in Google Drive/);
+    assert.equal(settled6C.saveDisabled, true);
+    assert.equal(settled6C.copyLinkVisible, true);
+
+    const driveCounts6C = await evalIn(
+      swSession,
+      `({ posts: globalThis.__v121PostCount, patches: globalThis.__v121PatchCalls })`
+    );
+    assert.equal(driveCounts6C.posts, postsBefore6C + 1, 'Must create strictly 1 Drive file (zero duplicates)');
+    assert.equal(driveCounts6C.patches.length, patchesBefore6C + 1, 'Must PATCH that exact fileId once');
+    assert.equal(driveCounts6C.patches[driveCounts6C.patches.length - 1].id, `v121_bg_file_${driveCounts6C.posts}`);
+    await cdp.send('Target.closeTarget', { targetId: dedupCase.targetId });
+
+    // 6D. Background Upload Failure Recovery: Drive quota full -> Editor keeps PNG open, shows error pill, Retry + Copy image + Download ready -> Retry succeeds
+    await evalIn(swSession, `globalThis.__v121FailNextPost = true`);
+    const failCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+
+    let failedUi6D = null;
+    for (let i = 0; i < 30; i += 1) {
+      failedUi6D = await evalIn(
+        failCase.edSess,
+        `(() => {
+          const pill = document.getElementById('status-pill');
+          const saveBtn = document.getElementById('save-drive-btn');
+          return {
+            canvasVisible: !document.getElementById('canvas-wrap').hidden,
+            pillVisible: !pill.hidden,
+            pillIsErr: pill.classList.contains('err'),
+            pillText: pill.textContent.trim(),
+            saveLabel: saveBtn.textContent.trim(),
+            saveEnabled: !saveBtn.disabled,
+            copyImageEnabled: !document.getElementById('copy-image-btn').disabled,
+            downloadEnabled: !document.getElementById('download-btn').disabled,
+            copyLinkHidden: document.getElementById('copy-link-btn').hidden,
+          };
+        })()`
+      );
+      if (failedUi6D.pillIsErr && failedUi6D.saveLabel === 'Retry') break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(failedUi6D.canvasVisible, true, 'PNG must stay open in Editor when background upload fails');
+    assert.equal(failedUi6D.pillVisible, true);
+    assert.equal(failedUi6D.pillIsErr, true);
+    assert.match(failedUi6D.pillText, /storage is full/i);
+    assert.equal(failedUi6D.saveLabel, 'Retry');
+    assert.equal(failedUi6D.saveEnabled, true);
+    assert.equal(failedUi6D.copyImageEnabled, true);
+    assert.equal(failedUi6D.downloadEnabled, true);
+    assert.equal(failedUi6D.copyLinkHidden, true);
+
+    // Click Retry -> uploads cleanly now that Drive recovered
+    const retried6D = await evalIn(
+      failCase.edSess,
+      `(async () => {
+        document.getElementById('save-drive-btn').click();
+        for (let i = 0; i < 30; i += 1) {
+          const pill = document.getElementById('status-pill');
+          if (!pill.hidden && pill.textContent.includes('Saved to Google Drive')) {
+            return {
+              ok: true,
+              pillText: pill.textContent.trim(),
+              saveLabel: document.getElementById('save-drive-btn').textContent.trim(),
+              saveDisabled: document.getElementById('save-drive-btn').disabled,
+              copyLinkVisible: !document.getElementById('copy-link-btn').hidden,
+              openDriveVisible: !document.getElementById('open-drive-link').hidden,
+            };
+          }
+          await new Promise((r) => setTimeout(r, 60));
+        }
+        return { ok: false, pillText: document.getElementById('status-pill').textContent.trim() };
+      })()`
+    );
+    assert.equal(retried6D.ok, true, `Retry must succeed after Drive recovers (got: ${retried6D.pillText})`);
+    assert.equal(retried6D.saveLabel, 'Save');
+    assert.equal(retried6D.saveDisabled, true);
+    assert.equal(retried6D.copyLinkVisible, true);
+    assert.equal(retried6D.openDriveVisible, true);
+    await cdp.send('Target.closeTarget', { targetId: failCase.targetId });
+
+    // 6E. Option B Privacy Toggle ("Only upload when I click Save"): verify UI label in Popup Settings, editBeforeUpload key, and zero background upload until Save
+    const toggleAudit = await evalIn(
+      extPageSession,
+      `(async () => {
+        if (document.getElementById('settings-drawer').hidden) {
+          document.getElementById('settings-toggle-btn').click();
+        }
+        const checkbox = document.getElementById('edit-before-upload-checkbox');
+        const labelText = checkbox.closest('label').querySelector('.ss-body').textContent.trim();
+        checkbox.click();
+        await new Promise((r) => setTimeout(r, 80));
+        const { settings } = await chrome.storage.local.get('settings');
+        return {
+          labelText,
+          checked: checkbox.checked,
+          storedEditBeforeUpload: Boolean(settings?.editBeforeUpload),
+        };
+      })()`
+    );
+    assert.equal(toggleAudit.labelText, 'Only upload when I click Save');
+    assert.equal(toggleAudit.checked, true);
+    assert.equal(toggleAudit.storedEditBeforeUpload, true);
+
+    const postsBeforeManual6E = await evalIn(swSession, `globalThis.__v121PostCount`);
+    const manualCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+    assert.equal(manualCase.capRes.ok, true);
+    assert.equal(manualCase.capRes.openedEditor, true);
+    assert.equal(manualCase.capRes.uploadingInBackground, false);
+
+    const manualEditorUi = await evalIn(
+      manualCase.edSess,
+      `(() => ({
+        pillHidden: document.getElementById('status-pill').hidden,
+        saveLabel: document.getElementById('save-drive-btn').textContent.trim(),
+        saveEnabled: !document.getElementById('save-drive-btn').disabled,
+        copyLinkHidden: document.getElementById('copy-link-btn').hidden,
+      }))()`
+    );
+    assert.equal(manualEditorUi.pillHidden, true, 'Manual-save mode must not show Uploading pill');
+    assert.equal(manualEditorUi.saveLabel, 'Save');
+    assert.equal(manualEditorUi.saveEnabled, true);
+    assert.equal(manualEditorUi.copyLinkHidden, true);
+
+    const postsWhileManualOpen = await evalIn(swSession, `globalThis.__v121PostCount`);
+    assert.equal(postsWhileManualOpen, postsBeforeManual6E, 'Zero Drive POSTs allowed while Only upload when I click Save is enabled');
+
+    const manualSaveDone = await evalIn(
+      manualCase.edSess,
+      `(async () => {
+        document.getElementById('save-drive-btn').click();
+        for (let i = 0; i < 30; i += 1) {
+          const pill = document.getElementById('status-pill');
+          if (!pill.hidden && pill.textContent.includes('Saved to Google Drive')) {
+            return { ok: true, copyLinkVisible: !document.getElementById('copy-link-btn').hidden };
+          }
+          await new Promise((r) => setTimeout(r, 60));
+        }
+        return { ok: false };
+      })()`
+    );
+    assert.equal(manualSaveDone.ok, true);
+    assert.equal(manualSaveDone.copyLinkVisible, true);
+    const postsAfterManualSave = await evalIn(swSession, `globalThis.__v121PostCount`);
+    assert.equal(postsAfterManualSave, postsBeforeManual6E + 1);
+    await cdp.send('Target.closeTarget', { targetId: manualCase.targetId });
   } finally {
     cleanup();
     server.closeAllConnections();

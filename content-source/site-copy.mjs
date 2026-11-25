@@ -82,7 +82,7 @@ export const SITE_COPY = {
         'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
         'Chrome_SaveShot_ScreenShots` and copy the share link automatically. SaveShot has no private servers, analytics, or ads.',
       readmeBullet:
-        '**Works locally or autosaves to your Drive**: Capture, edit, copy, and download PNGs locally right away without signing in, or connect Google Drive once to autosave to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically.',
+        '**Works locally or autosaves to your Drive**: Capture, edit, copy, and download PNGs locally right away without signing in, or connect Google Drive once to open the editor immediately while autosaving in the background to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically. Turn on **Only upload when I click Save** in Settings to redact before anything is uploaded.',
     },
     {
       title: 'Narrow `drive.file` Scope',
@@ -90,13 +90,13 @@ export const SITE_COPY = {
       summary:
         'Uses only `activeTab` and Google\'s narrow `drive.file` permission. SaveShot can only access the screenshots and folder it creates itself, never any other files in your Google Drive.',
       readmeBullet:
-        '**Built-in lightweight editor**: Opens automatically in a new tab so you can rename the file, highlight text, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Copy image** (`Ctrl+C`) to paste straight into AI tools or docs, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
+        '**Built-in lightweight editor**: Opens immediately in a new tab so you can rename the file, highlight text, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Copy image** (`Ctrl+C`) to paste straight into AI tools or docs, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
     },
   ],
 
   readmeExtraBullets: [
     '**Recent history**: Keeps your last 8 Google Drive screenshots in the popup for quick access, and clears them automatically when you sign out.',
-    '**Local save backup**: If your Google Drive is full or your internet drops after taking a screenshot, a **Save PNG locally** button appears so you do not lose the image.',
+    '**Zero-loss backup protection**: If your Google Drive is full or your internet drops, your screenshot stays open in the editor with **Retry**, **Copy image**, and **Download** (plus **Save PNG locally** fallback) ready so you never lose a capture.',
     '**Strict privacy & narrow permissions**: Uses only `activeTab` and Google\'s narrow `drive.file` scope. SaveShot runs in Chrome with zero requests to any private or third-party server, and cannot access any other files in your Google Drive.',
   ],
 
@@ -115,7 +115,7 @@ export const SITE_COPY = {
     {
       question: 'Can I redact sensitive details before uploading to Google Drive?',
       answer:
-        'Yes. When signed in, screenshots upload right away by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on **Open editor before uploading** in Settings (or capture while signed out).',
+        'Yes. When signed in, SaveShot opens the editor right away and uploads to Google Drive in the background by default so your share link is ready immediately. If you prefer to redact before anything is uploaded, turn on **Only upload when I click Save** in Settings (or capture while signed out).',
     },
     {
       question: 'How do keyboard shortcuts work?',
@@ -130,7 +130,7 @@ export const SITE_COPY = {
     {
       question: 'What happens if my Google Drive is full or offline?',
       answer:
-        'If an upload fails after taking a screenshot, SaveShot shows a **Save PNG locally** button so you can save the image to your computer without losing it.',
+        'If a background upload fails, your screenshot stays open in the editor with a clear error status pill so you can click **Retry**, **Copy image**, or **Download** (or **Save PNG locally**) without losing it.',
     },
     {
       question: 'How does Incognito mode work?',
@@ -179,7 +179,7 @@ export const SITE_COPY = {
         heading: 'What is stored on your device',
         lead: 'SaveShot stores a small amount of data locally in Chrome (`chrome.storage.local`):',
         unorderedList: [
-          'Your folder name, appearance theme, auto-copy, and pre-upload editor settings.',
+          'Your folder name, appearance theme, auto-copy, and manual-upload ("Only upload when I click Save") settings.',
           'Your connected Google account display name, email, and avatar URL.',
           'Your last 8 uploaded screenshot links and small preview thumbnails for quick access in the popup.',
         ],

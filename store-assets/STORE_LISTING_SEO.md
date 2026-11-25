@@ -42,13 +42,13 @@ Annotate screenshots right in a new tab without leaving Chrome:
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
 - Click "Copy image" (or press Ctrl+C / Cmd+C) to copy a lossless PNG straight to your clipboard for pasting into AI tools, chats, docs, or bug trackers, or click "Download" to save locally anytime (no sign-in required)
-- Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Open editor before uploading" in Settings to redact before initial upload
+- Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Only upload when I click Save" in Settings to redact before anything is uploaded
 
 • Organized in Your Google Drive + Instant Link Sharing
-When connected, screenshots save as crisp lossless PNGs inside a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). SaveShot copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
+When connected, SaveShot opens the editor immediately while uploading crisp lossless PNGs in the background into a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). SaveShot copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
 
 • Offline & Full-Drive Backup Protection
-If your internet drops or your Google Drive storage is full when taking a screenshot, SaveShot offers a one-click "Save PNG locally" fallback so you never lose a capture.
+If your internet drops or your Google Drive storage is full when taking a screenshot, your capture stays open in the editor with Retry, Copy image, and Download (plus Save PNG locally fallback) ready so you never lose a capture.
 
 • Light & Neutral Graphite Dark Mode
 Matches your system appearance automatically, or choose Light or Dark mode in Settings.

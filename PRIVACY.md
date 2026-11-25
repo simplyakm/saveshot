@@ -20,7 +20,7 @@ SaveShot only accesses data when you choose to take a screenshot or connect Goog
 
 SaveShot stores a small amount of data locally in Chrome (`chrome.storage.local`):
 
-- Your folder name, appearance theme, auto-copy, and pre-upload editor settings.
+- Your folder name, appearance theme, auto-copy, and manual-upload ("Only upload when I click Save") settings.
 - Your connected Google account display name, email, and avatar URL.
 - Your last 8 uploaded screenshot links and small preview thumbnails for quick access in the popup.
 

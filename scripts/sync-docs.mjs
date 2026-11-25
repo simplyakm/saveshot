@@ -918,13 +918,13 @@ Annotate screenshots right in a new tab without leaving Chrome:
 - Pick preset swatches or any custom #HEX color
 - Rotate 90 degrees, flip horizontally or vertically, undo, or reset
 - Click "Copy image" (or press Ctrl+C / Cmd+C) to copy a lossless PNG straight to your clipboard for pasting into AI tools, chats, docs, or bug trackers, or click "Download" to save locally anytime (no sign-in required)
-- Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Open editor before uploading" in Settings to redact before initial upload
+- Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Only upload when I click Save" in Settings to redact before anything is uploaded
 
 • Organized in Your Google Drive + Instant Link Sharing
-When connected, screenshots save as crisp lossless PNGs inside a dedicated "${copy.defaultFolderName}" folder in your Google Drive (customizable in Settings). ${copy.brandName} copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
+When connected, ${copy.brandName} opens the editor immediately while uploading crisp lossless PNGs in the background into a dedicated "${copy.defaultFolderName}" folder in your Google Drive (customizable in Settings). ${copy.brandName} copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
 
 • Offline & Full-Drive Backup Protection
-If your internet drops or your Google Drive storage is full when taking a screenshot, ${copy.brandName} offers a one-click "Save PNG locally" fallback so you never lose a capture.
+If your internet drops or your Google Drive storage is full when taking a screenshot, your capture stays open in the editor with Retry, Copy image, and Download (plus Save PNG locally fallback) ready so you never lose a capture.
 
 • Light & Neutral Graphite Dark Mode
 Matches your system appearance automatically, or choose Light or Dark mode in Settings.
@@ -1036,7 +1036,7 @@ ${copy.overviewLead}
 - **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, press \`Enter\` inside the selector for the full tab, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at \`chrome://extensions/shortcuts\`.
 - **Built-in screenshot editor**: Add arrows, rectangles, circles, lines, translucent marker highlights (\`H\`, hold \`Shift\` for a straight line), freehand pencil strokes, legible text callouts, custom \`#HEX\` colors, or solid black pixel redactions, plus rotate 90 degrees, flip, undo, or reset.
 - **Instant clipboard and local export (no sign-in required)**: Click **Copy image** (or press \`Ctrl+C\` / \`Cmd+C\`) in the editor to copy a lossless PNG straight to your clipboard for pasting into AI assistants, chat apps, docs, or bug trackers, or click **Download** to save the PNG to your computer.
-- **Direct Google Drive autosave**: Optionally connect Google Drive once to upload screenshots straight from Chrome into \`${copy.defaultFolderName}\` (customizable in Settings) and copy the share link automatically, with a local PNG fallback if Drive is offline or full.
+- **Direct Google Drive autosave**: Optionally connect Google Drive once to open the editor immediately while uploading screenshots straight from Chrome into \`${copy.defaultFolderName}\` (customizable in Settings) and copying the share link automatically. Turn on **Only upload when I click Save** in Settings to redact before uploading, with **Retry**, **Copy image**, and **Download** ready if Drive is offline or full.
 
 ## Privacy and Security
 

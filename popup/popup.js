@@ -703,13 +703,7 @@ els.captureVisibleBtn.addEventListener('click', async () => {
   if (currentState.busy) return;
   currentState.busy = true;
   updateCaptureAvailability();
-  const folderName = currentState.settings?.folderName || 'Chrome_SaveShot_ScreenShots';
-  const willOpenEditor =
-    !currentState.signedIn || Boolean(currentState.settings?.editBeforeUpload);
-  showStatus(
-    'loading',
-    willOpenEditor ? 'Opening screenshot editor...' : `Uploading to "${folderName}"...`
-  );
+  showStatus('loading', 'Opening screenshot editor...');
 
   try {
     const res = await sendRuntimeMessage({
@@ -731,35 +725,8 @@ els.captureVisibleBtn.addEventListener('click', async () => {
       window.close();
       return;
     }
-
-    renderSettings(res.settings);
-    renderRecentUploads(res.recentUploads);
-
-    let copied = false;
-    const safeLink = safeHttpsUrl(res.upload?.webViewLink);
-    if (res.settings?.autoCopyLink && safeLink) {
-      try {
-        await navigator.clipboard.writeText(safeLink);
-        copied = true;
-      } catch {
-        // Ignore clipboard error when popup loses focus
-      }
-    }
-
-    if (res.openedEditorAfterUpload) {
-      window.close();
-      return;
-    }
-
-    showStatus('success', {
-      message: copied ? 'Saved \u00b7 Link copied' : 'Saved to Google Drive',
-      fileId: res.upload.id,
-      filename: res.upload.name,
-      folderName: res.upload.folderName,
-      webViewLink: safeLink,
-    });
   } catch (err) {
-    showStatus('error', err.message || 'Could not upload screenshot.');
+    showStatus('error', err.message || 'Could not capture screenshot.');
   } finally {
     currentState.busy = false;
     updateCaptureAvailability();

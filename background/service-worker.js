@@ -49,6 +49,14 @@ const FALLBACK_SESSION_TTL_MS = 10 * 60 * 1000;
 const REGION_SESSION_TTL_MS = 2 * 60 * 1000;
 const MAX_EDITED_DATA_URL_LENGTH = 48 * 1024 * 1024;
 const EDITOR_SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{8,64}$/;
+const DISALLOWED_SESSION_KEYS = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'toString',
+  'valueOf',
+  'hasOwnProperty',
+]);
 
 const SESSION_META_MAP_KEY = 'editorSessionsById';
 const PREUPLOAD_PNG_PREFIX = 'preUploadPng_';
@@ -80,11 +88,15 @@ let lastErrorCode = '';
 let lastFailedCapture = null;
 let fallbackExpiryTimer = null;
 let contextMenuSyncChain = Promise.resolve(false);
+let workerSessionEpoch = 0;
+let sessionMetaWriteChain = Promise.resolve();
 
 let lastUploadedFileId = '';
 const recentUploadedCaptures = new Map();
 const editorSessions = new Map();
 const pendingRegionTabIds = new Map();
+const inflightUploadsBySessionId = new Map();
+const inflightSavesBySessionId = new Map();
 
 export function isTrustedExtensionSender(sender) {
   const extOriginPrefix = chrome?.runtime?.getURL
@@ -167,21 +179,23 @@ function storeFallbackCapture(blob, filename) {
     clearTimeout(fallbackExpiryTimer);
     fallbackExpiryTimer = null;
   }
+  const writeEpoch = workerSessionEpoch;
   lastFailedCapture = { blob, filename };
   fallbackExpiryTimer = setTimeout(clearFallbackCapture, 2 * 60 * 1000);
   fallbackExpiryTimer?.unref?.();
 
   // Also persist in chrome.storage.session so Save PNG locally survives MV3 30s SW idle sleep
   blobToDataUrl(blob)
-    .then((dataUrl) =>
-      sessionStoreSet({
+    .then((dataUrl) => {
+      if (writeEpoch !== workerSessionEpoch || !lastFailedCapture) return;
+      return sessionStoreSet({
         [FALLBACK_CAPTURE_KEY]: {
           dataUrl,
           filename,
           expiresAt: Date.now() + FALLBACK_SESSION_TTL_MS,
         },
-      })
-    )
+      });
+    })
     .catch(() => {});
 }
 
@@ -237,6 +251,13 @@ function cacheUploadedCapture(entry) {
   });
 }
 
+function normalizeUploadState(value) {
+  if (value === 'uploading' || value === 'uploaded' || value === 'failed') {
+    return value;
+  }
+  return 'idle';
+}
+
 function serializeSessionMeta(session) {
   return {
     sessionId: session.sessionId,
@@ -250,6 +271,11 @@ function serializeSessionMeta(session) {
     captureMode: session.captureMode === 'region' ? 'region' : 'visible',
     incognito: Boolean(session.incognito),
     justUploaded: Boolean(session.justUploaded),
+    editorLoaded: Boolean(session.editorLoaded),
+    uploadState: normalizeUploadState(session.uploadState),
+    uploadError: typeof session.uploadError === 'string' ? session.uploadError : '',
+    uploadErrorCode: typeof session.uploadErrorCode === 'string' ? session.uploadErrorCode : '',
+    uploadRequiresReauth: Boolean(session.uploadRequiresReauth),
     updatedAt: Date.now(),
   };
 }
@@ -268,53 +294,118 @@ function clearAllEditorSessions() {
   editorSessions.clear();
 }
 
-async function persistEditorSessionMeta(session, { storePreUploadBlob = false } = {}) {
-  const data = await sessionStoreGet(SESSION_META_MAP_KEY);
-  const existingMap =
-    data?.[SESSION_META_MAP_KEY] && typeof data[SESSION_META_MAP_KEY] === 'object'
-      ? { ...data[SESSION_META_MAP_KEY] }
-      : {};
-
-  delete existingMap[session.sessionId];
-  existingMap[session.sessionId] = serializeSessionMeta(session);
-
-  const ids = Object.keys(existingMap);
-  const evictedPngKeys = [];
-  while (ids.length > MAX_PERSISTED_EDITOR_SESSIONS) {
-    const evictedId = ids.shift();
-    delete existingMap[evictedId];
-    evictedPngKeys.push(`${PREUPLOAD_PNG_PREFIX}${evictedId}`);
-  }
-
-  if (evictedPngKeys.length > 0) {
-    await sessionStoreRemove(evictedPngKeys);
-  }
-
-  await sessionStoreSet({ [SESSION_META_MAP_KEY]: existingMap });
-
-  if (storePreUploadBlob && session.mode === 'new' && session.pngBlob) {
-    try {
-      // Keep at most 2 pre-upload PNGs in chrome.storage.session without reading existing blobs
-      const otherNewIds = Object.keys(existingMap).filter(
-        (id) => id !== session.sessionId && existingMap[id]?.mode === 'new'
-      );
-      if (otherNewIds.length >= 2) {
-        const dropIds = otherNewIds.slice(0, otherNewIds.length - 1);
-        await sessionStoreRemove(dropIds.map((id) => `${PREUPLOAD_PNG_PREFIX}${id}`));
-      }
-      const dataUrl =
-        typeof session.pngDataUrl === 'string' &&
-        session.pngDataUrl.startsWith('data:image/png;base64,')
-          ? session.pngDataUrl
-          : await blobToDataUrl(session.pngBlob);
-      session.pngDataUrl = dataUrl;
-      await sessionStoreSet({
-        [`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`]: dataUrl,
-      });
-    } catch {
-      // Best-effort if image exceeds session quota; RAM and editor canvas still hold pixels
+function broadcastEditorUploadStatus(session) {
+  if (!session?.sessionId) return;
+  const payload = {
+    type: 'EDITOR_UPLOAD_STATUS',
+    sessionId: session.sessionId,
+    mode: session.mode === 'new' ? 'new' : 'existing',
+    fileId: session.fileId || null,
+    filename: sanitizeScreenshotFilename(session.filename || 'Screenshot.png'),
+    folderName: session.folderName || 'Chrome_SaveShot_ScreenShots',
+    webViewLink: session.webViewLink || '',
+    uploadState: normalizeUploadState(session.uploadState),
+    uploadError: typeof session.uploadError === 'string' ? session.uploadError : '',
+    uploadErrorCode: typeof session.uploadErrorCode === 'string' ? session.uploadErrorCode : '',
+    uploadRequiresReauth: Boolean(session.uploadRequiresReauth),
+  };
+  try {
+    const maybePromise = chrome?.runtime?.sendMessage?.(payload);
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      maybePromise.catch(() => {});
     }
+  } catch {
+    // Ignore when no editor page is open to receive live updates
   }
+}
+
+async function reconcileInterruptedUpload(session) {
+  if (
+    session &&
+    session.uploadState === 'uploading' &&
+    !session.fileId &&
+    !inflightUploadsBySessionId.has(session.sessionId)
+  ) {
+    session.uploadState = 'failed';
+    session.uploadError =
+      'Background upload was interrupted. Click Retry to save to Google Drive.';
+    session.uploadErrorCode = 'UPLOAD_INTERRUPTED';
+    session.uploadRequiresReauth = false;
+    await persistEditorSessionMeta(session);
+  }
+  return session;
+}
+
+function persistEditorSessionMeta(
+  session,
+  { storePreUploadBlob = false, expectedEpoch = workerSessionEpoch } = {}
+) {
+  const writeEpoch = expectedEpoch;
+  const runWrite = async () => {
+    if (writeEpoch !== workerSessionEpoch) return;
+    const data = await sessionStoreGet(SESSION_META_MAP_KEY);
+    if (writeEpoch !== workerSessionEpoch) return;
+    const existingMap =
+      data?.[SESSION_META_MAP_KEY] && typeof data[SESSION_META_MAP_KEY] === 'object'
+        ? { ...data[SESSION_META_MAP_KEY] }
+        : {};
+
+    delete existingMap[session.sessionId];
+    existingMap[session.sessionId] = serializeSessionMeta(session);
+
+    const ids = Object.keys(existingMap);
+    const evictedPngKeys = [];
+    while (ids.length > MAX_PERSISTED_EDITOR_SESSIONS) {
+      const evictedId = ids.shift();
+      delete existingMap[evictedId];
+      evictedPngKeys.push(`${PREUPLOAD_PNG_PREFIX}${evictedId}`);
+    }
+
+    if (evictedPngKeys.length > 0) {
+      await sessionStoreRemove(evictedPngKeys);
+    }
+
+    if (writeEpoch !== workerSessionEpoch) return;
+    await sessionStoreSet({ [SESSION_META_MAP_KEY]: existingMap });
+
+    if (storePreUploadBlob && session.mode === 'new' && session.pngBlob) {
+      try {
+        // Keep at most 2 pre-upload PNGs in chrome.storage.session, preferring to evict
+        // already-loaded non-uploading sessions before unloaded or actively uploading ones
+        const otherNewIds = Object.keys(existingMap).filter(
+          (id) => id !== session.sessionId && existingMap[id]?.mode === 'new'
+        );
+        if (otherNewIds.length >= 2) {
+          const evictionPriority = (id) => {
+            const meta = existingMap[id];
+            if (meta?.uploadState === 'uploading') return 2;
+            if (!meta?.editorLoaded) return 1;
+            return 0;
+          };
+          const orderedForEviction = [...otherNewIds].sort(
+            (a, b) => evictionPriority(a) - evictionPriority(b)
+          );
+          const dropIds = orderedForEviction.slice(0, otherNewIds.length - 1);
+          await sessionStoreRemove(dropIds.map((id) => `${PREUPLOAD_PNG_PREFIX}${id}`));
+        }
+        const dataUrl =
+          typeof session.pngDataUrl === 'string' &&
+          session.pngDataUrl.startsWith('data:image/png;base64,')
+            ? session.pngDataUrl
+            : await blobToDataUrl(session.pngBlob);
+        if (writeEpoch !== workerSessionEpoch) return;
+        session.pngDataUrl = dataUrl;
+        await sessionStoreSet({
+          [`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`]: dataUrl,
+        });
+      } catch {
+        // Best-effort if image exceeds session quota; RAM and editor canvas still hold pixels
+      }
+    }
+  };
+
+  sessionMetaWriteChain = sessionMetaWriteChain.catch(() => {}).then(runWrite);
+  return sessionMetaWriteChain;
 }
 
 async function createEditorSession(data) {
@@ -333,6 +424,11 @@ async function createEditorSession(data) {
     captureMode: data.captureMode === 'region' ? 'region' : 'visible',
     incognito: Boolean(data.incognito),
     justUploaded: Boolean(data.justUploaded),
+    editorLoaded: Boolean(data.editorLoaded),
+    uploadState: normalizeUploadState(data.uploadState),
+    uploadError: typeof data.uploadError === 'string' ? data.uploadError : '',
+    uploadErrorCode: typeof data.uploadErrorCode === 'string' ? data.uploadErrorCode : '',
+    uploadRequiresReauth: Boolean(data.uploadRequiresReauth),
   };
 
   putRamEditorSession(session);
@@ -349,7 +445,11 @@ async function createEditorSession(data) {
  * 3. L3 trusted editor page fallback context (survives even manual extension reloads while signed in)
  */
 async function resolveEditorSession(sessionId, fallbackContext = null) {
-  if (typeof sessionId !== 'string' || !EDITOR_SESSION_ID_PATTERN.test(sessionId)) {
+  if (
+    typeof sessionId !== 'string' ||
+    DISALLOWED_SESSION_KEYS.has(sessionId) ||
+    !EDITOR_SESSION_ID_PATTERN.test(sessionId)
+  ) {
     throw new SaveShotError({
       code: 'EDITOR_SESSION_EXPIRED',
       userMessage:
@@ -364,7 +464,11 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
 
   const preUploadKey = `${PREUPLOAD_PNG_PREFIX}${sessionId}`;
   const stored = await sessionStoreGet([SESSION_META_MAP_KEY, preUploadKey]);
-  const storedMeta = stored?.[SESSION_META_MAP_KEY]?.[sessionId];
+  const storedMap = stored?.[SESSION_META_MAP_KEY];
+  const storedMeta =
+    storedMap && typeof storedMap === 'object' && Object.hasOwn(storedMap, sessionId)
+      ? storedMap[sessionId]
+      : null;
 
   if (storedMeta && typeof storedMeta === 'object') {
     let pngBlob = null;
@@ -389,6 +493,12 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
       captureMode: storedMeta.captureMode === 'region' ? 'region' : 'visible',
       incognito: Boolean(storedMeta.incognito),
       justUploaded: Boolean(storedMeta.justUploaded),
+      editorLoaded: Boolean(storedMeta.editorLoaded),
+      uploadState: normalizeUploadState(storedMeta.uploadState),
+      uploadError: typeof storedMeta.uploadError === 'string' ? storedMeta.uploadError : '',
+      uploadErrorCode:
+        typeof storedMeta.uploadErrorCode === 'string' ? storedMeta.uploadErrorCode : '',
+      uploadRequiresReauth: Boolean(storedMeta.uploadRequiresReauth),
     };
     putRamEditorSession(rehydrated);
     return rehydrated;
@@ -415,6 +525,12 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
         pageTitle: typeof fallbackContext.pageTitle === 'string' ? fallbackContext.pageTitle : '',
         captureMode: fallbackContext.captureMode === 'region' ? 'region' : 'visible',
         incognito: Boolean(fallbackContext.incognito),
+        justUploaded: false,
+        editorLoaded: true,
+        uploadState: fileId ? 'uploaded' : 'idle',
+        uploadError: '',
+        uploadErrorCode: '',
+        uploadRequiresReauth: false,
       };
       putRamEditorSession(reconstructed);
       await persistEditorSessionMeta(reconstructed);
@@ -470,23 +586,45 @@ async function consumePendingRegionTab(tabId) {
  * (wiping all module-level RAM Maps while preserving chrome.storage.session and chrome.storage.local).
  */
 export function resetInMemoryWorkerStateForTests() {
+  workerSessionEpoch += 1;
   clearRecentCaptureCache();
   clearAllEditorSessions();
   pendingRegionTabIds.clear();
+  inflightUploadsBySessionId.clear();
+  inflightSavesBySessionId.clear();
   if (fallbackExpiryTimer) {
     clearTimeout(fallbackExpiryTimer);
     fallbackExpiryTimer = null;
   }
   lastFailedCapture = null;
 }
+
+export async function waitForInflightUploadForTests(sessionId) {
+  if (typeof sessionId === 'string' && inflightUploadsBySessionId.has(sessionId)) {
+    return inflightUploadsBySessionId.get(sessionId);
+  }
+  if (!sessionId && inflightUploadsBySessionId.size > 0) {
+    return Promise.all(Array.from(inflightUploadsBySessionId.values()));
+  }
+  return null;
+}
+
 globalThis.__saveshotResetRamForTest = resetInMemoryWorkerStateForTests;
+globalThis.__saveshotWaitForUploadForTest = waitForInflightUploadForTests;
 
 async function openEditorTab(sessionId, windowId) {
   const url = chrome.runtime.getURL(
     `pages/editor.html?session=${encodeURIComponent(sessionId)}`
   );
-  const opts = typeof windowId === 'number' ? { url, windowId } : { url };
-  await chrome.tabs.create(opts);
+  if (typeof windowId === 'number') {
+    try {
+      await chrome.tabs.create({ url, windowId });
+      return;
+    } catch {
+      // Source window closed between capture and tab creation; fall back to default window
+    }
+  }
+  await chrome.tabs.create({ url });
 }
 
 function setBadge(text, color, autoClearMs = 0) {
@@ -613,6 +751,7 @@ async function uploadCapturedBlob({
   interactiveAuth = false,
   customFilename = '',
   initialSettings = null,
+  shouldAbort = null,
 }) {
   clearFallbackCapture();
   const incognito = Boolean(tab?.incognito);
@@ -638,17 +777,28 @@ async function uploadCapturedBlob({
             accountKey: email,
           });
 
+          if (shouldAbort?.()) {
+            return null;
+          }
+
           if (
             folder.id !== accountCache.folderId ||
             folder.webViewLink !== accountCache.folderWebViewLink ||
             folder.id !== settings.folderId ||
             folder.webViewLink !== settings.folderWebViewLink
           ) {
+            if (shouldAbort?.()) {
+              return null;
+            }
             latestSettings = await saveAccountFolderCache(email, {
               folderName: settings.folderName,
               folderId: folder.id,
               folderWebViewLink: folder.webViewLink,
             });
+          }
+
+          if (shouldAbort?.()) {
+            return null;
           }
 
           const file = await uploadScreenshotToDrive(token, {
@@ -665,6 +815,9 @@ async function uploadCapturedBlob({
       ),
     ]);
   } catch (uploadErr) {
+    if (shouldAbort?.()) {
+      return { aborted: true };
+    }
     const normalized =
       uploadErr instanceof SaveShotError ? uploadErr : classifyCaptureError(uploadErr);
     lastErrorCode = normalized.code || 'UPLOAD_ERROR';
@@ -672,6 +825,10 @@ async function uploadCapturedBlob({
     normalized.hasFallback = true;
     normalized.fallbackFilename = filename;
     throw normalized;
+  }
+
+  if (shouldAbort?.() || !uploadResult?.file) {
+    return { aborted: true };
   }
 
   lastErrorCode = '';
@@ -686,6 +843,10 @@ async function uploadCapturedBlob({
     thumbnailDataUrl: incognito ? '' : thumbnailDataUrl,
   };
 
+  if (shouldAbort?.()) {
+    return { aborted: true };
+  }
+
   cacheUploadedCapture({
     fileId: record.id,
     pngBlob,
@@ -699,12 +860,134 @@ async function uploadCapturedBlob({
   });
 
   const recentUploads = incognito ? null : await addRecentUpload(record);
+  if (shouldAbort?.()) {
+    deleteRecentCaptureEntry(record.id);
+    if (!incognito) {
+      await clearRecentUploads().catch(() => {});
+    }
+    return { aborted: true };
+  }
 
   return {
     upload: { ...record, previewThumbnail: thumbnailDataUrl },
     settings: latestSettings,
     recentUploads,
   };
+}
+
+function startBackgroundUploadForSession({
+  session,
+  pngBlob,
+  tab,
+  mode,
+  interactiveAuth = false,
+  settings,
+  showPageToast = false,
+  customFilename = '',
+}) {
+  const startEpoch = workerSessionEpoch;
+  const sessionId = session.sessionId;
+  const shouldAbort = () => workerSessionEpoch !== startEpoch;
+
+  const uploadTask = (async () => {
+    try {
+      const result = await uploadCapturedBlob({
+        pngBlob,
+        tab,
+        mode,
+        interactiveAuth,
+        customFilename: customFilename || session.filename,
+        initialSettings: settings,
+        shouldAbort,
+      });
+
+      if (shouldAbort() || result?.aborted) {
+        return { ok: false, aborted: true };
+      }
+
+      setBadge('✓', '#15803d', 3000);
+
+      session.mode = 'existing';
+      session.fileId = result.upload.id;
+      session.filename = result.upload.name;
+      session.folderName = result.upload.folderName;
+      session.webViewLink = result.upload.webViewLink;
+      session.uploadState = 'uploaded';
+      session.uploadError = '';
+      session.uploadErrorCode = '';
+      session.uploadRequiresReauth = false;
+      session.justUploaded = !session.editorLoaded;
+
+      await persistEditorSessionMeta(session, { expectedEpoch: startEpoch });
+      if (shouldAbort()) {
+        return { ok: false, aborted: true };
+      }
+      await sessionStoreRemove(`${PREUPLOAD_PNG_PREFIX}${sessionId}`);
+      if (shouldAbort()) {
+        return { ok: false, aborted: true };
+      }
+      broadcastEditorUploadStatus(session);
+
+      if (showPageToast && tab?.id && !shouldAbort()) {
+        sendTabToast(tab.id, {
+          status: 'success',
+          title: `Saved to "${result.upload.folderName}"`,
+          message: result.upload.name,
+          webViewLink: result.upload.webViewLink,
+          thumbnailDataUrl: result.upload.previewThumbnail,
+          autoCopyLink: Boolean(result.settings?.autoCopyLink),
+          canEdit: true,
+          theme: result.settings?.theme,
+        }).catch(() => {});
+      }
+
+      return { ok: true, result };
+    } catch (err) {
+      if (shouldAbort()) {
+        return { ok: false, aborted: true };
+      }
+
+      const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+      lastErrorCode = normalized.code || 'UPLOAD_ERROR';
+      setBadge('!', '#dc2626', 4000);
+
+      session.mode = 'new';
+      session.fileId = null;
+      session.webViewLink = '';
+      session.uploadState = 'failed';
+      session.uploadError =
+        normalized.userMessage || 'Could not upload screenshot to Google Drive.';
+      session.uploadErrorCode = normalized.code || 'UPLOAD_ERROR';
+      session.uploadRequiresReauth = Boolean(normalized.requiresReauth);
+      session.justUploaded = false;
+
+      await persistEditorSessionMeta(session, { expectedEpoch: startEpoch });
+      if (shouldAbort()) {
+        return { ok: false, aborted: true };
+      }
+      broadcastEditorUploadStatus(session);
+
+      if (showPageToast && tab?.id && !shouldAbort()) {
+        sendTabToast(tab.id, {
+          status: 'error',
+          title: 'Screenshot upload failed',
+          message: normalized.userMessage,
+          hasFallback: Boolean(normalized.hasFallback),
+          fallbackFilename: normalized.fallbackFilename || session.filename || 'Screenshot.png',
+          theme: settings?.theme,
+        }).catch(() => {});
+      }
+
+      return { ok: false, error: normalized };
+    } finally {
+      if (inflightUploadsBySessionId.get(sessionId) === uploadTask) {
+        inflightUploadsBySessionId.delete(sessionId);
+      }
+    }
+  })();
+
+  inflightUploadsBySessionId.set(sessionId, uploadTask);
+  return uploadTask;
 }
 
 async function resolveDriveFolderLink({ prewarmOnly = false } = {}) {
@@ -766,80 +1049,48 @@ async function captureVisibleTabFlow({
       getSilentAuthSession(),
     ]);
 
-    if (settings.editBeforeUpload || !authSession.signedIn) {
-      const incognito = Boolean(targetTab?.incognito);
-      const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
-        incognito,
-      });
-      const session = await createEditorSession({
-        mode: 'new',
-        fileId: null,
-        filename,
-        folderName: settings.folderName,
-        webViewLink: '',
-        pngBlob,
-        pngDataUrl: dataUrl,
-        pageUrl: targetTab?.url || '',
-        pageTitle: targetTab?.title || '',
-        captureMode: 'visible',
-        incognito,
-      });
-      setBadge('', '');
-      await openEditorTab(session.sessionId, targetTab?.windowId);
-      return { openedEditor: true, sessionId: session.sessionId, settings };
-    }
-
-    if (showPageToast) {
-      await sendTabToast(targetTab.id, {
-        status: 'uploading',
-        title: 'Uploading screenshot...',
-        message: 'Saving to Google Drive',
-      });
-    }
-
-    const result = await uploadCapturedBlob({
-      pngBlob,
-      tab: targetTab,
-      mode: 'visible',
-      interactiveAuth,
-      initialSettings: settings,
+    const incognito = Boolean(targetTab?.incognito);
+    const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
+      incognito,
     });
+    const shouldAutoUpload = Boolean(authSession.signedIn) && !settings.editBeforeUpload;
 
-    setBadge('✓', '#15803d', 3000);
-
-    if (showPageToast) {
-      await sendTabToast(targetTab.id, {
-        status: 'success',
-        title: `Saved to "${result.upload.folderName}"`,
-        message: result.upload.name,
-        webViewLink: result.upload.webViewLink,
-        thumbnailDataUrl: result.upload.previewThumbnail,
-        autoCopyLink: Boolean(result.settings?.autoCopyLink),
-        canEdit: true,
-        theme: result.settings?.theme,
-      });
-    }
-
-    const postUploadSession = await createEditorSession({
-      mode: 'existing',
-      fileId: result.upload.id,
-      filename: result.upload.name,
-      folderName: result.upload.folderName,
-      webViewLink: result.upload.webViewLink,
+    const session = await createEditorSession({
+      mode: 'new',
+      fileId: null,
+      filename,
+      folderName: settings.folderName,
+      webViewLink: '',
       pngBlob,
       pngDataUrl: dataUrl,
       pageUrl: targetTab?.url || '',
       pageTitle: targetTab?.title || '',
       captureMode: 'visible',
-      incognito: Boolean(targetTab?.incognito),
-      justUploaded: true,
+      incognito,
+      uploadState: shouldAutoUpload ? 'uploading' : 'idle',
     });
-    await openEditorTab(postUploadSession.sessionId, targetTab?.windowId);
 
+    if (shouldAutoUpload) {
+      startBackgroundUploadForSession({
+        session,
+        pngBlob,
+        tab: targetTab,
+        mode: 'visible',
+        interactiveAuth,
+        settings,
+        showPageToast,
+        customFilename: filename,
+      });
+    } else if (inflightUploadsBySessionId.size === 0) {
+      setBadge('', '');
+    }
+
+    await openEditorTab(session.sessionId, targetTab?.windowId);
     return {
-      ...result,
-      openedEditorAfterUpload: true,
-      sessionId: postUploadSession.sessionId,
+      openedEditor: true,
+      uploadingInBackground: shouldAutoUpload,
+      sessionId: session.sessionId,
+      settings,
     };
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
@@ -848,7 +1099,7 @@ async function captureVisibleTabFlow({
     if (showPageToast) {
       await sendTabToast(targetTab?.id, {
         status: 'error',
-        title: 'Screenshot upload failed',
+        title: 'Screenshot capture failed',
         message: normalized.userMessage,
         hasFallback: Boolean(normalized.hasFallback),
         fallbackFilename: normalized.fallbackFilename || 'Screenshot.png',
@@ -912,76 +1163,49 @@ async function handleRegionSelected(selection, senderTab) {
       getSilentAuthSession(),
     ]);
 
-    if (settings.editBeforeUpload || !authSession.signedIn) {
-      const incognito = Boolean(liveTab?.incognito);
-      const filename = buildScreenshotFilename(liveTab?.url || '', new Date(), {
-        incognito,
-      });
-      const session = await createEditorSession({
-        mode: 'new',
-        fileId: null,
-        filename,
-        folderName: settings.folderName,
-        webViewLink: '',
-        pngBlob: croppedBlob,
-        pageUrl: liveTab?.url || '',
-        pageTitle: liveTab?.title || '',
-        captureMode: 'region',
-        incognito,
-      });
-      setBadge('', '');
-      await openEditorTab(session.sessionId, liveTab?.windowId);
-      return;
-    }
-
-    await sendTabToast(liveTab.id, {
-      status: 'uploading',
-      title: 'Uploading region screenshot...',
-      message: 'Saving to Google Drive',
-      theme: settings.theme,
+    const incognito = Boolean(liveTab?.incognito);
+    const filename = buildScreenshotFilename(liveTab?.url || '', new Date(), {
+      incognito,
     });
+    const shouldAutoUpload = Boolean(authSession.signedIn) && !settings.editBeforeUpload;
 
-    const result = await uploadCapturedBlob({
-      pngBlob: croppedBlob,
-      tab: liveTab,
-      mode: 'region',
-      interactiveAuth: false,
-      initialSettings: settings,
-    });
-
-    setBadge('✓', '#15803d', 3000);
-    await sendTabToast(liveTab.id, {
-      status: 'success',
-      title: `Saved to "${result.upload.folderName}"`,
-      message: result.upload.name,
-      webViewLink: result.upload.webViewLink,
-      thumbnailDataUrl: result.upload.previewThumbnail,
-      autoCopyLink: Boolean(result.settings?.autoCopyLink),
-      canEdit: true,
-      theme: result.settings?.theme,
-    });
-
-    const postUploadSession = await createEditorSession({
-      mode: 'existing',
-      fileId: result.upload.id,
-      filename: result.upload.name,
-      folderName: result.upload.folderName,
-      webViewLink: result.upload.webViewLink,
+    const session = await createEditorSession({
+      mode: 'new',
+      fileId: null,
+      filename,
+      folderName: settings.folderName,
+      webViewLink: '',
       pngBlob: croppedBlob,
       pageUrl: liveTab?.url || '',
       pageTitle: liveTab?.title || '',
       captureMode: 'region',
-      incognito: Boolean(liveTab?.incognito),
-      justUploaded: true,
+      incognito,
+      uploadState: shouldAutoUpload ? 'uploading' : 'idle',
     });
-    await openEditorTab(postUploadSession.sessionId, liveTab?.windowId);
+
+    if (shouldAutoUpload) {
+      startBackgroundUploadForSession({
+        session,
+        pngBlob: croppedBlob,
+        tab: liveTab,
+        mode: 'region',
+        interactiveAuth: false,
+        settings,
+        showPageToast: true,
+        customFilename: filename,
+      });
+    } else if (inflightUploadsBySessionId.size === 0) {
+      setBadge('', '');
+    }
+
+    await openEditorTab(session.sessionId, liveTab?.windowId);
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
     setBadge('!', '#dc2626', 4000);
     await sendTabToast(senderTab.id, {
       status: 'error',
-      title: 'Screenshot upload failed',
+      title: 'Screenshot capture failed',
       message: normalized.userMessage,
       hasFallback: Boolean(normalized.hasFallback),
       fallbackFilename: normalized.fallbackFilename || 'Screenshot.png',
@@ -1004,6 +1228,53 @@ async function parseEditedPngDataUrl(dataUrl) {
 }
 
 async function handleSaveEditedScreenshot(message) {
+  const sessionKey = typeof message.sessionId === 'string' ? message.sessionId : '';
+  const prevSave = sessionKey ? inflightSavesBySessionId.get(sessionKey) : null;
+
+  const currentSave = (async () => {
+    if (prevSave) {
+      await prevSave;
+    }
+    return executeSaveEditedScreenshot(message);
+  })();
+
+  const settledSave = currentSave.then(
+    () => {},
+    () => {}
+  );
+  if (sessionKey) {
+    inflightSavesBySessionId.set(sessionKey, settledSave);
+  }
+
+  try {
+    return await currentSave;
+  } finally {
+    if (sessionKey && inflightSavesBySessionId.get(sessionKey) === settledSave) {
+      inflightSavesBySessionId.delete(sessionKey);
+    }
+  }
+}
+
+async function executeSaveEditedScreenshot(message) {
+  const startEpoch = workerSessionEpoch;
+
+  // Race safety: if the initial background upload for this session is still in flight,
+  // await it first so we PATCH that exact fileId instead of creating a duplicate Drive file.
+  const inflightUpload =
+    typeof message.sessionId === 'string'
+      ? inflightUploadsBySessionId.get(message.sessionId)
+      : null;
+  if (inflightUpload) {
+    const bgOutcome = await inflightUpload;
+    if (bgOutcome?.aborted || workerSessionEpoch !== startEpoch) {
+      throw new SaveShotError({
+        code: 'AUTH_REQUIRED',
+        userMessage: 'You signed out of Google Drive. Click "Save to Google Drive" to reconnect.',
+        requiresReauth: true,
+      });
+    }
+  }
+
   const [session, settings] = await Promise.all([
     resolveEditorSession(message.sessionId, message.sessionContext),
     getSettings(),
@@ -1049,8 +1320,13 @@ async function handleSaveEditedScreenshot(message) {
     }
 
     lastErrorCode = '';
+    setBadge('✓', '#15803d', 3000);
     session.filename = updatedFile.name;
     session.webViewLink = updatedFile.webViewLink;
+    session.uploadState = 'uploaded';
+    session.uploadError = '';
+    session.uploadErrorCode = '';
+    session.uploadRequiresReauth = false;
     if (pngBlob) {
       session.pngBlob = pngBlob;
       session.pngDataUrl = '';
@@ -1130,6 +1406,10 @@ async function handleSaveEditedScreenshot(message) {
   session.folderName = result.upload.folderName;
   session.pngBlob = uploadBlob;
   session.pngDataUrl = '';
+  session.uploadState = 'uploaded';
+  session.uploadError = '';
+  session.uploadErrorCode = '';
+  session.uploadRequiresReauth = false;
   await persistEditorSessionMeta(session);
   await sessionStoreRemove(`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`);
 
@@ -1215,7 +1495,9 @@ export function registerServiceWorkerListeners() {
 
   if (chrome?.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (!message || !message.type) return false;
+      if (!message || !message.type || message.type === 'EDITOR_UPLOAD_STATUS') {
+        return false;
+      }
 
       (async () => {
         try {
@@ -1297,13 +1579,19 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'SIGN_OUT': {
+              workerSessionEpoch += 1;
+              inflightUploadsBySessionId.clear();
+              inflightSavesBySessionId.clear();
               clearFallbackCapture();
               clearRecentCaptureCache();
               clearAllEditorSessions();
               pendingRegionTabIds.clear();
               lastErrorCode = '';
               setBadge('', '');
-              await Promise.all([clearSessionStorageArea(), signOut()]);
+              sessionMetaWriteChain = sessionMetaWriteChain
+                .catch(() => {})
+                .then(() => clearSessionStorageArea());
+              await Promise.all([sessionMetaWriteChain, signOut()]);
               sendResponse({ ok: true });
               return;
             }
@@ -1326,23 +1614,12 @@ export function registerServiceWorkerListeners() {
                 showPageToast: false,
                 interactiveAuth: false,
               });
-              if (result.openedEditor) {
-                sendResponse({
-                  ok: true,
-                  openedEditor: true,
-                  sessionId: result.sessionId,
-                  settings: result.settings,
-                });
-                return;
-              }
-              const recentUploads = result.recentUploads ?? (await getRecentUploads());
               sendResponse({
                 ok: true,
-                upload: result.upload,
-                settings: result.settings,
-                recentUploads,
-                openedEditorAfterUpload: Boolean(result.openedEditorAfterUpload),
+                openedEditor: Boolean(result.openedEditor),
+                uploadingInBackground: Boolean(result.uploadingInBackground),
                 sessionId: result.sessionId || '',
+                settings: result.settings,
               });
               return;
             }
@@ -1385,7 +1662,7 @@ export function registerServiceWorkerListeners() {
                 });
                 await sendTabToast(senderTabId, {
                   status: 'error',
-                  title: 'Screenshot upload failed',
+                  title: 'Screenshot capture failed',
                   message: switchedErr.userMessage,
                 });
                 throw switchedErr;
@@ -1398,7 +1675,7 @@ export function registerServiceWorkerListeners() {
               sendResponse({
                 ok: true,
                 openedEditor: Boolean(result.openedEditor),
-                openedEditorAfterUpload: Boolean(result.openedEditorAfterUpload),
+                uploadingInBackground: Boolean(result.uploadingInBackground),
                 sessionId: result.sessionId || '',
               });
               return;
@@ -1515,6 +1792,11 @@ export function registerServiceWorkerListeners() {
                 getSilentAuthSession(),
               ]);
 
+              const wasLoaded = Boolean(session.editorLoaded);
+              const stateBeforeLoad = normalizeUploadState(session.uploadState);
+
+              await reconcileInterruptedUpload(session);
+
               if (!session.pngBlob) {
                 if (!session.fileId) {
                   throw new SaveShotError({
@@ -1529,12 +1811,6 @@ export function registerServiceWorkerListeners() {
                 session.pngDataUrl = '';
               }
 
-              const justUploaded = Boolean(session.justUploaded);
-              if (justUploaded) {
-                session.justUploaded = false;
-                await persistEditorSessionMeta(session);
-              }
-
               let dataUrl = '';
               if (
                 typeof session.pngDataUrl === 'string' &&
@@ -1546,24 +1822,71 @@ export function registerServiceWorkerListeners() {
                 dataUrl = await blobToDataUrl(session.pngBlob);
               }
 
+              const currentUploadState = normalizeUploadState(session.uploadState);
+              const transitionedDuringLoad =
+                !wasLoaded &&
+                stateBeforeLoad === 'uploading' &&
+                currentUploadState === 'uploaded';
+              const justUploaded = Boolean(session.justUploaded) || transitionedDuringLoad;
+              session.editorLoaded = true;
+              if (session.justUploaded) {
+                session.justUploaded = false;
+              }
+
+              const sessionSnapshot = {
+                sessionId: session.sessionId,
+                mode: session.mode,
+                signedIn: Boolean(authSession?.signedIn),
+                fileId: session.fileId,
+                filename: session.filename,
+                folderName: session.folderName || settings.folderName,
+                webViewLink: session.webViewLink || '',
+                captureMode: session.captureMode || 'visible',
+                pageUrl: session.pageUrl || '',
+                pageTitle: session.pageTitle || '',
+                incognito: Boolean(session.incognito),
+                autoCopyLink: Boolean(settings.autoCopyLink),
+                justUploaded,
+                uploadState: currentUploadState,
+                uploadError: session.uploadError || '',
+                uploadErrorCode: session.uploadErrorCode || '',
+                uploadRequiresReauth: Boolean(session.uploadRequiresReauth),
+              };
+
+              if (justUploaded || !wasLoaded) {
+                await persistEditorSessionMeta(session);
+              }
+
               sendResponse({
                 ok: true,
-                session: {
-                  sessionId: session.sessionId,
-                  mode: session.mode,
-                  signedIn: Boolean(authSession?.signedIn),
-                  fileId: session.fileId,
-                  filename: session.filename,
-                  folderName: session.folderName || settings.folderName,
-                  webViewLink: session.webViewLink || '',
-                  captureMode: session.captureMode || 'visible',
-                  pageUrl: session.pageUrl || '',
-                  pageTitle: session.pageTitle || '',
-                  incognito: Boolean(session.incognito),
-                  autoCopyLink: Boolean(settings.autoCopyLink),
-                  justUploaded,
-                },
+                session: sessionSnapshot,
                 dataUrl,
+              });
+              return;
+            }
+
+            case 'GET_EDITOR_UPLOAD_STATUS': {
+              const [session, settings, authSession] = await Promise.all([
+                resolveEditorSession(message.sessionId),
+                getSettings(),
+                getSilentAuthSession(),
+              ]);
+
+              await reconcileInterruptedUpload(session);
+
+              sendResponse({
+                ok: true,
+                sessionId: session.sessionId,
+                mode: session.mode,
+                signedIn: Boolean(authSession?.signedIn),
+                fileId: session.fileId,
+                filename: session.filename,
+                folderName: session.folderName || settings.folderName,
+                webViewLink: session.webViewLink || '',
+                uploadState: normalizeUploadState(session.uploadState),
+                uploadError: session.uploadError || '',
+                uploadErrorCode: session.uploadErrorCode || '',
+                uploadRequiresReauth: Boolean(session.uploadRequiresReauth),
               });
               return;
             }

@@ -79,6 +79,11 @@ const state = {
   sizeKey: 'md',
   ready: false,
   saving: false,
+  uploadState: 'idle', // 'idle' | 'uploading' | 'uploaded' | 'failed'
+  uploadError: '',
+  uploadErrorCode: '',
+  uploadRequiresReauth: false,
+  autoCopyAttempted: false,
   isAtOriginalCapture: true,
   driveMatchesInitial: false,
   imageModifiedSinceSave: false,
@@ -121,12 +126,27 @@ function hasUnsavedChanges() {
 let statusPillTimer = null;
 
 function clearStatusPillIfIdle() {
-  if (state.saving) return;
+  if (state.saving || state.uploadState === 'uploading' || state.uploadState === 'failed') {
+    return;
+  }
   if (statusPillTimer) {
     clearTimeout(statusPillTimer);
     statusPillTimer = null;
   }
   els.statusPill.hidden = true;
+  els.statusPill.title = '';
+}
+
+function restorePersistentUploadPill() {
+  if (!state.ready || state.saving) return;
+  if (state.signedIn && state.uploadState === 'uploading') {
+    showStatusPill('warn', 'Uploading to Google Drive...');
+  } else if (state.uploadState === 'failed') {
+    showStatusPill(
+      'err',
+      state.uploadError || 'Could not upload to Google Drive. Click Retry or Download locally.'
+    );
+  }
 }
 
 function showStatusPill(kind, text, autoHideMs = 0) {
@@ -136,6 +156,7 @@ function showStatusPill(kind, text, autoHideMs = 0) {
   }
   if (!text) {
     els.statusPill.hidden = true;
+    els.statusPill.title = '';
     updateUiState();
     return;
   }
@@ -143,11 +164,14 @@ function showStatusPill(kind, text, autoHideMs = 0) {
   els.statusPill.hidden = false;
   els.statusPill.className = `status-pill ${kind}`;
   els.statusPill.textContent = text;
+  els.statusPill.title = text;
   if (autoHideMs > 0) {
     statusPillTimer = setTimeout(() => {
       statusPillTimer = null;
       if (els.statusPill.textContent === text) {
         els.statusPill.hidden = true;
+        els.statusPill.title = '';
+        restorePersistentUploadPill();
         updateUiState();
       }
     }, autoHideMs);
@@ -166,10 +190,20 @@ function updateDimensionsLabel() {
 
 function updateUiState() {
   const dirty = hasUnsavedChanges();
-  const showUnsaved = state.ready && !state.saving && state.signedIn && dirty;
+  const isUploadingInitial = state.signedIn && state.uploadState === 'uploading';
+  const isFailedInitial =
+    state.signedIn && state.mode === 'new' && state.uploadState === 'failed';
+  const showUnsaved =
+    state.ready &&
+    !state.saving &&
+    state.signedIn &&
+    dirty &&
+    !isUploadingInitial &&
+    !isFailedInitial;
 
   if (showUnsaved && !els.statusPill.hidden && els.statusPill.classList.contains('ok')) {
     els.statusPill.hidden = true;
+    els.statusPill.title = '';
   }
   els.unsavedPill.hidden = !showUnsaved || !els.statusPill.hidden;
 
@@ -179,6 +213,20 @@ function updateUiState() {
     els.saveDriveBtn.title = !state.ready
       ? 'Loading screenshot...'
       : 'Connect Google Drive and save screenshot';
+  } else if (isFailedInitial) {
+    els.saveDriveBtn.textContent = 'Retry';
+    els.saveDriveBtn.disabled = !state.ready || state.saving;
+    els.saveDriveBtn.title = !state.ready
+      ? 'Loading screenshot...'
+      : 'Retry uploading screenshot to Google Drive';
+  } else if (isUploadingInitial) {
+    els.saveDriveBtn.textContent = 'Save';
+    els.saveDriveBtn.disabled = !state.ready || state.saving || !dirty;
+    els.saveDriveBtn.title = !state.ready
+      ? 'Loading screenshot...'
+      : dirty
+      ? 'Save changes to Google Drive'
+      : 'Uploading screenshot to Google Drive...';
   } else {
     const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
     els.saveDriveBtn.textContent = 'Save';
@@ -880,41 +928,265 @@ async function exportCanvasDataUrl() {
   return blobToDataUrl(blob);
 }
 
+let pendingUploadUpdate = null;
+let pendingAuthRefresh = false;
+let uploadPollTimer = null;
+let saveClickPending = false;
+
+function stopUploadStatusPoll() {
+  if (uploadPollTimer) {
+    clearInterval(uploadPollTimer);
+    uploadPollTimer = null;
+  }
+}
+
+async function syncAuthStateFromWorker() {
+  if (state.saving || !state.ready) return;
+  try {
+    const res = await sendRuntimeMessage({ type: 'GET_STATE' });
+    if (!res?.ok || state.saving) return;
+
+    const nowSignedIn = Boolean(res.session?.signedIn);
+    if (!nowSignedIn) {
+      const keepAuthErrorPill =
+        state.uploadState === 'failed' && state.uploadRequiresReauth;
+      state.signedIn = false;
+      state.mode = 'new';
+      state.fileId = null;
+      state.webViewLink = '';
+      state.driveMatchesInitial = false;
+      if (!keepAuthErrorPill) {
+        stopUploadStatusPoll();
+        state.uploadState = 'idle';
+        state.uploadError = '';
+        state.uploadErrorCode = '';
+        state.uploadRequiresReauth = false;
+        if (!els.statusPill.hidden && els.statusPill.classList.contains('warn')) {
+          els.statusPill.hidden = true;
+          els.statusPill.title = '';
+        }
+      }
+    } else {
+      state.signedIn = true;
+      if (res.settings) {
+        state.autoCopyLink = Boolean(res.settings.autoCopyLink);
+        state.folderName = res.settings.folderName || state.folderName;
+      }
+    }
+    updateUiState();
+  } catch {
+    // Ignore transient background state error
+  }
+}
+
+function startUploadStatusPoll() {
+  stopUploadStatusPoll();
+  if (!state.sessionId || state.uploadState !== 'uploading') return;
+  uploadPollTimer = setInterval(async () => {
+    if (!state.ready || state.uploadState !== 'uploading' || state.saving) {
+      if (state.uploadState !== 'uploading') stopUploadStatusPoll();
+      return;
+    }
+    try {
+      const res = await sendRuntimeMessage({
+        type: 'GET_EDITOR_UPLOAD_STATUS',
+        sessionId: state.sessionId,
+      });
+      if (res?.ok && res.uploadState && res.uploadState !== 'uploading') {
+        await applyBackgroundUploadUpdate(res);
+      } else if (res && !res.ok && res.code === 'EDITOR_SESSION_EXPIRED') {
+        stopUploadStatusPoll();
+        const stateRes = await sendRuntimeMessage({ type: 'GET_STATE' }).catch(() => null);
+        if (stateRes?.ok && !stateRes.session?.signedIn) {
+          await syncAuthStateFromWorker();
+        } else {
+          await applyBackgroundUploadUpdate({
+            sessionId: state.sessionId,
+            uploadState: 'failed',
+            uploadError:
+              'Background upload was interrupted. Click Retry to save to Google Drive.',
+            uploadErrorCode: 'UPLOAD_INTERRUPTED',
+          });
+        }
+      }
+    } catch {
+      // Ignore transient poll errors while waiting for background upload
+    }
+  }, 2500);
+}
+
+async function tryAutoCopyShareLink() {
+  if (state.autoCopyAttempted) return false;
+  const safeLink = safeHttpsUrl(state.webViewLink);
+  if (!state.autoCopyLink || !safeLink || !navigator.clipboard?.writeText) {
+    return false;
+  }
+  state.autoCopyAttempted = true;
+  try {
+    await navigator.clipboard.writeText(safeLink);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } = {}) {
+  if (!update || update.sessionId !== state.sessionId) return;
+  if (!state.ready) {
+    pendingUploadUpdate = update;
+    return;
+  }
+
+  const nextState = update.uploadState || 'idle';
+
+  if (nextState === 'uploading') {
+    if (state.mode === 'existing' || state.uploadState === 'uploaded') return;
+    state.uploadState = 'uploading';
+    state.uploadError = '';
+    state.uploadErrorCode = '';
+    state.uploadRequiresReauth = false;
+    if (!state.saving) {
+      showStatusPill('warn', 'Uploading to Google Drive...');
+      updateUiState();
+    }
+    startUploadStatusPoll();
+    return;
+  }
+
+  if (nextState === 'uploaded') {
+    stopUploadStatusPoll();
+    const alreadyApplied =
+      state.uploadState === 'uploaded' &&
+      state.mode === 'existing' &&
+      state.fileId === update.fileId &&
+      !fromInitialLoad;
+    if (alreadyApplied) return;
+
+    const userRenamed =
+      getDesiredFilename() !== state.savedFilename || !els.filenameEditing.hidden;
+
+    state.mode = 'existing';
+    state.fileId = update.fileId || state.fileId;
+    state.folderName = update.folderName || state.folderName;
+    state.webViewLink = update.webViewLink || state.webViewLink;
+    state.savedFilename = sanitizeScreenshotFilename(
+      update.filename || state.savedFilename
+    );
+    state.uploadState = 'uploaded';
+    state.uploadError = '';
+    state.uploadErrorCode = '';
+    state.uploadRequiresReauth = false;
+    state.driveMatchesInitial = true;
+
+    if (!userRenamed) {
+      syncFilenameDisplay(state.savedFilename);
+    }
+
+    // If the user already clicked Save while upload was in flight, let performSave own the status pill
+    if (state.saving) {
+      updateUiState();
+      return;
+    }
+
+    const copied = await tryAutoCopyShareLink();
+
+    if (state.saving) {
+      updateUiState();
+      return;
+    }
+
+    if (hasUnsavedChanges()) {
+      if (!els.statusPill.classList.contains('err')) {
+        if (statusPillTimer) {
+          clearTimeout(statusPillTimer);
+          statusPillTimer = null;
+        }
+        els.statusPill.hidden = true;
+        els.statusPill.title = '';
+      }
+      updateUiState();
+      return;
+    }
+
+    showStatusPill(
+      'ok',
+      copied ? 'Saved to Google Drive \u00b7 Link copied' : 'Saved to Google Drive',
+      5000
+    );
+    updateUiState();
+    return;
+  }
+
+  if (nextState === 'failed') {
+    stopUploadStatusPoll();
+    if (state.mode === 'existing' || state.uploadState === 'uploaded') return;
+    const nextError =
+      update.uploadError ||
+      'Could not upload to Google Drive. Click Retry or Download locally.';
+    const alreadyApplied =
+      state.uploadState === 'failed' &&
+      state.uploadError === nextError &&
+      !fromInitialLoad;
+    if (alreadyApplied) return;
+
+    state.uploadState = 'failed';
+    state.uploadError = nextError;
+    state.uploadErrorCode = update.uploadErrorCode || 'UPLOAD_ERROR';
+    state.uploadRequiresReauth = Boolean(update.uploadRequiresReauth);
+    if (state.uploadRequiresReauth) {
+      state.signedIn = false;
+    }
+
+    if (!state.saving) {
+      showStatusPill('err', state.uploadError);
+      updateUiState();
+    }
+  }
+}
+
 async function performSave(saveMode) {
   if (!state.ready || state.saving) return;
-  await commitActiveTextIfNeeded();
-
-  const desiredFilename = getDesiredFilename();
-  syncFilenameDisplay(desiredFilename);
-
-  const wasSignedOut = !state.signedIn;
-  const effectiveMode = wasSignedOut ? 'new' : state.mode;
-  const effectiveSaveMode = wasSignedOut ? 'new' : saveMode;
-  const needImagePayload =
-    wasSignedOut ||
-    effectiveMode === 'new' ||
-    effectiveSaveMode === 'new' ||
-    state.imageModifiedSinceSave;
-
+  // Set saving lock synchronously before any await so rapid double-clicks / Ctrl+S cannot duplicate uploads
   state.saving = true;
   updateUiState();
-  showStatusPill(
-    'warn',
-    wasSignedOut
-      ? 'Connecting to Google Drive...'
-      : effectiveSaveMode === 'replace' && effectiveMode === 'existing'
-      ? 'Replacing in Google Drive...'
-      : 'Uploading to Google Drive...'
-  );
 
   try {
+    await commitActiveTextIfNeeded();
+
+    const desiredFilename = getDesiredFilename();
+    syncFilenameDisplay(desiredFilename);
+
+    const wasSignedOut = !state.signedIn;
+    const wasUploadingInitial = state.signedIn && state.uploadState === 'uploading';
+    const effectiveMode = wasSignedOut ? 'new' : state.mode;
+    const effectiveSaveMode = wasSignedOut ? 'new' : saveMode;
+    const pixelsModified = Boolean(state.imageModifiedSinceSave);
+    const needImagePayload =
+      wasSignedOut ||
+      effectiveMode === 'new' ||
+      effectiveSaveMode === 'new' ||
+      pixelsModified;
+    const sendImageModified =
+      wasSignedOut || effectiveSaveMode === 'new' || pixelsModified;
+
+    showStatusPill(
+      'warn',
+      wasSignedOut
+        ? 'Connecting to Google Drive...'
+        : wasUploadingInitial
+        ? 'Saving to Google Drive...'
+        : effectiveSaveMode === 'replace' && effectiveMode === 'existing'
+        ? 'Replacing in Google Drive...'
+        : 'Uploading to Google Drive...'
+    );
+
     const dataUrl = needImagePayload ? await exportCanvasDataUrl() : '';
     const res = await sendRuntimeMessage({
       type: 'SAVE_EDITED_SCREENSHOT',
       sessionId: state.sessionId,
       filename: desiredFilename,
       dataUrl,
-      imageModified: needImagePayload,
+      imageModified: sendImageModified,
       saveMode: effectiveSaveMode,
       sessionContext: {
         mode: effectiveMode,
@@ -934,20 +1206,31 @@ async function performSave(saveMode) {
         showStatusPill('warn', 'Sign-in cancelled', 3500);
         return;
       }
-      throw new Error(res.error || 'Failed to save screenshot to Google Drive.');
+      const err = new Error(res.error || 'Failed to save screenshot to Google Drive.');
+      err.code = res.code || 'UPLOAD_ERROR';
+      err.requiresReauth = Boolean(res.requiresReauth);
+      throw err;
     }
 
+    stopUploadStatusPoll();
     state.signedIn = true;
     state.mode = 'existing';
+    state.uploadState = 'uploaded';
+    state.uploadError = '';
+    state.uploadErrorCode = '';
+    state.uploadRequiresReauth = false;
     state.fileId = res.upload.id;
     state.savedFilename = res.upload.name;
     state.folderName = res.upload.folderName || state.folderName;
     state.webViewLink = res.upload.webViewLink || state.webViewLink;
-    if (needImagePayload) {
+    const uploadedCanvasPixels = res.action === 'created' || pixelsModified;
+    if (uploadedCanvasPixels) {
       state.driveMatchesInitial = state.isAtOriginalCapture;
       for (const entry of state.undoStack) {
         entry.imageModifiedSinceSave = true;
       }
+    } else if (wasUploadingInitial) {
+      state.driveMatchesInitial = state.isAtOriginalCapture;
     }
     state.imageModifiedSinceSave = false;
     syncFilenameDisplay(state.savedFilename);
@@ -971,6 +1254,26 @@ async function performSave(saveMode) {
       5000
     );
   } catch (err) {
+    if (err.requiresReauth) {
+      stopUploadStatusPoll();
+      state.signedIn = false;
+      state.mode = 'new';
+      state.fileId = null;
+      state.webViewLink = '';
+      state.driveMatchesInitial = false;
+      state.uploadState = 'failed';
+      state.uploadError =
+        err.message || 'Your Google Drive session expired. Click "Save to Google Drive" again.';
+      state.uploadErrorCode = err.code || 'AUTH_REVOKED';
+      state.uploadRequiresReauth = true;
+    } else if (state.mode === 'new') {
+      stopUploadStatusPoll();
+      state.uploadState = 'failed';
+      state.uploadError =
+        err.message || 'Could not save to Google Drive. Use "Download" to save locally.';
+      state.uploadErrorCode = err.code || 'UPLOAD_ERROR';
+      state.uploadRequiresReauth = false;
+    }
     showStatusPill(
       'err',
       err.message || 'Could not save to Google Drive. Use "Download" to save locally.'
@@ -982,18 +1285,31 @@ async function performSave(saveMode) {
 }
 
 els.saveDriveBtn.addEventListener('click', async () => {
-  if (!state.ready || state.saving) return;
-  await commitActiveTextIfNeeded();
+  if (!state.ready || state.saving || saveClickPending) return;
+  saveClickPending = true;
+  try {
+    await commitActiveTextIfNeeded();
 
-  if (state.signedIn && state.mode === 'existing') {
-    if (!hasUnsavedChanges()) {
+    if (state.signedIn && state.mode === 'existing') {
+      if (!hasUnsavedChanges()) {
+        return;
+      }
+      els.confirmReplaceDialog.showModal();
       return;
     }
-    els.confirmReplaceDialog.showModal();
-    return;
-  }
 
-  await performSave('new');
+    if (state.signedIn && (state.uploadState === 'uploading' || state.uploadState === 'failed')) {
+      if (state.uploadState === 'uploading' && !hasUnsavedChanges()) {
+        return;
+      }
+      await performSave('replace');
+      return;
+    }
+
+    await performSave('new');
+  } finally {
+    saveClickPending = false;
+  }
 });
 
 els.cancelReplaceBtn.addEventListener('click', () => {
@@ -1094,6 +1410,7 @@ window.addEventListener('beforeunload', (event) => {
 });
 
 window.addEventListener('pagehide', () => {
+  stopUploadStatusPoll();
   clearUndoStack();
   state.initialBitmap?.close?.();
   state.initialBitmap = null;
@@ -1138,6 +1455,10 @@ async function initEditor() {
     state.pageTitle = res.session.pageTitle || '';
     state.incognito = Boolean(res.session.incognito);
     state.autoCopyLink = Boolean(res.session.autoCopyLink);
+    state.uploadState = res.session.uploadState || 'idle';
+    state.uploadError = res.session.uploadError || '';
+    state.uploadErrorCode = res.session.uploadErrorCode || '';
+    state.uploadRequiresReauth = Boolean(res.session.uploadRequiresReauth);
 
     syncFilenameDisplay(state.savedFilename);
 
@@ -1151,22 +1472,35 @@ async function initEditor() {
     els.canvasWrap.hidden = false;
     updateUiState();
 
-    if (res.session.justUploaded) {
-      let copied = false;
-      const safeLink = safeHttpsUrl(state.webViewLink);
-      if (state.autoCopyLink && safeLink && navigator.clipboard?.writeText) {
-        try {
-          await navigator.clipboard.writeText(safeLink);
-          copied = true;
-        } catch {
-          // Ignore clipboard error when tab is unfocused
-        }
-      }
-      showStatusPill(
-        'ok',
-        copied ? 'Saved to Google Drive \u00b7 Link copied' : 'Saved to Google Drive',
-        5000
+    if (pendingUploadUpdate && pendingUploadUpdate.sessionId === state.sessionId) {
+      const queued = pendingUploadUpdate;
+      pendingUploadUpdate = null;
+      await applyBackgroundUploadUpdate(queued, { fromInitialLoad: true });
+    } else if (
+      state.uploadState === 'uploading' ||
+      state.uploadState === 'failed' ||
+      res.session.justUploaded
+    ) {
+      await applyBackgroundUploadUpdate(
+        {
+          sessionId: state.sessionId,
+          mode: state.mode,
+          fileId: state.fileId,
+          filename: state.savedFilename,
+          folderName: state.folderName,
+          webViewLink: state.webViewLink,
+          uploadState: res.session.justUploaded ? 'uploaded' : state.uploadState,
+          uploadError: state.uploadError,
+          uploadErrorCode: state.uploadErrorCode,
+          uploadRequiresReauth: state.uploadRequiresReauth,
+        },
+        { fromInitialLoad: true }
       );
+    }
+
+    if (pendingAuthRefresh) {
+      pendingAuthRefresh = false;
+      await syncAuthStateFromWorker();
     }
   } catch (err) {
     els.stageSpinner.hidden = true;
@@ -1176,33 +1510,44 @@ async function initEditor() {
   }
 }
 
+if (chrome?.runtime?.onMessage?.addListener) {
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (sender?.id && chrome?.runtime?.id && sender.id !== chrome.runtime.id) return;
+    if (sender?.tab) return;
+    if (
+      message?.type === 'EDITOR_UPLOAD_STATUS' &&
+      message.sessionId &&
+      message.sessionId === state.sessionId
+    ) {
+      applyBackgroundUploadUpdate(message);
+    }
+  });
+}
+
 if (chrome?.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener(async (changes, areaName) => {
-    if (areaName !== 'local' || state.saving || !state.ready) return;
+    if (areaName === 'session' && changes.editorSessionsById?.newValue) {
+      if (state.saving && state.mode === 'existing') return;
+      const updatedSession = changes.editorSessionsById.newValue[state.sessionId];
+      if (
+        updatedSession &&
+        (updatedSession.uploadState === 'uploaded' || updatedSession.uploadState === 'failed')
+      ) {
+        await applyBackgroundUploadUpdate(updatedSession);
+      }
+      return;
+    }
+
+    if (areaName !== 'local') return;
     if (!changes.signedOut && !changes.userProfile) return;
 
-    try {
-      const res = await sendRuntimeMessage({ type: 'GET_STATE' });
-      if (!res?.ok || state.saving) return;
-
-      const nowSignedIn = Boolean(res.session?.signedIn);
-      if (!nowSignedIn) {
-        state.signedIn = false;
-        state.mode = 'new';
-        state.fileId = null;
-        state.webViewLink = '';
-        state.driveMatchesInitial = false;
-      } else {
-        state.signedIn = true;
-        if (res.settings) {
-          state.autoCopyLink = Boolean(res.settings.autoCopyLink);
-          state.folderName = res.settings.folderName || state.folderName;
-        }
-      }
-      updateUiState();
-    } catch {
-      // Ignore transient background state error
+    if (!state.ready) {
+      pendingAuthRefresh = true;
+      return;
     }
+    if (state.saving) return;
+
+    await syncAuthStateFromWorker();
   });
 }
 

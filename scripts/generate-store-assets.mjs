@@ -169,9 +169,41 @@ function createMiniThumbDataUri(accent = '#1a73e8', dark = false) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
+function resolveChromiumBinary() {
+  if (process.env.CHROMIUM_BIN && fs.existsSync(process.env.CHROMIUM_BIN)) {
+    return process.env.CHROMIUM_BIN;
+  }
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const name of ['chromium', 'chromium-browser']) {
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  const pwRoot = '/opt/ms-playwright';
+  if (fs.existsSync(pwRoot)) {
+    const dirs = fs
+      .readdirSync(pwRoot)
+      .filter((d) => d.startsWith('chromium-'))
+      .sort()
+      .reverse();
+    for (const dir of dirs) {
+      const candidate = path.join(pwRoot, dir, 'chrome-linux64', 'chrome');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  for (const name of ['google-chrome', 'google-chrome-stable']) {
+    for (const dir of pathDirs) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return 'chromium';
+}
+
 async function launchChromiumCdp(userDataDir) {
   const proc = spawn(
-    'chromium',
+    resolveChromiumBinary(),
     [
       '--headless=new',
       '--no-sandbox',

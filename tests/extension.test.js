@@ -1236,7 +1236,9 @@ test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, C
       },
     });
 
-    const { registerServiceWorkerListeners } = await import('../background/service-worker.js');
+    const { registerServiceWorkerListeners, waitForInflightUploadForTests } = await import(
+      '../background/service-worker.js'
+    );
     // Re-bind listeners onto current mock instance if already imported
     if (mock.listeners.onMessage.length === 0) {
       registerServiceWorkerListeners();
@@ -1330,26 +1332,47 @@ test('service-worker end-to-end orchestration: onInstalled, OPEN_DRIVE_FOLDER, C
     assert.equal(folderRes.ok, true);
     assert.equal(folderRes.url, 'https://drive.google.com/drive/folders/folder-custom-1');
 
-    // 3. CAPTURE_VISIBLE retries throttled captureVisibleTab, uploads PNG, and records history
+    // 3. CAPTURE_VISIBLE retries throttled captureVisibleTab, opens Editor immediately, uploads PNG in background, and records history
     const capRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
     assert.equal(capRes.ok, true);
-    assert.equal(capRes.upload.id, 'uploaded-1');
-    assert.equal(capRes.recentUploads.length, 1);
+    assert.equal(capRes.openedEditor, true);
+    assert.equal(capRes.uploadingInBackground, true);
+    assert.ok(capRes.sessionId);
+    const bgUpload1 = await waitForInflightUploadForTests(capRes.sessionId);
+    assert.equal(bgUpload1.ok, true);
+    assert.equal(bgUpload1.result.upload.id, 'uploaded-1');
+    assert.equal((await getRecentUploads()).length, 1);
     assert.equal(captureAttempts, 2, 'Should auto-retry once after CAPTURE_THROTTLED');
 
-    // 4. Incognito CAPTURE_VISIBLE uploads to Drive while skipping local history
+    // 4. Incognito CAPTURE_VISIBLE opens Editor and uploads to Drive in background while skipping local history
     activeTabs[0].incognito = true;
     const incogRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
     assert.equal(incogRes.ok, true);
-    assert.equal(incogRes.recentUploads.length, 1, 'Incognito capture must not add to local history');
+    assert.equal(incogRes.openedEditor, true);
+    assert.equal(incogRes.uploadingInBackground, true);
+    const bgUploadIncog = await waitForInflightUploadForTests(incogRes.sessionId);
+    assert.equal(bgUploadIncog.ok, true);
+    assert.equal((await getRecentUploads()).length, 1, 'Incognito capture must not add to local history');
     activeTabs[0].incognito = false;
 
-    // 5. Upload failure stores fallback PNG in memory and GET_FALLBACK_PNG retrieves it
+    // 5. Background upload failure keeps Editor open, records error status, and stores fallback PNG retrievable via GET_FALLBACK_PNG
     driveShouldFailQuota = true;
     const failRes = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 42 });
-    assert.equal(failRes.ok, false);
-    assert.equal(failRes.code, 'DRIVE_QUOTA_EXCEEDED');
-    assert.equal(failRes.hasFallback, true);
+    assert.equal(failRes.ok, true);
+    assert.equal(failRes.openedEditor, true);
+    assert.equal(failRes.uploadingInBackground, true);
+    const bgUploadFail = await waitForInflightUploadForTests(failRes.sessionId);
+    assert.equal(bgUploadFail.ok, false);
+    assert.equal(bgUploadFail.error.code, 'DRIVE_QUOTA_EXCEEDED');
+    assert.equal(bgUploadFail.error.hasFallback, true);
+
+    const statusAfterFail = await mock.dispatchMessage({
+      type: 'GET_EDITOR_UPLOAD_STATUS',
+      sessionId: failRes.sessionId,
+    });
+    assert.equal(statusAfterFail.ok, true);
+    assert.equal(statusAfterFail.uploadState, 'failed');
+    assert.equal(statusAfterFail.uploadErrorCode, 'DRIVE_QUOTA_EXCEEDED');
 
     const fbRes = await mock.dispatchMessage({ type: 'GET_FALLBACK_PNG' });
     assert.equal(fbRes.ok, true);
@@ -2094,8 +2117,9 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     assert.equal(saveViaContextFallback.action, 'replaced');
     assert.equal(saveViaContextFallback.upload.name, 'Renamed_After_Reload.png');
 
-    // 10B. Post-upload auto-open Editor flow (editBeforeUpload = false):
-    //      Uploads immediately to Drive AND opens Editor tab with single-use justUploaded = true
+    // 10B. Instant Editor + parallel background upload flow (editBeforeUpload = false):
+    //      Opens Editor immediately AND uploads in background with single-use justUploaded = true
+    const { waitForInflightUploadForTests } = await import('../background/service-worker.js');
     await mock.dispatchMessage(
       { type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: false } },
       trustedEditorSender
@@ -2103,7 +2127,8 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
     const tabsBeforePostUpload = mock.createdTabs.length;
     const postUploadCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 77 });
     assert.equal(postUploadCap.ok, true);
-    assert.equal(postUploadCap.openedEditorAfterUpload, true);
+    assert.equal(postUploadCap.openedEditor, true);
+    assert.equal(postUploadCap.uploadingInBackground, true);
     assert.ok(postUploadCap.sessionId);
     assert.equal(mock.createdTabs.length, tabsBeforePostUpload + 1);
     assert.match(
@@ -2111,12 +2136,16 @@ test('service-worker security boundary (FORBIDDEN_SENDER), editBeforeUpload flow
       new RegExp(`pages/editor\\.html\\?session=${postUploadCap.sessionId}$`)
     );
 
+    const postUploadResult = await waitForInflightUploadForTests(postUploadCap.sessionId);
+    assert.equal(postUploadResult.ok, true);
+
     const firstPostUploadLoad = await mock.dispatchMessage(
       { type: 'GET_EDITOR_SESSION', sessionId: postUploadCap.sessionId },
       trustedEditorSender
     );
     assert.equal(firstPostUploadLoad.ok, true);
     assert.equal(firstPostUploadLoad.session.mode, 'existing');
+    assert.equal(firstPostUploadLoad.session.uploadState, 'uploaded');
     assert.equal(firstPostUploadLoad.session.justUploaded, true, 'First editor load after upload must flag justUploaded');
 
     const secondPostUploadLoad = await mock.dispatchMessage(
@@ -2531,11 +2560,15 @@ test('CAPTURE_VISIBLE_FROM_OVERLAY security gate: blocks uninitiated, cross-tab,
       tabs,
     });
 
-    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
-      '../background/service-worker.js'
-    );
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+      waitForInflightUploadForTests,
+    } = await import('../background/service-worker.js');
     resetInMemoryWorkerStateForTests();
-    registerServiceWorkerListeners();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
 
     globalThis.fetch = async (url, opts = {}) => {
       const u = String(url);
@@ -2610,6 +2643,13 @@ test('CAPTURE_VISIBLE_FROM_OVERLAY security gate: blocks uninitiated, cross-tab,
       tab77Sender
     );
     assert.equal(validCapture.ok, true);
+    assert.equal(validCapture.openedEditor, true);
+    assert.equal(validCapture.uploadingInBackground, true);
+    assert.ok(validCapture.sessionId);
+
+    const bgOverlayRes = await waitForInflightUploadForTests(validCapture.sessionId);
+    assert.equal(bgOverlayRes.ok, true);
+    await new Promise((r) => setTimeout(r, 10));
 
     const successToast = mock.sentTabMessages.find(
       (m) =>
@@ -2920,6 +2960,10 @@ test('all repository source, UI, and documentation files contain no em dashes or
       !text.toLowerCase().includes('github.com'),
       `${staticRel} must not contain any github.com URLs`
     );
+    assert.ok(
+      !text.includes('Open editor before uploading'),
+      `${staticRel} must not retain legacy "Open editor before uploading" label`
+    );
     if (staticRel.endsWith('.html')) {
       const withoutFooters = text.replace(/<footer\b[\s\S]*?<\/footer>/gi, '');
       assert.ok(
@@ -2932,6 +2976,22 @@ test('all repository source, UI, and documentation files contain no em dashes or
         `${staticRel} must not mention @_simplyakm in prose`
       );
     }
+  }
+
+  // Verify Option B Privacy Toggle label ("Only upload when I click Save") across popup UI & all synced docs
+  for (const toggleDocRel of [
+    'popup/popup.html',
+    'README.md',
+    'docs/index.html',
+    'docs/llms.txt',
+    'pages/welcome.html',
+    'store-assets/STORE_LISTING_SEO.md',
+  ]) {
+    const toggleText = fs.readFileSync(path.join(rootDir, toggleDocRel), 'utf8');
+    assert.ok(
+      toggleText.includes('Only upload when I click Save'),
+      `${toggleDocRel} must document "Only upload when I click Save"`
+    );
   }
 });
 
@@ -3029,11 +3089,15 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
       ],
     });
 
-    const { registerServiceWorkerListeners, resetInMemoryWorkerStateForTests } = await import(
-      '../background/service-worker.js'
-    );
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+      waitForInflightUploadForTests,
+    } = await import('../background/service-worker.js');
     resetInMemoryWorkerStateForTests();
-    registerServiceWorkerListeners();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
 
     globalThis.fetch = async (url, opts = {}) => {
       const u = String(url);
@@ -3079,11 +3143,14 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
     assert.ok(pngKeys.includes(`preUploadPng_${s2.sessionId}`));
     assert.ok(pngKeys.includes(`preUploadPng_${s3.sessionId}`));
 
-    // Switch editBeforeUpload off and capture in Incognito -> opens post-upload Editor while keeping recentUploads empty
+    // Switch editBeforeUpload off and capture in Incognito -> opens Editor immediately + uploads in background while keeping recentUploads empty
     await mock.dispatchMessage({ type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: false } });
     const incogCap = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 91 });
     assert.equal(incogCap.ok, true);
-    assert.equal(incogCap.openedEditorAfterUpload, true);
+    assert.equal(incogCap.openedEditor, true);
+    assert.equal(incogCap.uploadingInBackground, true);
+    const incogBg = await waitForInflightUploadForTests(incogCap.sessionId);
+    assert.equal(incogBg.ok, true);
     assert.equal((await getRecentUploads()).length, 0, 'Incognito upload must never store local recentUploads');
 
     const trustedSender = {
@@ -3096,6 +3163,7 @@ test('optimizations and edge cases: formatShortcutDisplay, zero-fetch base64 dec
     );
     assert.equal(incogEditor.ok, true);
     assert.equal(incogEditor.session.incognito, true);
+    assert.equal(incogEditor.session.uploadState, 'uploaded');
     assert.equal(incogEditor.session.justUploaded, true);
   } finally {
     globalThis.fetch = origFetch;
@@ -3930,3 +3998,511 @@ test('contextMenus lifecycle: single top-level Take Screenshot item, concurrency
     globalThis.OffscreenCanvas = origOffscreenCanvas;
   }
 });
+
+test('instant editor open + parallel background Drive upload: in-flight Save deduplication, MV3 SW restart recovery, failure Retry recovery, mid-upload signOut isolation, and Only upload when I click Save toggle', async () => {
+  const origFetch = globalThis.fetch;
+  try {
+    const activeTab = {
+      id: 505,
+      windowId: 9,
+      active: true,
+      url: 'https://app.example.com/dashboard',
+      title: 'Analytics Dashboard',
+      incognito: false,
+    };
+
+    const mock = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: {
+          email: 'parallel@example.com',
+          name: 'Parallel Tester',
+          verifiedAt: Date.now(),
+        },
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          folderId: 'folder-par-1',
+          folderWebViewLink: 'https://drive.google.com/drive/folders/folder-par-1',
+          folderCacheByEmail: {
+            'parallel@example.com': {
+              folderName: 'Chrome_SaveShot_ScreenShots',
+              folderId: 'folder-par-1',
+              folderWebViewLink: 'https://drive.google.com/drive/folders/folder-par-1',
+            },
+          },
+          autoCopyLink: true,
+          editBeforeUpload: false,
+          theme: 'auto',
+        },
+      },
+      tabs: [activeTab],
+    });
+
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+      waitForInflightUploadForTests,
+    } = await import('../background/service-worker.js');
+    resetInMemoryWorkerStateForTests();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
+
+    // Observe EDITOR_UPLOAD_STATUS broadcasts sent from the service worker
+    const uploadBroadcasts = [];
+    mock.listeners.onMessage.push((msg) => {
+      if (msg?.type === 'EDITOR_UPLOAD_STATUS') {
+        uploadBroadcasts.push(structuredClone(msg));
+      }
+    });
+
+    const trustedSender = {
+      url: 'chrome-extension://testext/pages/editor.html?session=live',
+      tab: { id: 800, url: 'chrome-extension://testext/pages/editor.html?session=live' },
+    };
+    const untrustedSender = {
+      url: 'https://evil.example/page',
+      tab: { id: 505, url: 'https://evil.example/page' },
+    };
+
+    const driveRequests = [];
+    let postCounter = 0;
+    let deferredPostGate = null;
+    let failNextPostMode = '';
+
+    const createDeferred = () => {
+      let resolve;
+      const promise = new Promise((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    };
+
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (u.startsWith('data:image/')) return origFetch(url, opts);
+      const method = opts.method || 'GET';
+      driveRequests.push({ method, url: u });
+
+      if (u.includes('/drive/v3/about')) {
+        return new Response(
+          JSON.stringify({
+            user: { displayName: 'Parallel Tester', emailAddress: 'parallel@example.com' },
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('/drive/v3/files/folder-par-1')) {
+        return new Response(
+          JSON.stringify({
+            id: 'folder-par-1',
+            name: 'Chrome_SaveShot_ScreenShots',
+            trashed: false,
+            webViewLink: 'https://drive.google.com/drive/folders/folder-par-1',
+          }),
+          { status: 200 }
+        );
+      }
+      if (method === 'POST' && u.includes('/upload/drive/v3/files')) {
+        if (deferredPostGate) {
+          const gate = deferredPostGate;
+          deferredPostGate = null;
+          await gate.promise;
+        }
+        if (failNextPostMode === 'quota') {
+          failNextPostMode = '';
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: 'The user Drive storage quota has been exceeded.',
+                errors: [{ reason: 'storageQuotaExceeded' }],
+              },
+            }),
+            { status: 403 }
+          );
+        }
+        postCounter += 1;
+        const id = `bg_file_${postCounter}`;
+        const bodyText = await opts.body.text();
+        const m = bodyText.match(/"name":"([^"]+)"/);
+        return new Response(
+          JSON.stringify({
+            id,
+            name: m ? m[1] : `BgShot_${postCounter}.png`,
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            createdTime: '2026-11-25T10:00:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (method === 'PATCH' && u.includes('/upload/drive/v3/files/')) {
+        const id = u.split('/upload/drive/v3/files/')[1].split('?')[0];
+        const bodyText = await opts.body.text();
+        const m = bodyText.match(/"name":"([^"]+)"/);
+        return new Response(
+          JSON.stringify({
+            id,
+            name: m ? m[1] : 'Replaced.png',
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            modifiedTime: '2026-11-25T10:01:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (method === 'PATCH' && u.includes('/drive/v3/files/')) {
+        const id = u.split('/drive/v3/files/')[1].split('?')[0];
+        const parsed = JSON.parse(opts.body);
+        return new Response(
+          JSON.stringify({
+            id,
+            name: parsed.name,
+            webViewLink: `https://drive.google.com/file/d/${id}/view`,
+            modifiedTime: '2026-11-25T10:02:00.000Z',
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return new Response('', { status: 200 });
+      }
+      throw new Error(`Unhandled fetch in parallel upload test: ${method} ${u}`);
+    };
+
+    // Security check: untrusted webpage sender cannot query GET_EDITOR_UPLOAD_STATUS
+    const blockedStatus = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_UPLOAD_STATUS', sessionId: '12345678-1234-1234-1234-1234567890ab' },
+      untrustedSender
+    );
+    assert.equal(blockedStatus.ok, false);
+    assert.equal(blockedStatus.code, 'FORBIDDEN_SENDER');
+
+    // 1. Instant Editor open while background upload is still in flight, then live EDITOR_UPLOAD_STATUS push on completion
+    const gate1 = createDeferred();
+    deferredPostGate = gate1;
+    const cap1 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(cap1.ok, true);
+    assert.equal(cap1.openedEditor, true, 'Editor must open immediately without waiting for Drive upload');
+    assert.equal(cap1.uploadingInBackground, true);
+
+    const session1Init = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: cap1.sessionId },
+      trustedSender
+    );
+    assert.equal(session1Init.ok, true);
+    assert.equal(session1Init.session.mode, 'new');
+    assert.equal(session1Init.session.uploadState, 'uploading');
+    assert.equal(session1Init.session.fileId, null);
+    assert.equal(session1Init.dataUrl, TINY_PNG_DATA_URL);
+
+    // Release Drive POST -> broadcasts uploaded status & transitions session to existing
+    gate1.resolve();
+    const bg1 = await waitForInflightUploadForTests(cap1.sessionId);
+    assert.equal(bg1.ok, true);
+    assert.equal(bg1.result.upload.id, 'bg_file_1');
+
+    const broadcast1 = uploadBroadcasts.find((b) => b.sessionId === cap1.sessionId);
+    assert.ok(broadcast1, 'Must broadcast EDITOR_UPLOAD_STATUS when background upload finishes');
+    assert.equal(broadcast1.uploadState, 'uploaded');
+    assert.equal(broadcast1.fileId, 'bg_file_1');
+    assert.equal(broadcast1.webViewLink, 'https://drive.google.com/file/d/bg_file_1/view');
+
+    const status1 = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_UPLOAD_STATUS', sessionId: cap1.sessionId },
+      trustedSender
+    );
+    assert.equal(status1.ok, true);
+    assert.equal(status1.mode, 'existing');
+    assert.equal(status1.uploadState, 'uploaded');
+    assert.equal(status1.fileId, 'bg_file_1');
+
+    // 2. Race safety (pixel edit): clicking Save while initial background upload is in flight awaits upload then PATCHes exact fileId (0 duplicates)
+    const gate2 = createDeferred();
+    deferredPostGate = gate2;
+    const postsBefore2 = driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length;
+    const cap2 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(cap2.ok, true);
+    assert.equal(cap2.uploadingInBackground, true);
+
+    // Trigger Save while initial POST is still blocked on gate2
+    const inflightSavePromise = mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: cap2.sessionId,
+        filename: 'Edited_InFlight.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+      },
+      trustedSender
+    );
+    await new Promise((r) => setTimeout(r, 25));
+    const patchesBeforeRelease = driveRequests.filter((r) => r.method === 'PATCH').length;
+    assert.equal(patchesBeforeRelease, 0, 'PATCH must wait until in-flight initial upload completes');
+
+    gate2.resolve();
+    const saveRes2 = await inflightSavePromise;
+    assert.equal(saveRes2.ok, true);
+    assert.equal(saveRes2.action, 'replaced', 'In-flight Save must PATCH the initial file instead of creating a duplicate');
+    assert.equal(saveRes2.upload.id, 'bg_file_2');
+    assert.equal(saveRes2.upload.name, 'Edited_InFlight.png');
+    const postsAfter2 = driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length;
+    assert.equal(postsAfter2 - postsBefore2, 1, 'Strictly 1 POST total (zero duplicate Drive files)');
+    assert.match(
+      driveRequests[driveRequests.length - 1].url,
+      /\/upload\/drive\/v3\/files\/bg_file_2\?uploadType=multipart/
+    );
+
+    // 3. Race safety (rename-only): renaming while initial upload is in flight awaits upload then uses fast metadata-only PATCH
+    const gate3 = createDeferred();
+    deferredPostGate = gate3;
+    const cap3 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    const inflightRenamePromise = mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: cap3.sessionId,
+        filename: 'Renamed_InFlight',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: false,
+        saveMode: 'replace',
+      },
+      trustedSender
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    gate3.resolve();
+    const renameRes3 = await inflightRenamePromise;
+    assert.equal(renameRes3.ok, true);
+    assert.equal(renameRes3.action, 'replaced');
+    assert.equal(renameRes3.upload.id, 'bg_file_3');
+    assert.equal(renameRes3.upload.name, 'Renamed_InFlight.png');
+    const lastReq3 = driveRequests[driveRequests.length - 1];
+    assert.equal(lastReq3.method, 'PATCH');
+    assert.ok(
+      lastReq3.url.includes('/drive/v3/files/bg_file_3') && !lastReq3.url.includes('/upload/'),
+      'In-flight rename-only Save must use metadata-only PATCH'
+    );
+
+    // 4A. MV3 SW idle restart AFTER background upload finished: stale sessionContext still PATCHes persisted fileId (0 duplicates)
+    resetInMemoryWorkerStateForTests();
+    const postsBeforeSwRestart = driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length;
+    const saveAfterSwRestart = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: cap1.sessionId,
+        filename: 'After_SW_Restart.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+        sessionContext: { mode: 'new', fileId: null, filename: 'Stale.png' },
+      },
+      trustedSender
+    );
+    assert.equal(saveAfterSwRestart.ok, true);
+    assert.equal(saveAfterSwRestart.action, 'replaced');
+    assert.equal(saveAfterSwRestart.upload.id, 'bg_file_1');
+    const postsAfterSwRestart = driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length;
+    assert.equal(postsAfterSwRestart, postsBeforeSwRestart, 'Must not POST a duplicate after SW idle restart');
+
+    // 4B. MV3 SW crash MID-UPLOAD (RAM wiped while uploadState === 'uploading'): reconciles to UPLOAD_INTERRUPTED and Retry succeeds cleanly
+    const gate4 = createDeferred();
+    deferredPostGate = gate4;
+    const cap4 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    for (let i = 0; i < 20 && deferredPostGate === gate4; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.equal(deferredPostGate, null, 'cap4 background upload must be in flight at POST before simulated SW crash');
+    resetInMemoryWorkerStateForTests();
+    const interruptedStatus = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_UPLOAD_STATUS', sessionId: cap4.sessionId },
+      trustedSender
+    );
+    assert.equal(interruptedStatus.ok, true);
+    assert.equal(interruptedStatus.uploadState, 'failed');
+    assert.equal(interruptedStatus.uploadErrorCode, 'UPLOAD_INTERRUPTED');
+
+    const retryInterrupted = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: cap4.sessionId,
+        filename: 'Recovered_After_Crash.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+      },
+      trustedSender
+    );
+    assert.equal(retryInterrupted.ok, true);
+    assert.equal(retryInterrupted.action, 'created');
+    assert.equal(retryInterrupted.upload.name, 'Recovered_After_Crash.png');
+    gate4.resolve();
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 5. Background upload failure (Drive quota full) keeps preUploadPng intact, broadcasts failed status, and Retry recovers cleanly
+    failNextPostMode = 'quota';
+    const cap5 = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(cap5.ok, true);
+    assert.equal(cap5.openedEditor, true);
+    const bg5 = await waitForInflightUploadForTests(cap5.sessionId);
+    assert.equal(bg5.ok, false);
+    assert.equal(bg5.error.code, 'DRIVE_QUOTA_EXCEEDED');
+
+    const failedBroadcast = uploadBroadcasts.find(
+      (b) => b.sessionId === cap5.sessionId && b.uploadState === 'failed'
+    );
+    assert.ok(failedBroadcast, 'Must broadcast failed status pill info to Editor');
+    assert.equal(failedBroadcast.uploadErrorCode, 'DRIVE_QUOTA_EXCEEDED');
+
+    const sessionAfterQuotaFail = await globalThis.chrome.storage.session.get(`preUploadPng_${cap5.sessionId}`);
+    assert.ok(
+      sessionAfterQuotaFail[`preUploadPng_${cap5.sessionId}`]?.startsWith('data:image/png;base64,'),
+      'Failed background upload must preserve preUploadPng in session storage for zero data loss'
+    );
+
+    const retryQuota = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: cap5.sessionId,
+        filename: 'Retried_After_Quota.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+      },
+      trustedSender
+    );
+    assert.equal(retryQuota.ok, true);
+    assert.equal(retryQuota.action, 'created');
+    assert.equal(retryQuota.upload.name, 'Retried_After_Quota.png');
+
+    // 6. Option B Privacy Toggle ("Only upload when I click Save", storage key editBeforeUpload) prevents background upload
+    const toggleRes = await mock.dispatchMessage(
+      { type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: true } },
+      trustedSender
+    );
+    assert.equal(toggleRes.ok, true);
+    assert.equal(toggleRes.settings.editBeforeUpload, true);
+
+    const postsBeforeManual = driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length;
+    const capManual = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(capManual.ok, true);
+    assert.equal(capManual.openedEditor, true);
+    assert.equal(capManual.uploadingInBackground, false, 'Manual-save mode must not start background upload');
+
+    const manualLoad = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: capManual.sessionId },
+      trustedSender
+    );
+    assert.equal(manualLoad.ok, true);
+    assert.equal(manualLoad.session.mode, 'new');
+    assert.equal(manualLoad.session.uploadState, 'idle');
+    assert.equal(
+      driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length,
+      postsBeforeManual,
+      'Zero bytes may upload to Drive while Only upload when I click Save is enabled'
+    );
+
+    // 7. Prototype-key sessionId rejection (e.g. 'constructor')
+    const protoSessionRes = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: 'constructor' },
+      trustedSender
+    );
+    assert.equal(protoSessionRes.ok, false);
+    assert.equal(protoSessionRes.code, 'EDITOR_SESSION_EXPIRED');
+
+    const protoStatusRes = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_UPLOAD_STATUS', sessionId: 'constructor' },
+      trustedSender
+    );
+    assert.equal(protoStatusRes.ok, false);
+    assert.equal(protoStatusRes.code, 'EDITOR_SESSION_EXPIRED');
+
+    // 8. Concurrent double SAVE_EDITED_SCREENSHOT on a 'new' session serializes via inflightSavesBySessionId (0 duplicates)
+    const gateDoubleSave = createDeferred();
+    deferredPostGate = gateDoubleSave;
+    const postsBeforeDouble = driveRequests.filter(
+      (r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')
+    ).length;
+    const capDouble = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(capDouble.uploadingInBackground, false);
+
+    const firstDoubleSave = mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: capDouble.sessionId,
+        filename: 'Double_Click_One.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedSender
+    );
+    const secondDoubleSave = mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: capDouble.sessionId,
+        filename: 'Double_Click_Two.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+      },
+      trustedSender
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    gateDoubleSave.resolve();
+    const [doubleRes1, doubleRes2] = await Promise.all([firstDoubleSave, secondDoubleSave]);
+    assert.equal(doubleRes1.ok, true);
+    assert.equal(doubleRes1.action, 'created');
+    assert.equal(doubleRes2.ok, true);
+    assert.equal(doubleRes2.action, 'replaced', 'Second concurrent Save must PATCH the first created fileId');
+    assert.equal(doubleRes2.upload.id, doubleRes1.upload.id);
+    assert.equal(
+      driveRequests.filter((r) => r.method === 'POST' && r.url.includes('/upload/drive/v3/files')).length -
+        postsBeforeDouble,
+      1,
+      'Concurrent double Save must issue strictly 1 Drive POST'
+    );
+
+    // 9. Turn toggle back off to test mid-upload SIGN_OUT racing with both background upload AND an awaiting Save
+    await mock.dispatchMessage(
+      { type: 'UPDATE_SETTINGS', patch: { editBeforeUpload: false } },
+      trustedSender
+    );
+    const gateSignOut = createDeferred();
+    deferredPostGate = gateSignOut;
+    const capSignOut = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 505 });
+    assert.equal(capSignOut.uploadingInBackground, true);
+
+    const saveDuringSignOutPromise = mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: capSignOut.sessionId,
+        filename: 'Should_Not_Resurrect.png',
+        dataUrl: TINY_PNG_DATA_URL,
+        imageModified: true,
+        saveMode: 'replace',
+        sessionContext: { mode: 'new', fileId: null, filename: 'Stale.png' },
+      },
+      trustedSender
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedSender);
+    gateSignOut.resolve();
+    const saveDuringSignOutRes = await saveDuringSignOutPromise;
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.equal(saveDuringSignOutRes.ok, false, 'Save interrupted by SIGN_OUT must fail cleanly');
+    assert.equal(saveDuringSignOutRes.code, 'AUTH_REQUIRED');
+    assert.equal(
+      (await getRecentUploads()).length,
+      0,
+      'Abandoned mid-upload must not write to recentUploads after SIGN_OUT'
+    );
+    const sessionAfterSignOut = await globalThis.chrome.storage.session.get(null);
+    assert.equal(
+      Object.keys(sessionAfterSignOut).length,
+      0,
+      'Abandoned mid-upload must not resurrect chrome.storage.session keys after SIGN_OUT'
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
