@@ -477,7 +477,7 @@ svg {
   transition: background 110ms ease, color 110ms ease;
 }
 
-.ss-seg-item:hover:not(.active) {
+.ss-seg-item:hover:not(.active):not(:disabled) {
   color: var(--ss-text);
 }
 
@@ -485,6 +485,11 @@ svg {
   background: var(--ss-surface-hover);
   color: var(--ss-text);
   box-shadow: var(--ss-seg-active-shadow);
+}
+
+.ss-seg-item:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .ss-author-link {

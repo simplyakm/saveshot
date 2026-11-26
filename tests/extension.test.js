@@ -9,7 +9,9 @@ import {
   buildScreenshotFilename,
   computeCropRect,
   dataUrlToBlob,
+  FULLPAGE_LIMITS,
   isCapturableUrl,
+  planFullPageSlice,
   sanitizeScreenshotFilename,
 } from '../lib/capture.js';
 import {
@@ -44,6 +46,7 @@ import {
   getAccountFolderCache,
   getRecentUploads,
   getSettings,
+  normalizeAutoCopyMode,
   normalizeThemeSetting,
   pruneStorage,
   sanitizeFolderName,
@@ -58,15 +61,24 @@ import {
   getEnvironmentSummary,
 } from '../lib/feedback.js';
 import {
+  addCaptionBarToCanvas,
+  applyPixelateRect,
+  CAPTION_THEMES,
   clampPoint,
   computeArrowGeometry,
+  computePastedImageBox,
+  cropSourceToCanvas,
   EDITOR_TOOLS,
+  FONT_SIZES,
   HIGHLIGHTER_ALPHA,
   HIGHLIGHTER_SIZES,
   normalizeRect,
   parseHexColorInput,
+  PIXELATE_BLOCK_SIZES,
+  REDACT_MODES,
   renderAnnotation,
   sanitizeHexColor,
+  TEXT_STYLES,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
 import {
@@ -124,7 +136,7 @@ function installChromeMock({
     runtime: {
       lastError: null,
       getManifest: () => ({
-        version: '1.2.1',
+        version: '1.3.0',
         oauth2: { client_id: clientId },
       }),
       getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
@@ -883,7 +895,7 @@ test('feedback helper builds compact version info lines across OS/UA variants an
       'Linux'
     );
     const fallbackEnv = getEnvironmentSummary('CustomBrowser/1.0');
-    assert.equal(fallbackEnv.extensionVersion, '1.2.1');
+    assert.equal(fallbackEnv.extensionVersion, '1.3.0');
     assert.equal(fallbackEnv.browser, 'Chromium');
     assert.equal(fallbackEnv.os, 'Unknown OS');
   } finally {
@@ -1013,28 +1025,33 @@ test('Drive folder verification self-heals trashed, renamed, 404, and 403 insuff
 
   // 4. AbortError timeout fails fast without burning retries
   let timeoutCalls = 0;
-  await assert.rejects(
-    () =>
-      fetchDriveWithRetry(
-        'https://www.googleapis.com/drive/v3/files',
-        {},
-        {
-          timeoutMs: 15,
-          maxRetries: 2,
-          baseDelayMs: 5,
-          fetchImpl: (_url, { signal }) =>
-            new Promise((_res, rej) => {
-              timeoutCalls += 1;
-              signal.addEventListener('abort', () => {
-                const err = new Error('The operation was aborted');
-                err.name = 'AbortError';
-                rej(err);
-              });
-            }),
-        }
-      ),
-    (err) => err.code === 'NETWORK_ERROR' && err.reason === 'timeout' && err.retryable === false
-  );
+  const keepAlive = setTimeout(() => {}, 500);
+  try {
+    await assert.rejects(
+      () =>
+        fetchDriveWithRetry(
+          'https://www.googleapis.com/drive/v3/files',
+          {},
+          {
+            timeoutMs: 15,
+            maxRetries: 2,
+            baseDelayMs: 5,
+            fetchImpl: (_url, { signal }) =>
+              new Promise((_res, rej) => {
+                timeoutCalls += 1;
+                signal.addEventListener('abort', () => {
+                  const err = new Error('The operation was aborted');
+                  err.name = 'AbortError';
+                  rej(err);
+                });
+              }),
+          }
+        ),
+      (err) => err.code === 'NETWORK_ERROR' && err.reason === 'timeout' && err.retryable === false
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.equal(timeoutCalls, 1, 'Timed-out request must not retry repeatedly');
 
   // 5. Long Retry-After (> 15s) fails immediately so user gets local fallback right away
@@ -2705,7 +2722,7 @@ test('all repository source, UI, and documentation files contain no em dashes or
 
   const { buildCwsZipBuffer, findLatestCwsZipName } = await import('../scripts/pack-cws.mjs');
   const { version, buffer } = buildCwsZipBuffer();
-  assert.equal(version, '1.2.1');
+  assert.equal(version, '1.3.0');
   const latestZipName = findLatestCwsZipName(rootDir, version);
   assert.ok(latestZipName, 'Expected epoch-stamped CWS zip in store-assets/');
   const zipOnDisk = fs.readFileSync(
@@ -4510,4 +4527,578 @@ test('instant editor open + parallel background Drive upload: in-flight Save ded
     globalThis.fetch = origFetch;
   }
 });
+
+test('v1.3.0 storage autoCopyMode defaults/migration, planFullPageSlice math/caps, and editor-core pixelate/meme/crop/caption/paste', async () => {
+  // 1. Storage autoCopyMode defaults to 'image' irrespective of Drive sign-in, with backward-compatible migration and prototype hardening
+  installChromeMock();
+  const freshSettings = await getSettings();
+  assert.equal(freshSettings.autoCopyMode, 'image', 'Default autoCopyMode must be image');
+  assert.equal(freshSettings.autoCopyLink, false, 'Default autoCopyLink must mirror autoCopyMode === link');
+
+  assert.equal(normalizeAutoCopyMode('image'), 'image');
+  assert.equal(normalizeAutoCopyMode('link'), 'link');
+  assert.equal(normalizeAutoCopyMode('off'), 'off');
+  assert.equal(normalizeAutoCopyMode('__proto__'), 'image');
+  assert.equal(normalizeAutoCopyMode('constructor'), 'image');
+  assert.equal(normalizeAutoCopyMode(null, 'off'), 'off');
+  assert.equal(normalizeAutoCopyMode(undefined, 'link'), 'link');
+  assert.equal(normalizeAutoCopyMode(undefined, undefined), 'image');
+
+  // Legacy migration: persisted { autoCopyLink: false } without autoCopyMode migrates cleanly to 'off'
+  await globalThis.chrome.storage.local.set({ settings: { autoCopyLink: false } });
+  const migratedOff = await getSettings();
+  assert.equal(migratedOff.autoCopyMode, 'off');
+  assert.equal(migratedOff.autoCopyLink, false);
+
+  // Updating autoCopyMode keeps autoCopyLink in sync and ignores prototype keys
+  const linkUpdated = await updateSettings({ autoCopyMode: 'link' });
+  assert.equal(linkUpdated.autoCopyMode, 'link');
+  assert.equal(linkUpdated.autoCopyLink, true);
+  const protoUpdated = await updateSettings({ autoCopyMode: 'toString' });
+  assert.equal(protoUpdated.autoCopyMode, 'link', 'Invalid/prototype autoCopyMode must not overwrite existing valid mode');
+  assert.equal(protoUpdated.autoCopyLink, true);
+
+  // compactUploadRecord preserves 'fullpage' capture mode
+  await addRecentUpload({
+    id: 'fp_1',
+    name: 'FullPage_Test.png',
+    mode: 'fullpage',
+    webViewLink: 'https://drive.google.com/file/d/fp_1/view',
+    createdTime: new Date().toISOString(),
+  });
+  const recent = await getRecentUploads();
+  assert.equal(recent[0].mode, 'fullpage');
+
+  // 2. planFullPageSlice: multi-slice stitching, bottom overlap clamp, SPA inner container scaleY, lockedCanvasWidth pixel cap, MAX_PHYSICAL_HEIGHT cap, and NaN resilience
+  const emptyPlan = planFullPageSlice();
+  assert.equal(emptyPlan.sw, 1);
+  assert.equal(emptyPlan.sh, 1);
+  assert.equal(emptyPlan.skip, false);
+
+  const slice0 = planFullPageSlice({
+    bitmapWidth: 1000,
+    bitmapHeight: 500,
+    viewportWidth: 500,
+    viewportHeight: 250,
+    actualScrollY: 0,
+    prevScrollY: 0,
+    currentPhysicalHeight: 0,
+    sliceIndex: 0,
+  });
+  assert.equal(slice0.sx, 0);
+  assert.equal(slice0.sy, 0);
+  assert.equal(slice0.sw, 1000);
+  assert.equal(slice0.sh, 500);
+  assert.equal(slice0.dy, 0);
+  assert.equal(slice0.nextPhysicalHeight, 500);
+  assert.equal(slice0.truncated, false);
+
+  // Bottom-of-page overlap clamp: only 100 CSS px scrolled (delta = 100 -> 200 physical px at 2x scale)
+  const sliceBottom = planFullPageSlice({
+    bitmapWidth: 1000,
+    bitmapHeight: 500,
+    viewportWidth: 500,
+    viewportHeight: 250,
+    actualScrollY: 600,
+    prevScrollY: 500,
+    currentPhysicalHeight: 1500,
+    sliceIndex: 3,
+  });
+  assert.equal(sliceBottom.sy, 300, 'Bottom overlap must crop from bottom of slice');
+  assert.equal(sliceBottom.sh, 200);
+  assert.equal(sliceBottom.dy, 1500);
+  assert.equal(sliceBottom.nextPhysicalHeight, 1700);
+
+  // Zero scroll advancement skips cleanly
+  const noScroll = planFullPageSlice({
+    bitmapWidth: 1000,
+    bitmapHeight: 500,
+    viewportWidth: 500,
+    viewportHeight: 250,
+    actualScrollY: 600,
+    prevScrollY: 600,
+    currentPhysicalHeight: 1700,
+    sliceIndex: 4,
+  });
+  assert.equal(noScroll.skip, true);
+  assert.equal(noScroll.sh, 0);
+
+  // SPA inner scroll container: window viewport is 800x600 (1600x1200 @2x), inner scroller rect is { left: 200, top: 80, width: 600, height: 480 }
+  const spaSlice0 = planFullPageSlice({
+    bitmapWidth: 1600,
+    bitmapHeight: 1200,
+    viewportWidth: 800,
+    viewportHeight: 600,
+    actualScrollY: 0,
+    prevScrollY: 0,
+    currentPhysicalHeight: 0,
+    sliceIndex: 0,
+    containerRect: { left: 200, top: 80, width: 600, height: 480 },
+  });
+  assert.equal(spaSlice0.sx, 400);
+  assert.equal(spaSlice0.sy, 160);
+  assert.equal(spaSlice0.sw, 1200);
+  assert.equal(spaSlice0.sh, 960);
+
+  // Window narrowing mid-capture: lockedCanvasWidth enforces MAX_TOTAL_PIXELS against final stitched width
+  const narrowCapped = planFullPageSlice({
+    bitmapWidth: 2000,
+    bitmapHeight: 4000,
+    viewportWidth: 1000,
+    viewportHeight: 2000,
+    actualScrollY: 1000,
+    prevScrollY: 0,
+    currentPhysicalHeight: 9500,
+    sliceIndex: 2,
+    lockedCanvasWidth: 4000, // 40M / 4000 = 10000 max height -> remaining height = 500
+  });
+  assert.equal(narrowCapped.sh, 500, 'lockedCanvasWidth must enforce MAX_TOTAL_PIXELS even if window narrowed');
+  assert.equal(narrowCapped.truncated, true);
+  assert.equal(narrowCapped.nextPhysicalHeight, 10000);
+
+  // MAX_PHYSICAL_HEIGHT cap
+  const heightCapped = planFullPageSlice({
+    bitmapWidth: 1000,
+    bitmapHeight: 1000,
+    viewportWidth: 1000,
+    viewportHeight: 1000,
+    actualScrollY: 15500,
+    prevScrollY: 14500,
+    currentPhysicalHeight: FULLPAGE_LIMITS.MAX_PHYSICAL_HEIGHT - 200,
+    sliceIndex: 10,
+  });
+  assert.equal(heightCapped.sh, 200);
+  assert.equal(heightCapped.truncated, true);
+  assert.equal(heightCapped.nextPhysicalHeight, FULLPAGE_LIMITS.MAX_PHYSICAL_HEIGHT);
+
+  // 3. editor-core: balanced-grid applyPixelateRect (zero 1x1 unredacted corner slivers!)
+  assert.ok(EDITOR_TOOLS.includes('crop'));
+  assert.equal(FONT_SIZES.xl, 44);
+  assert.deepEqual(REDACT_MODES, ['solid', 'pixelate']);
+  assert.deepEqual(TEXT_STYLES, ['clean', 'meme']);
+  assert.deepEqual(CAPTION_THEMES, ['light', 'dark']);
+  assert.ok(PIXELATE_BLOCK_SIZES.lg > PIXELATE_BLOCK_SIZES.sm);
+
+  // Create a 33x33 pixel buffer where (32, 32) is a bright red secret pixel and all other pixels are white
+  const W = 33;
+  const H = 33;
+  const buf = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i += 1) {
+    buf[i * 4] = 255;
+    buf[i * 4 + 1] = 255;
+    buf[i * 4 + 2] = 255;
+    buf[i * 4 + 3] = 255;
+  }
+  const secretIdx = (32 * W + 32) * 4;
+  buf[secretIdx] = 255;
+  buf[secretIdx + 1] = 0;
+  buf[secretIdx + 2] = 0;
+  buf[secretIdx + 3] = 255;
+
+  let writtenData = null;
+  const mockPixelCtx = {
+    getImageData: (x, y, w, h) => {
+      const out = new Uint8ClampedArray(w * h * 4);
+      for (let py = 0; py < h; py += 1) {
+        for (let px = 0; px < w; px += 1) {
+          const src = ((y + py) * W + (x + px)) * 4;
+          const dst = (py * w + px) * 4;
+          out[dst] = buf[src];
+          out[dst + 1] = buf[src + 1];
+          out[dst + 2] = buf[src + 2];
+          out[dst + 3] = buf[src + 3];
+        }
+      }
+      return { data: out, width: w, height: h };
+    },
+    putImageData: (imgData) => {
+      writtenData = imgData.data;
+    },
+  };
+
+  const didPixelate = applyPixelateRect(
+    mockPixelCtx,
+    { x: 0, y: 0, width: 33, height: 33 },
+    { blockSize: 16 }
+  );
+  assert.equal(didPixelate, true);
+  assert.ok(writtenData, 'applyPixelateRect must write averaged ImageData');
+  // Because 33 / 16 rounds to 2 balanced blocks (widths 16 and 17), corner pixel (32,32) is averaged across a 17x17 block (289 pixels),
+  // NOT isolated in a 1x1 sliver! Green/Blue channel at (32,32) must be ~254 (NOT 0!).
+  assert.ok(
+    writtenData[secretIdx + 1] >= 250 && writtenData[secretIdx + 2] >= 250,
+    `Corner pixel (32,32) must be averaged with neighbors (got rgb=${writtenData[secretIdx]},${writtenData[secretIdx + 1]},${writtenData[secretIdx + 2]})`
+  );
+
+  // Separate sourceCtx (live preview path) reads from sourceCtx and writes to targetCtx
+  let previewPutCalled = false;
+  const previewTargetCtx = {
+    putImageData: () => {
+      previewPutCalled = true;
+    },
+  };
+  assert.equal(
+    applyPixelateRect(previewTargetCtx, { x: 0, y: 0, width: 33, height: 33 }, { blockSize: 12, sourceCtx: mockPixelCtx }),
+    true
+  );
+  assert.equal(previewPutCalled, true);
+
+  // 4. Meme text rendering uses Impact font, uppercase text, and both strokeText + fillText
+  const textCalls = [];
+  const mockTextCtx = {
+    save() {},
+    restore() {},
+    font: '',
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+    lineJoin: '',
+    miterLimit: 0,
+    textBaseline: '',
+    strokeText(line, x, y) {
+      textCalls.push({ op: 'strokeText', line, x, y, font: this.font, strokeStyle: this.strokeStyle });
+    },
+    fillText(line, x, y) {
+      textCalls.push({ op: 'fillText', line, x, y, font: this.font, fillStyle: this.fillStyle });
+    },
+  };
+  const drewMeme = renderAnnotation(
+    mockTextCtx,
+    { tool: 'text', textStyle: 'meme', text: 'ship it', x: 20, y: 30, color: '#ffffff', fontSize: 44 },
+    800,
+    600
+  );
+  assert.equal(drewMeme, true);
+  assert.equal(textCalls.length, 2);
+  assert.equal(textCalls[0].op, 'strokeText');
+  assert.equal(textCalls[0].line, 'SHIP IT');
+  assert.match(textCalls[0].font, /Impact/);
+  assert.equal(textCalls[1].op, 'fillText');
+  assert.equal(textCalls[1].line, 'SHIP IT');
+
+  // 5. cropSourceToCanvas: valid crop + <4x4 rejection
+  const cropDrawCalls = [];
+  const targetCropCanvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({
+      save() {},
+      restore() {},
+      setTransform() {},
+      clearRect() {},
+      drawImage(...args) {
+        cropDrawCalls.push(args);
+      },
+    }),
+  };
+  const croppedDims = cropSourceToCanvas(
+    { width: 400, height: 300 },
+    { x: 50, y: 40, width: 200, height: 150 },
+    targetCropCanvas
+  );
+  assert.deepEqual(croppedDims, {
+    width: 200,
+    height: 150,
+    rect: { x: 50, y: 40, width: 200, height: 150 },
+  });
+  assert.equal(targetCropCanvas.width, 200);
+  assert.equal(targetCropCanvas.height, 150);
+  assert.equal(cropDrawCalls.length, 1);
+  assert.throws(
+    () => cropSourceToCanvas({ width: 400, height: 300 }, { x: 0, y: 0, width: 3, height: 3 }, targetCropCanvas),
+    /too small/i
+  );
+
+  // 6. addCaptionBarToCanvas: long-token word-wrap, Dark/Light themes, empty rejection, MAX_CAPTION_CANVAS_HEIGHT guard
+  const captionDrawnLines = [];
+  const targetCaptionCanvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({
+      save() {},
+      restore() {},
+      setTransform() {},
+      clearRect() {},
+      font: '',
+      fillStyle: '',
+      textAlign: '',
+      textBaseline: '',
+      measureText: (s) => ({ width: s.length * 14 }),
+      fillRect() {},
+      fillText(line) {
+        captionDrawnLines.push(line);
+      },
+      drawImage() {},
+    }),
+  };
+  const capRes = addCaptionBarToCanvas(
+    { width: 320, height: 240 },
+    { text: 'A'.repeat(40), theme: 'dark' },
+    targetCaptionCanvas
+  );
+  assert.equal(capRes.width, 320);
+  assert.ok(capRes.height > 240, 'Caption bar must expand canvas height');
+  assert.ok(captionDrawnLines.length >= 2, 'Long unbroken token must wrap across multiple lines');
+  assert.throws(
+    () => addCaptionBarToCanvas({ width: 320, height: 240 }, { text: '   \n\t  ', theme: 'light' }, targetCaptionCanvas),
+    /empty/i
+  );
+  assert.throws(
+    () => addCaptionBarToCanvas({ width: 1000, height: 16180 }, { text: 'Too tall', theme: 'light' }, targetCaptionCanvas),
+    /too tall/i
+  );
+
+  // 7. computePastedImageBox: scales large image <= 50% canvas while preserving aspect ratio; centers small sticker 1:1
+  const bigBox = computePastedImageBox(1600, 800, 1000, 600);
+  assert.ok(bigBox.width <= 500 && bigBox.height <= 300);
+  assert.ok(Math.abs(bigBox.width / bigBox.height - 2) < 0.05);
+  const smallBox = computePastedImageBox(120, 80, 1000, 600);
+  assert.equal(smallBox.width, 120);
+  assert.equal(smallBox.height, 80);
+  assert.equal(smallBox.x, 440);
+  assert.equal(smallBox.y, 260);
+});
+
+test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel, SIGN_OUT isolation, Incognito scrub, and security gates', async () => {
+  const origFetch = globalThis.fetch;
+  const origCreateImageBitmap = globalThis.createImageBitmap;
+  const origOffscreenCanvas = globalThis.OffscreenCanvas;
+
+  try {
+    globalThis.createImageBitmap = async (src, sx, sy, sw, sh) => ({
+      width: typeof sw === 'number' ? sw : 1000,
+      height: typeof sh === 'number' ? sh : 500,
+      close() {},
+    });
+    globalThis.OffscreenCanvas = class {
+      constructor(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return { drawImage() {} };
+      }
+      async convertToBlob() {
+        return new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+      }
+    };
+
+    const trustedSender = { url: 'chrome-extension://testext/popup/popup.html' };
+    const webpageSender = { tab: { id: 601, url: 'https://evil.example/page' }, url: 'https://evil.example/page' };
+
+    let stepGate = null;
+    let stepCalls = 0;
+    let restoreCalls = 0;
+
+    const mock = installChromeMock({
+      tabs: [
+        { id: 601, active: true, windowId: 1, url: 'https://docs.example.com/long-article', title: 'Long Article', incognito: false },
+        { id: 602, active: true, windowId: 2, url: 'https://secret.example.com/private', title: 'Secret Private Title', incognito: true },
+      ],
+      initialStore: {
+        settings: {
+          folderName: 'Chrome_SaveShot_ScreenShots',
+          autoCopyMode: 'image',
+          autoCopyLink: false,
+          editBeforeUpload: true,
+        },
+        userProfile: { name: 'Tester', email: 'tester@example.com' },
+        signedOut: false,
+      },
+      onTabSendMessage: async (tabId, message) => {
+        if (message.type === 'FULLPAGE_PREPARE') {
+          return {
+            ok: true,
+            viewportWidth: 500,
+            viewportHeight: 250,
+            scrollStepHeight: 250,
+            scrollTop: 0,
+            maxScrollTop: 500,
+            totalHeight: 750,
+            containerRect: null,
+          };
+        }
+        if (message.type === 'FULLPAGE_STEP') {
+          stepCalls += 1;
+          if (stepGate) {
+            const gate = stepGate;
+            stepGate = null;
+            await gate.promise;
+          }
+          const y = Math.min(500, message.targetScrollTop || 0);
+          return {
+            ok: true,
+            viewportWidth: 500,
+            viewportHeight: 250,
+            scrollStepHeight: 250,
+            scrollTop: y,
+            maxScrollTop: 500,
+            totalHeight: 750,
+            containerRect: null,
+          };
+        }
+        if (message.type === 'FULLPAGE_RESTORE') {
+          restoreCalls += 1;
+          return { ok: true };
+        }
+        return { ok: true };
+      },
+    });
+
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+    } = await import('../background/service-worker.js');
+    resetInMemoryWorkerStateForTests();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
+
+    const makeDeferred = () => {
+      let resolve;
+      const promise = new Promise((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    };
+
+    // 1. FORBIDDEN_SENDER: webpage tab cannot invoke CAPTURE_FULLPAGE
+    const spoofedRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE', tabId: 601 }, webpageSender);
+    assert.equal(spoofedRes.ok, false);
+    assert.equal(spoofedRes.code, 'FORBIDDEN_SENDER');
+
+    // 2. background: true starts immediately after FULLPAGE_PREPARE, blocks concurrent duplicate on same tab,
+    //    ignores cross-tab FULLPAGE_CANCEL, and stops cleanly on same-tab FULLPAGE_CANCEL with captureNotice
+    const gateEsc = makeDeferred();
+    stepGate = gateEsc;
+    const bgStart = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601, background: true },
+      trustedSender
+    );
+    assert.equal(bgStart.ok, true);
+    assert.equal(bgStart.started, true, 'background: true must return started: true immediately so popup can close');
+
+    // Wait deterministically until slice 0 is captured and the loop pauses on gateEsc inside FULLPAGE_STEP
+    for (let i = 0; i < 60 && stepGate === gateEsc; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(stepGate, null, 'Background full-page loop must enter FULLPAGE_STEP after capturing slice 0');
+
+    // Concurrent duplicate on same tab is blocked
+    const dupRes = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601 },
+      trustedSender
+    );
+    assert.equal(dupRes.ok, false);
+    assert.equal(dupRes.code, 'FULLPAGE_IN_PROGRESS');
+
+    // Cross-tab FULLPAGE_CANCEL from tab 602 must be rejected and NOT cancel tab 601's capture
+    const wrongTabCancel = await mock.dispatchMessage(
+      { type: 'FULLPAGE_CANCEL' },
+      { tab: { id: 602 }, url: 'https://secret.example.com/private' }
+    );
+    assert.equal(wrongTabCancel.ok, false);
+
+    // Same-tab FULLPAGE_CANCEL from tab 601 cancels cleanly
+    const rightTabCancel = await mock.dispatchMessage(
+      { type: 'FULLPAGE_CANCEL' },
+      { tab: { id: 601 }, url: 'https://docs.example.com/long-article' }
+    );
+    assert.equal(rightTabCancel.ok, true);
+    gateEsc.resolve();
+
+    // Wait for background full-page capture to open editor tab
+    let openedEditorTab = null;
+    for (let i = 0; i < 60; i += 1) {
+      openedEditorTab = mock.createdTabs.find((t) => t.url.includes('pages/editor.html?session='));
+      if (openedEditorTab) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.ok(openedEditorTab, 'Cancelled full-page capture with slices must still open editor');
+    assert.ok(restoreCalls >= 1, 'FULLPAGE_RESTORE must be called in finally block');
+
+    const sessionId1 = new URL(openedEditorTab.url).searchParams.get('session');
+    const firstLoad = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: sessionId1 },
+      trustedSender
+    );
+    assert.equal(firstLoad.ok, true);
+    assert.equal(firstLoad.session.captureMode, 'fullpage');
+    assert.equal(firstLoad.session.isFreshCapture, true, 'First editor load must see isFreshCapture: true');
+    assert.match(firstLoad.session.captureNotice, /Stopped early/i);
+
+    // Second GET_EDITOR_SESSION (simulating tab reload) consumes one-shot flags
+    const reloadLoad = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: sessionId1 },
+      trustedSender
+    );
+    assert.equal(reloadLoad.ok, true);
+    assert.equal(reloadLoad.session.isFreshCapture, false, 'Tab reload must NOT re-trigger auto-copy');
+    assert.equal(reloadLoad.session.captureNotice, '', 'Tab reload must NOT re-show one-shot captureNotice');
+
+    // 3. Incognito full-page capture scrubs pageUrl and pageTitle from chrome.storage.session
+    const tabsBeforeIncog = mock.createdTabs.length;
+    const incogRes = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 602 },
+      trustedSender
+    );
+    assert.equal(incogRes.ok, true);
+    assert.equal(incogRes.openedEditor, true);
+    assert.equal(mock.createdTabs.length, tabsBeforeIncog + 1);
+
+    const sessionDump = await globalThis.chrome.storage.session.get('editorSessionsById');
+    const incogMeta = sessionDump.editorSessionsById?.[incogRes.sessionId];
+    assert.ok(incogMeta, 'Incognito session metadata should exist');
+    assert.equal(incogMeta.incognito, true);
+    assert.equal(incogMeta.pageUrl, '', 'Incognito pageUrl must be scrubbed from chrome.storage.session');
+    assert.equal(incogMeta.pageTitle, '', 'Incognito pageTitle must be scrubbed from chrome.storage.session');
+
+    // 4. SIGN_OUT mid-full-page capture aborts cleanly with zero session resurrection, zero editor tab, and zero red '!' badge
+    const gateSignOut = makeDeferred();
+    stepGate = gateSignOut;
+    const tabsBeforeSignOut = mock.createdTabs.length;
+    const badgesBeforeSignOut = mock.badges.length;
+
+    const signOutCapStart = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601, background: true },
+      trustedSender
+    );
+    assert.equal(signOutCapStart.ok, true);
+    assert.equal(signOutCapStart.started, true);
+
+    for (let i = 0; i < 60 && stepGate === gateSignOut; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedSender);
+    gateSignOut.resolve();
+    await new Promise((r) => setTimeout(r, 120));
+
+    assert.equal(
+      mock.createdTabs.length,
+      tabsBeforeSignOut,
+      'Full-page capture aborted by SIGN_OUT must not open an editor tab'
+    );
+    const errorBadgesAfterSignOut = mock.badges
+      .slice(badgesBeforeSignOut)
+      .filter((b) => b.text === '!');
+    assert.equal(
+      errorBadgesAfterSignOut.length,
+      0,
+      'SIGN_OUT mid-full-page must not show red ! error badge'
+    );
+    const sessionAfterSignOut = await globalThis.chrome.storage.session.get(null);
+    assert.equal(
+      Object.keys(sessionAfterSignOut).length,
+      0,
+      'SIGN_OUT mid-full-page must not resurrect chrome.storage.session keys'
+    );
+    assert.ok(stepCalls >= 2);
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.createImageBitmap = origCreateImageBitmap;
+    globalThis.OffscreenCanvas = origOffscreenCanvas;
+  }
+});
+
+
 

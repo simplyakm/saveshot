@@ -958,6 +958,414 @@
     void host;
   }
 
+  /* -------------------------------------------------------------------------
+     Full-Page Scrolling Capture Controller (v1.3.0)
+     ------------------------------------------------------------------------- */
+  const FULLPAGE_STYLE_ID = '__saveshot-fullpage-style';
+  const FULLPAGE_PILL_HOST_ID = '__saveshot-fullpage-pill-host';
+
+  let fullPageSession = null;
+
+  function waitNextPaint(extraMs = 0) {
+    return new Promise((resolve) => {
+      if (document.hidden) {
+        setTimeout(resolve, Math.max(0, extraMs));
+        return;
+      }
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fallback = setTimeout(done, Math.max(140, extraMs + 120));
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            clearTimeout(fallback);
+            done();
+          }, extraMs);
+        });
+      });
+    });
+  }
+
+  function detectFullPageScrollTarget() {
+    const docEl = document.scrollingElement || document.documentElement;
+    const vpW = window.innerWidth || docEl.clientWidth || 1;
+    const vpH = window.innerHeight || docEl.clientHeight || 1;
+
+    if (docEl && docEl.scrollHeight > vpH + 4) {
+      return {
+        element: docEl,
+        isWindow: true,
+        containerRect: null,
+      };
+    }
+
+    // Fallback for modern SPAs (Notion, Slack, dashboards) where body is overflow:hidden
+    // and an inner main/div container scrolls vertically.
+    let bestEl = null;
+    let bestScore = 0;
+    const candidates = document.querySelectorAll('main, article, section, div');
+    const limit = Math.min(candidates.length, 400);
+    for (let i = 0; i < limit; i += 1) {
+      const el = candidates[i];
+      if (!el || el.id === OVERLAY_HOST_ID || el.id === TOAST_HOST_ID || el.id === FULLPAGE_PILL_HOST_ID) {
+        continue;
+      }
+      if (el.scrollHeight <= el.clientHeight + 20 || el.clientHeight < vpH * 0.5) {
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      if (rect.width < vpW * 0.55 || rect.height < vpH * 0.5) {
+        continue;
+      }
+      const cs = getComputedStyle(el);
+      if (cs.overflowY !== 'auto' && cs.overflowY !== 'scroll' && cs.overflowY !== 'overlay') {
+        continue;
+      }
+      const score = rect.width * rect.height + (el.scrollHeight - el.clientHeight);
+      if (score > bestScore) {
+        bestScore = score;
+        bestEl = el;
+      }
+    }
+
+    if (bestEl) {
+      const r = bestEl.getBoundingClientRect();
+      return {
+        element: bestEl,
+        isWindow: false,
+        containerRect: {
+          left: Math.max(0, r.left),
+          top: Math.max(0, r.top),
+          width: Math.max(1, Math.min(vpW - Math.max(0, r.left), r.width)),
+          height: Math.max(1, Math.min(vpH - Math.max(0, r.top), r.height)),
+        },
+      };
+    }
+
+    return {
+      element: docEl,
+      isWindow: true,
+      containerRect: null,
+    };
+  }
+
+  function scrollTargetInstant(session, left, top) {
+    try {
+      if (session.isWindow) {
+        window.scrollTo({ left, top, behavior: 'instant' });
+      } else if (session.element) {
+        if (typeof session.element.scrollTo === 'function') {
+          session.element.scrollTo({ left, top, behavior: 'instant' });
+        } else {
+          session.element.scrollLeft = left;
+          session.element.scrollTop = top;
+        }
+      }
+    } catch {
+      try {
+        if (session.isWindow) {
+          window.scrollTo(left, top);
+        } else if (session.element) {
+          session.element.scrollLeft = left;
+          session.element.scrollTop = top;
+        }
+      } catch {
+        // Ignore scroll errors
+      }
+    }
+  }
+
+  function readScrollMetrics(session) {
+    const vpW = window.innerWidth || document.documentElement.clientWidth || 1;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
+    const vv = window.visualViewport;
+    if (session.isWindow) {
+      const docEl = document.scrollingElement || document.documentElement;
+      return {
+        viewportWidth: vpW,
+        viewportHeight: vpH,
+        scrollStepHeight: vpH,
+        totalHeight: Math.max(vpH, docEl ? docEl.scrollHeight : vpH),
+        actualY: Math.max(0, window.scrollY ?? (docEl ? docEl.scrollTop : 0)),
+        devicePixelRatio: window.devicePixelRatio || 1,
+        visualViewportScale: vv?.scale || 1,
+        isInnerContainer: false,
+        containerRect: null,
+      };
+    }
+
+    const el = session.element;
+    const r = el.getBoundingClientRect();
+    const containerRect = {
+      left: Math.max(0, r.left),
+      top: Math.max(0, r.top),
+      width: Math.max(1, Math.min(vpW - Math.max(0, r.left), r.width)),
+      height: Math.max(1, Math.min(vpH - Math.max(0, r.top), r.height)),
+    };
+    return {
+      viewportWidth: vpW,
+      viewportHeight: vpH,
+      scrollStepHeight: containerRect.height,
+      totalHeight: Math.max(el.clientHeight, el.scrollHeight),
+      actualY: Math.max(0, el.scrollTop),
+      devicePixelRatio: window.devicePixelRatio || 1,
+      visualViewportScale: vv?.scale || 1,
+      isInnerContainer: true,
+      containerRect,
+    };
+  }
+
+  function hideFixedAndStickyElements(session) {
+    if (!session || session.fixedHidden) return;
+    session.fixedHidden = true;
+    const vpH = window.innerHeight || 1;
+    const all = document.querySelectorAll('*');
+    const limit = Math.min(all.length, 4000);
+    const toMutate = [];
+
+    // Batch all layout/style reads first to avoid forced synchronous reflow thrashing
+    for (let i = 0; i < limit; i += 1) {
+      const el = all[i];
+      if (
+        !el ||
+        !(el instanceof HTMLElement) ||
+        el.id === OVERLAY_HOST_ID ||
+        el.id === TOAST_HOST_ID ||
+        el.id === FULLPAGE_PILL_HOST_ID
+      ) {
+        continue;
+      }
+      const pos = getComputedStyle(el).position;
+      if (pos !== 'fixed' && pos !== 'sticky') continue;
+      const rect = el.getBoundingClientRect();
+      // Skip invisible elements or full-viewport SPA root wrappers
+      if (rect.width <= 0 || rect.height <= 0 || rect.height >= vpH * 0.85) continue;
+      const prop = pos === 'sticky' ? 'position' : 'visibility';
+      const val = pos === 'sticky' ? 'static' : 'hidden';
+      toMutate.push({
+        el,
+        prop,
+        val,
+        prevValue: el.style.getPropertyValue(prop),
+        prevPriority: el.style.getPropertyPriority(prop),
+      });
+    }
+
+    for (const item of toMutate) {
+      session.hiddenElements.push(item);
+      item.el.style.setProperty(item.prop, item.val, 'important');
+    }
+  }
+
+  function mountFullPageProgressPill(text) {
+    removeHostElement(FULLPAGE_PILL_HOST_ID);
+    const vv = window.visualViewport;
+    const topPx = Math.round((vv?.offsetTop || 0) + 14);
+    const leftPx = Math.round((vv?.offsetLeft || 0) + (vv?.width || window.innerWidth || 320) / 2);
+    const { host, shadow } = mountTopLayerHost(FULLPAGE_PILL_HOST_ID, {
+      interactiveModalFallback: false,
+      cssBounds: `top:${topPx}px !important;left:${leftPx}px !important;transform:translateX(-50%) !important;`,
+    });
+    const style = document.createElement('style');
+    style.textContent = `
+      .fp-pill {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 12.5px;
+        font-weight: 500;
+        line-height: 18px;
+        color: #f3f4f6;
+        background: rgba(20, 21, 24, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        padding: 6px 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+        white-space: nowrap;
+        pointer-events: none;
+        user-select: none;
+      }
+    `;
+    const pill = document.createElement('div');
+    pill.className = 'fp-pill';
+    pill.textContent = text;
+    shadow.append(style, pill);
+    return { host, pill };
+  }
+
+  function restoreFullPageSession() {
+    const session = fullPageSession;
+    fullPageSession = null;
+    removeHostElement(FULLPAGE_PILL_HOST_ID);
+    const existingStyle = document.getElementById(FULLPAGE_STYLE_ID);
+    if (existingStyle) existingStyle.remove();
+
+    if (!session) return;
+    if (session.onKeyDown) {
+      window.removeEventListener('keydown', session.onKeyDown, true);
+    }
+
+    for (const entry of session.hiddenElements) {
+      try {
+        if (entry.prevValue) {
+          entry.el.style.setProperty(entry.prop, entry.prevValue, entry.prevPriority);
+        } else {
+          entry.el.style.removeProperty(entry.prop);
+        }
+      } catch {
+        // Ignore detached elements
+      }
+    }
+
+    if (session.containerScrollbarPatched && session.element) {
+      try {
+        if (session.prevContainerScrollbar) {
+          session.element.style.setProperty(
+            'scrollbar-width',
+            session.prevContainerScrollbar,
+            session.prevContainerScrollbarPriority
+          );
+        } else {
+          session.element.style.removeProperty('scrollbar-width');
+        }
+      } catch {
+        // Ignore detached element
+      }
+    }
+
+    scrollTargetInstant(session, session.origScrollX, session.origScrollY);
+  }
+
+  async function prepareFullPageCapture() {
+    const support = checkRegionSupport();
+    if (!support.ok) {
+      return {
+        ok: false,
+        code: support.code,
+        reason: support.reason.replace('Region selection', 'Full-page capture'),
+      };
+    }
+
+    // Clear any leftover overlay, toast, or previous full-page state
+    clearActiveOverlay();
+    removeHostElement(TOAST_HOST_ID);
+    restoreFullPageSession();
+
+    const target = detectFullPageScrollTarget();
+    const docEl = document.scrollingElement || document.documentElement;
+    const origScrollX = target.isWindow
+      ? window.scrollX ?? (docEl ? docEl.scrollLeft : 0)
+      : target.element.scrollLeft;
+    const origScrollY = target.isWindow
+      ? window.scrollY ?? (docEl ? docEl.scrollTop : 0)
+      : target.element.scrollTop;
+
+    const style = document.createElement('style');
+    style.id = FULLPAGE_STYLE_ID;
+    style.textContent = `
+      html, body, * {
+        scroll-behavior: auto !important;
+      }
+      html::-webkit-scrollbar, body::-webkit-scrollbar {
+        display: none !important;
+      }
+      html, body {
+        scrollbar-width: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+
+    const session = {
+      element: target.element,
+      isWindow: target.isWindow,
+      origScrollX,
+      origScrollY,
+      hiddenElements: [],
+      fixedHidden: false,
+      cancelled: false,
+      onKeyDown: null,
+      containerScrollbarPatched: false,
+      prevContainerScrollbar: '',
+      prevContainerScrollbarPriority: '',
+    };
+
+    if (!session.isWindow && session.element instanceof HTMLElement) {
+      session.prevContainerScrollbar = session.element.style.getPropertyValue('scrollbar-width');
+      session.prevContainerScrollbarPriority =
+        session.element.style.getPropertyPriority('scrollbar-width');
+      session.element.style.setProperty('scrollbar-width', 'none', 'important');
+      session.containerScrollbarPatched = true;
+    }
+
+    session.onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        session.cancelled = true;
+        removeHostElement(FULLPAGE_PILL_HOST_ID);
+        try {
+          const maybePromise = chrome.runtime.sendMessage({ type: 'FULLPAGE_CANCEL' });
+          if (maybePromise && typeof maybePromise.catch === 'function') {
+            maybePromise.catch(() => {});
+          }
+        } catch {
+          // Ignore messaging errors
+        }
+      }
+    };
+    window.addEventListener('keydown', session.onKeyDown, true);
+    fullPageSession = session;
+
+    // Scroll to top cleanly for slice 0
+    scrollTargetInstant(session, origScrollX, 0);
+    await waitNextPaint(40);
+
+    return {
+      ok: true,
+      ...readScrollMetrics(session),
+      cancelled: session.cancelled,
+    };
+  }
+
+  async function stepFullPageCapture({
+    targetY = 0,
+    hideFixed = false,
+    progressText = '',
+    holdPillMs = 280,
+  } = {}) {
+    const session = fullPageSession;
+    if (!session) {
+      return { ok: false, code: 'NO_FULLPAGE_SESSION' };
+    }
+    if (session.cancelled) {
+      return { ok: true, cancelled: true, ...readScrollMetrics(session) };
+    }
+
+    if (hideFixed) {
+      hideFixedAndStickyElements(session);
+    }
+
+    if (progressText) {
+      mountFullPageProgressPill(progressText);
+    }
+
+    const safeY = Math.max(0, Math.round(Number(targetY) || 0));
+    scrollTargetInstant(session, session.origScrollX, safeY);
+
+    // Hold progress pill visibly during inter-capture settle window, then hide cleanly before capture
+    const safeHoldMs = Math.max(40, Math.min(600, Number(holdPillMs) || 280));
+    await waitNextPaint(safeHoldMs);
+    removeHostElement(FULLPAGE_PILL_HOST_ID);
+    await waitNextPaint(20);
+
+    return {
+      ok: true,
+      cancelled: session.cancelled,
+      ...readScrollMetrics(session),
+    };
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type) return;
 
@@ -967,10 +1375,43 @@
       return;
     }
 
+    if (message.type === 'FULLPAGE_PREPARE') {
+      prepareFullPageCapture()
+        .then((res) => sendResponse(res))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            code: 'FULLPAGE_ERROR',
+            reason: err?.message || 'Could not prepare full-page capture.',
+          })
+        );
+      return true;
+    }
+
+    if (message.type === 'FULLPAGE_STEP') {
+      stepFullPageCapture(message)
+        .then((res) => sendResponse(res))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            code: 'FULLPAGE_ERROR',
+            reason: err?.message || 'Could not scroll page for capture.',
+          })
+        );
+      return true;
+    }
+
+    if (message.type === 'FULLPAGE_RESTORE') {
+      restoreFullPageSession();
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (message.type === 'HIDE_UI_FOR_CAPTURE') {
       const hadUi =
         Boolean(document.getElementById(OVERLAY_HOST_ID)) ||
-        Boolean(document.getElementById(TOAST_HOST_ID));
+        Boolean(document.getElementById(TOAST_HOST_ID)) ||
+        Boolean(document.getElementById(FULLPAGE_PILL_HOST_ID));
       if (!hadUi) {
         sendResponse({ ok: true, removed: false });
         return;
@@ -981,6 +1422,7 @@
       }
       clearActiveOverlay();
       removeHostElement(TOAST_HOST_ID);
+      removeHostElement(FULLPAGE_PILL_HOST_ID);
       if (document.hidden) {
         sendResponse({ ok: true, removed: true });
         return;

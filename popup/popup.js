@@ -31,12 +31,13 @@ const els = {
   folderNameInput: document.getElementById('folder-name-input'),
   saveFolderBtn: document.getElementById('save-folder-btn'),
   themeSegmented: document.getElementById('theme-segmented'),
-  autoCopyCheckbox: document.getElementById('auto-copy-checkbox'),
+  autoCopySegmented: document.getElementById('auto-copy-segmented'),
   editBeforeUploadCheckbox: document.getElementById('edit-before-upload-checkbox'),
   incognitoNotice: document.getElementById('incognito-notice'),
   restrictedWarning: document.getElementById('restricted-warning'),
   captureRegionBtn: document.getElementById('capture-region-btn'),
   captureVisibleBtn: document.getElementById('capture-visible-btn'),
+  captureFullpageBtn: document.getElementById('capture-fullpage-btn'),
   shortcutRegion: document.getElementById('popup-shortcut-region'),
   shortcutVisible: document.getElementById('popup-shortcut-visible'),
   statusBanner: document.getElementById('status-banner'),
@@ -135,7 +136,9 @@ function renderThemeButtons(theme) {
   const active = normalizeTheme(theme);
   applyDocumentTheme(active);
   for (const btn of els.themeSegmented.querySelectorAll('[data-theme-opt]')) {
-    btn.classList.toggle('active', btn.dataset.themeOpt === active);
+    const isActive = btn.dataset.themeOpt === active;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 }
 
@@ -335,6 +338,21 @@ function renderProfile(profile) {
   }
 }
 
+function renderAutoCopyButtons(mode) {
+  const active = mode === 'link' || mode === 'off' ? mode : 'image';
+  for (const btn of els.autoCopySegmented.querySelectorAll('[data-copy-opt]')) {
+    const isActive = btn.dataset.copyOpt === active;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+    if (btn.dataset.copyOpt === 'link') {
+      btn.disabled = !currentState.signedIn;
+      btn.title = currentState.signedIn
+        ? 'Copy Google Drive link after upload'
+        : 'Connect Google Drive to auto-copy Drive links';
+    }
+  }
+}
+
 function renderSettings(settings) {
   currentState.settings = settings;
   const folderName = settings?.folderName || 'Chrome_SaveShot_ScreenShots';
@@ -344,7 +362,7 @@ function renderSettings(settings) {
     'https://drive.google.com/drive/my-drive'
   );
   els.folderNameInput.value = folderName;
-  els.autoCopyCheckbox.checked = Boolean(settings?.autoCopyLink);
+  renderAutoCopyButtons(settings?.autoCopyMode);
   els.editBeforeUploadCheckbox.checked = Boolean(settings?.editBeforeUpload);
   renderThemeButtons(settings?.theme);
 }
@@ -396,7 +414,8 @@ function renderRecentUploads(uploads) {
 
     const sub = document.createElement('div');
     sub.className = 'ss-meta tabular';
-    const modeWord = item.mode === 'region' ? 'Area' : 'Tab';
+    const modeWord =
+      item.mode === 'region' ? 'Area' : item.mode === 'fullpage' ? 'Full page' : 'Tab';
     const relTime = formatRelativeTime(item.createdTime);
     sub.textContent = relTime ? `${modeWord} \u00b7 ${relTime}` : modeWord;
 
@@ -475,6 +494,7 @@ function updateCaptureAvailability() {
 
   els.captureVisibleBtn.disabled = currentState.busy || !canVisible;
   els.captureRegionBtn.disabled = currentState.busy || !canRegion;
+  els.captureFullpageBtn.disabled = currentState.busy || !canRegion;
 
   els.incognitoNotice.hidden = !(currentState.signedIn && currentState.incognito);
 
@@ -513,10 +533,11 @@ function showView(viewName, { signedIn = false, needsSetup = false } = {}) {
   els.driveFolderField.hidden = !signedIn;
   els.driveOptionsGroup.hidden = !signedIn;
   els.setupBanner.hidden = signedIn || !needsSetup;
+  renderAutoCopyButtons(currentState.settings?.autoCopyMode);
 }
 
 function initStaticMetadata() {
-  const version = chrome?.runtime?.getManifest?.()?.version || '1.2.1';
+  const version = chrome?.runtime?.getManifest?.()?.version || '1.3.0';
   els.popupVersion.textContent = `v${version}`;
 
   if (chrome?.commands?.getAll) {
@@ -652,6 +673,7 @@ els.signOutBtn.addEventListener('click', async () => {
     currentState.signedIn = false;
     els.settingsDrawer.hidden = true;
     els.settingsToggleBtn.classList.remove('active');
+    els.settingsToggleBtn.setAttribute('aria-expanded', 'false');
     renderRecentUploads([]);
     els.authError.hidden = true;
     hideStatus();
@@ -667,6 +689,7 @@ els.settingsToggleBtn.addEventListener('click', () => {
   const willShow = els.settingsDrawer.hidden;
   els.settingsDrawer.hidden = !willShow;
   els.settingsToggleBtn.classList.toggle('active', willShow);
+  els.settingsToggleBtn.setAttribute('aria-expanded', String(willShow));
 });
 
 els.saveFolderBtn.addEventListener('click', async () => {
@@ -700,13 +723,18 @@ for (const btn of els.themeSegmented.querySelectorAll('[data-theme-opt]')) {
   });
 }
 
-els.autoCopyCheckbox.addEventListener('change', async () => {
-  const res = await sendRuntimeMessage({
-    type: 'UPDATE_SETTINGS',
-    patch: { autoCopyLink: els.autoCopyCheckbox.checked },
+for (const btn of els.autoCopySegmented.querySelectorAll('[data-copy-opt]')) {
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    const autoCopyMode = btn.dataset.copyOpt;
+    renderAutoCopyButtons(autoCopyMode);
+    const res = await sendRuntimeMessage({
+      type: 'UPDATE_SETTINGS',
+      patch: { autoCopyMode },
+    });
+    if (res.ok) renderSettings(res.settings);
   });
-  if (res.ok) renderSettings(res.settings);
-});
+}
 
 els.editBeforeUploadCheckbox.addEventListener('change', async () => {
   const res = await sendRuntimeMessage({
@@ -744,6 +772,39 @@ els.captureVisibleBtn.addEventListener('click', async () => {
     }
   } catch (err) {
     showStatus('error', err.message || 'Could not capture screenshot.');
+  } finally {
+    currentState.busy = false;
+    updateCaptureAvailability();
+  }
+});
+
+els.captureFullpageBtn.addEventListener('click', async () => {
+  if (currentState.busy) return;
+  currentState.busy = true;
+  updateCaptureAvailability();
+  showStatus('loading', 'Starting full-page capture...');
+
+  try {
+    const res = await sendRuntimeMessage({
+      type: 'CAPTURE_FULLPAGE',
+      tabId: currentState.activeTabId,
+      background: true,
+    });
+    if (!res.ok) {
+      showStatus('error', {
+        message: res.error || 'Could not capture full page.',
+        code: res.code,
+        requiresReauth: res.requiresReauth,
+      });
+      return;
+    }
+
+    if (res.started || res.openedEditor) {
+      window.close();
+      return;
+    }
+  } catch (err) {
+    showStatus('error', err.message || 'Could not capture full page.');
   } finally {
     currentState.busy = false;
     updateCaptureAvailability();

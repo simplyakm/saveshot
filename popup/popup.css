@@ -283,6 +283,14 @@ body {
   cursor: not-allowed;
 }
 
+.capture-tile-wide {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 10px;
+}
+
 .capture-icon {
   width: 30px;
   height: 30px;
@@ -290,6 +298,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .capture-icon.blue {
@@ -300,6 +309,11 @@ body {
 .capture-icon.green {
   background: var(--ss-green-soft);
   color: var(--ss-green);
+}
+
+.capture-icon.amber {
+  background: var(--ss-warn-bg);
+  color: var(--ss-warn-text);
 }
 
 .capture-copy {

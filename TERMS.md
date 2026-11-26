@@ -1,6 +1,6 @@
 # Terms of Service for SaveShot
 
-**Last updated:** November 23, 2026
+**Last updated:** November 26, 2026
 
 By installing or using the SaveShot Chrome extension ("SaveShot"), you agree to these Terms of Service.
 

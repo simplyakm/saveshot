@@ -210,6 +210,73 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       return;
     }
 
+    if (req.url === '/fullpage') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!doctype html>
+        <html>
+        <head>
+          <style>
+            html, body { margin: 0; padding: 0; }
+            #fixed-hdr {
+              position: fixed;
+              top: 0;
+              left: 0;
+              right: 0;
+              height: 48px;
+              background: rgb(220, 38, 38);
+              z-index: 9999;
+            }
+            .band-top { height: 1100px; background: rgb(14, 165, 233); }
+            #sticky-hdr {
+              position: sticky;
+              top: 0;
+              height: 64px;
+              background: rgb(147, 51, 234);
+              z-index: 50;
+            }
+            .band-mid { height: 1100px; background: rgb(34, 197, 94); }
+            .band-bot { height: 1000px; background: rgb(249, 115, 22); }
+          </style>
+        </head>
+        <body>
+          <header id="fixed-hdr">Fixed Top Nav</header>
+          <div class="band-top"></div>
+          <div id="sticky-hdr">Below-Fold Sticky Section</div>
+          <div class="band-mid"></div>
+          <div class="band-bot"></div>
+        </body>
+        </html>`);
+      return;
+    }
+
+    if (req.url === '/spa-scroll') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!doctype html>
+        <html>
+        <head>
+          <style>
+            html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
+            #spa-scroller {
+              height: 100vh;
+              overflow-y: auto;
+              background: rgb(255, 255, 255);
+            }
+            .spa-b1 { height: 1000px; background: rgb(59, 130, 246); }
+            .spa-b2 { height: 1000px; background: rgb(16, 185, 129); }
+            .spa-b3 { height: 1000px; background: rgb(245, 158, 11); }
+          </style>
+        </head>
+        <body>
+          <main id="spa-scroller">
+            <div class="spa-b1"></div>
+            <div class="spa-b2"></div>
+            <div class="spa-b3"></div>
+          </main>
+        </body>
+        </html>`);
+      return;
+    }
+
     // Calibration target: pure red 140x100 box surrounded by pure white background + vertical scrollbar
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(`<!doctype html>
@@ -315,6 +382,13 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         document.getElementById('settings-toggle-btn').click();
         const drawerVisible = !document.getElementById('settings-drawer').hidden;
         const themeVisible = !document.getElementById('theme-segmented').hidden;
+        const autoCopyVisible = !document.getElementById('auto-copy-segmented').hidden;
+        const autoCopyImageActive = document
+          .querySelector('#auto-copy-segmented [data-copy-opt="image"]')
+          .classList.contains('active');
+        const autoCopyLinkBtn = document.querySelector('#auto-copy-segmented [data-copy-opt="link"]');
+        const autoCopyLinkDisabled = Boolean(autoCopyLinkBtn?.disabled);
+        const autoCopyLinkTitle = autoCopyLinkBtn?.title || '';
         const driveFolderHidden = document.getElementById('drive-folder-field').hidden;
         const driveOptsHidden = document.getElementById('drive-options-group').hidden;
         document.getElementById('settings-toggle-btn').click();
@@ -324,6 +398,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           accountCardHidden: document.getElementById('account-folder-card').hidden,
           recentHidden: document.getElementById('recent-section').hidden,
           captureAboveCard: gridRect.bottom <= cardRect.top,
+          hasFullpageTile: Boolean(document.getElementById('capture-fullpage-btn')),
           signedOutHeading: document.querySelector('#signed-out-view h2')?.textContent?.trim() || '',
           signedOutCopy: document.querySelector('#signed-out-view .connect-desc')?.textContent?.trim() || '',
           setupBannerVisible: !document.getElementById('setup-banner').hidden,
@@ -332,6 +407,10 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           signOutHidden: document.getElementById('sign-out-btn').hidden,
           drawerVisible,
           themeVisible,
+          autoCopyVisible,
+          autoCopyImageActive,
+          autoCopyLinkDisabled,
+          autoCopyLinkTitle,
           driveFolderHidden,
           driveOptsHidden,
           hasHelpBtn: Boolean(document.getElementById('help-btn')),
@@ -346,6 +425,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(popupCheck.accountCardHidden, true);
     assert.equal(popupCheck.recentHidden, true);
     assert.equal(popupCheck.captureAboveCard, true, 'Capture tiles must sit above Connect Google Drive card');
+    assert.equal(popupCheck.hasFullpageTile, true, 'Full page capture tile must be present in Popup');
     assert.equal(popupCheck.signedOutHeading, 'Autosave to your Google Drive');
     assert.equal(
       popupCheck.signedOutCopy,
@@ -362,6 +442,10 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(popupCheck.signOutHidden, true);
     assert.equal(popupCheck.drawerVisible, true);
     assert.equal(popupCheck.themeVisible, true);
+    assert.equal(popupCheck.autoCopyVisible, true, 'Auto-copy setting must be accessible while signed out');
+    assert.equal(popupCheck.autoCopyImageActive, true, 'Auto-copy must default to Image while signed out');
+    assert.equal(popupCheck.autoCopyLinkDisabled, true, 'Auto-copy Link option must be disabled while signed out');
+    assert.match(popupCheck.autoCopyLinkTitle, /Connect Google Drive/i);
     assert.equal(popupCheck.driveFolderHidden, true, 'Drive folder setting must hide when signed out');
     assert.equal(popupCheck.driveOptsHidden, true, 'Drive upload checkboxes must hide when signed out');
     assert.equal(popupCheck.hasHelpBtn, true);
@@ -432,7 +516,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(welcomeCheck.hasFeedbackSection, true);
     assert.match(
       welcomeCheck.versionStripText,
-      /^SaveShot v1\.2\.1 \u00b7 Chrome .* \u00b7 Last error: None$/
+      /^SaveShot v1\.3\.0 \u00b7 Chrome .* \u00b7 Last error: None$/
     );
     assert.equal(
       welcomeCheck.cwsHref,
@@ -480,7 +564,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       })()`
     );
     assert.equal(livePinAndCopyCheck.btnLabelAfterCopy, 'Copied!');
-    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.2\.1 \u00b7 Chrome .* \u00b7 Last error: None$/);
+    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.3\.0 \u00b7 Chrome .* \u00b7 Last error: None$/);
     assert.equal(livePinAndCopyCheck.pinNudgeHiddenAfterPin, true, 'Pin nudge must hide once pinned');
     assert.equal(livePinAndCopyCheck.pinDoneVisibleAfterPin, true, 'Pin celebration must appear when pinned live');
     assert.match(livePinAndCopyCheck.pinDoneText, /Pinned to your Chrome toolbar!/);
@@ -2393,7 +2477,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       `(async () => {
         const { settings } = await chrome.storage.local.get('settings');
         await chrome.storage.local.set({
-          settings: { ...settings, autoCopyLink: true, editBeforeUpload: false },
+          settings: { ...settings, autoCopyMode: 'link', autoCopyLink: true, editBeforeUpload: false },
         });
         globalThis.__v121PostCount = 0;
         globalThis.__v121PatchCalls = [];
@@ -2834,6 +2918,670 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     const postsAfterManualSave = await evalIn(swSession, `globalThis.__v121PostCount`);
     assert.equal(postsAfterManualSave, postsBeforeManual6E + 1);
     await cdp.send('Target.closeTarget', { targetId: manualCase.targetId });
+
+    // -------------------------------------------------------------------------
+    // 7. Real Chromium v1.3.0 E2E: Auto-Copy Image Default, Full-Page Capture
+    //    (Fixed/Sticky + SPA Inner Scroller + Esc Early Stop), Crop (K),
+    //    Pixelate Redaction, Meme Text + Caption Bar, & Ctrl+V Paste Security
+    // -------------------------------------------------------------------------
+    try {
+      await cdp.send('Browser.grantPermissions', {
+        origin: `chrome-extension://${extId}`,
+        permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'],
+      });
+    } catch {
+      // Older Chromium builds may not expose all permission enum values
+    }
+
+    // 7A. Signed-in Popup Auto-Copy Segmented Control: Link is enabled while signed in, switch to Image (default),
+    //     fresh capture auto-copies real PNG to clipboard & settled pill shows "Saved to Google Drive · Image copied",
+    //     tab reload does NOT re-copy, and Off skips auto-copy
+    const popupSignedInAutoCopy = await evalIn(
+      extPageSession,
+      `(async () => {
+        if (document.getElementById('settings-drawer').hidden) {
+          document.getElementById('settings-toggle-btn').click();
+        }
+        const linkBtn = document.querySelector('#auto-copy-segmented [data-copy-opt="link"]');
+        const imgBtn = document.querySelector('#auto-copy-segmented [data-copy-opt="image"]');
+        const checkbox = document.getElementById('edit-before-upload-checkbox');
+        const linkEnabledWhenSignedIn = !linkBtn.disabled;
+        imgBtn.click();
+        if (checkbox.checked) checkbox.click();
+        await new Promise((r) => setTimeout(r, 100));
+        const { settings } = await chrome.storage.local.get('settings');
+        return {
+          linkEnabledWhenSignedIn,
+          imgActive: imgBtn.classList.contains('active'),
+          storedAutoCopyMode: settings?.autoCopyMode,
+          storedEditBeforeUpload: Boolean(settings?.editBeforeUpload),
+        };
+      })()`
+    );
+    assert.equal(popupSignedInAutoCopy.linkEnabledWhenSignedIn, true, 'Auto-copy Link must enable when signed in');
+    assert.equal(popupSignedInAutoCopy.imgActive, true);
+    assert.equal(popupSignedInAutoCopy.storedAutoCopyMode, 'image');
+    assert.equal(popupSignedInAutoCopy.storedEditBeforeUpload, false);
+
+    const autoCopyImgCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+    let settled7A = null;
+    for (let i = 0; i < 35; i += 1) {
+      settled7A = await evalIn(
+        autoCopyImgCase.edSess,
+        `(async () => {
+          let clipboardTypes = [];
+          try {
+            const items = await navigator.clipboard.read();
+            clipboardTypes = items.flatMap((it) => it.types);
+          } catch {}
+          return {
+            pillText: document.getElementById('status-pill').textContent.trim(),
+            copyBtnText: document.getElementById('copy-image-btn').textContent.trim(),
+            clipboardTypes,
+          };
+        })()`
+      );
+      if (settled7A.pillText.includes('Saved to Google Drive')) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(
+      settled7A.pillText,
+      'Saved to Google Drive \u00b7 Image copied',
+      `Default Image auto-copy must not be overwritten by Drive link (got: ${settled7A.pillText})`
+    );
+    assert.ok(
+      settled7A.clipboardTypes.includes('image/png'),
+      `Real Chromium clipboard must hold image/png after fresh capture (got: ${JSON.stringify(settled7A.clipboardTypes)})`
+    );
+
+    // Reloading Editor tab must NOT re-copy image (single-use isFreshCapture)
+    await cdp.send('Page.reload', {}, autoCopyImgCase.edSess);
+    let reloadState7A = null;
+    for (let i = 0; i < 30; i += 1) {
+      try {
+        reloadState7A = await evalIn(
+          autoCopyImgCase.edSess,
+          `(() => ({
+            ready: Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden),
+            pillHidden: document.getElementById('status-pill').hidden,
+            pillText: document.getElementById('status-pill').textContent.trim(),
+            copyBtnText: document.getElementById('copy-image-btn').textContent.trim(),
+          }))()`
+        );
+        if (reloadState7A.ready) break;
+      } catch {
+        // Reload navigation in progress
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    assert.equal(reloadState7A?.ready, true);
+    assert.equal(reloadState7A.copyBtnText, 'Copy image', 'Tab reload must not re-flash Copied!');
+    assert.ok(!reloadState7A.pillText.includes('Image copied'), 'Tab reload must not re-copy image');
+    await cdp.send('Target.closeTarget', { targetId: autoCopyImgCase.targetId });
+
+    // Switch Auto-copy to Off -> fresh capture settles with plain "Saved to Google Drive"
+    await evalIn(
+      extPageSession,
+      `(async () => {
+        document.querySelector('#auto-copy-segmented [data-copy-opt="off"]').click();
+        await new Promise((r) => setTimeout(r, 80));
+      })()`
+    );
+    const offCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+    let settledOff = null;
+    for (let i = 0; i < 30; i += 1) {
+      settledOff = await evalIn(
+        offCase.edSess,
+        `(() => ({ pillText: document.getElementById('status-pill').textContent.trim() }))()`
+      );
+      if (settledOff.pillText.includes('Saved to Google Drive')) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    assert.equal(settledOff.pillText, 'Saved to Google Drive');
+    await cdp.send('Target.closeTarget', { targetId: offCase.targetId });
+
+    // Restore Auto-copy = Image and turn on editBeforeUpload for pure local Editor + Full-Page tests
+    await evalIn(
+      swSession,
+      `(async () => {
+        const { settings } = await chrome.storage.local.get('settings');
+        await chrome.storage.local.set({
+          settings: { ...settings, autoCopyMode: 'image', autoCopyLink: false, editBeforeUpload: true },
+        });
+      })()`
+    );
+
+    // 7B. Real Chromium Full-Page Scrolling Capture:
+    //     1) Tall page with position: fixed top header + below-fold position: sticky header + colored bands
+    const fpTabInfo = await evalIn(
+      swSession,
+      `(async () => {
+        const tab = await chrome.tabs.create({ url: '${baseUrl}/fullpage', active: true });
+        await new Promise((resolve) => {
+          const onUpdated = (id, info) => {
+            if (id === tab.id && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(onUpdated);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(onUpdated);
+        });
+        return { tabId: tab.id, windowId: tab.windowId };
+      })()`
+    );
+    await new Promise((r) => setTimeout(r, 250));
+
+    const openEditorForTab = async (tabId, messageObj) => {
+      await evalIn(swSession, `chrome.tabs.update(${tabId}, { active: true })`);
+      const beforeIds = new Set(
+        (await cdp.send('Target.getTargets')).targetInfos
+          .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+          .map((t) => t.targetId)
+      );
+      const res = await evalIn(
+        extPageSession,
+        `new Promise((resolve) => chrome.runtime.sendMessage(${JSON.stringify({ ...messageObj, tabId })}, resolve))`
+      );
+      let newTarget = null;
+      for (let i = 0; i < 60; i += 1) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        newTarget = targetInfos.find(
+          (t) =>
+            t.type === 'page' &&
+            t.url.includes('/pages/editor.html?session=') &&
+            !beforeIds.has(t.targetId)
+        );
+        if (newTarget) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.ok(newTarget, 'Expected new Editor tab to open');
+      const { sessionId: edSess } = await cdp.send('Target.attachToTarget', {
+        targetId: newTarget.targetId,
+        flatten: true,
+      });
+      for (let i = 0; i < 40; i += 1) {
+        const ready = await evalIn(
+          edSess,
+          `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+        );
+        if (ready) break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      return { res, targetId: newTarget.targetId, edSess };
+    };
+
+    const fullPageCase = await openEditorForTab(fpTabInfo.tabId, { type: 'CAPTURE_FULLPAGE' });
+    assert.equal(fullPageCase.res.ok, true, `Full-page capture failed: ${JSON.stringify(fullPageCase.res)}`);
+
+    const fpAudit = await evalIn(
+      fullPageCase.edSess,
+      `(() => {
+        const canvas = document.getElementById('base-canvas');
+        const ctx = canvas.getContext('2d');
+        const wrap = document.getElementById('canvas-wrap');
+        const rect = canvas.getBoundingClientRect();
+        const midX = Math.floor(canvas.width / 2);
+        const sample = (fracY) => {
+          const y = Math.min(canvas.height - 1, Math.max(0, Math.floor(canvas.height * fracY)));
+          const d = ctx.getImageData(midX, y, 1, 1).data;
+          return [d[0], d[1], d[2]];
+        };
+        // Find purple sticky band (r>110, g<90, b>180) and verify red fixed header is NOT repeated below y=150
+        let foundStickyPurple = false;
+        let repeatedFixedRedBelowFold = false;
+        for (let y = 0; y < canvas.height; y += 8) {
+          const d = ctx.getImageData(midX, y, 1, 1).data;
+          if (d[0] > 110 && d[1] < 90 && d[2] > 180) foundStickyPurple = true;
+          if (y > 200 && d[0] > 190 && d[1] < 65 && d[2] < 65) repeatedFixedRedBelowFold = true;
+        }
+        return {
+          width: canvas.width,
+          height: canvas.height,
+          hasTallClass: wrap.classList.contains('tall-canvas'),
+          renderedWidth: Math.round(rect.width),
+          topHeaderRgb: sample(0.005),
+          bandTopRgb: sample(0.18),
+          bandMidRgb: sample(0.55),
+          bandBotRgb: sample(0.92),
+          foundStickyPurple,
+          repeatedFixedRedBelowFold,
+        };
+      })()`
+    );
+    assert.ok(fpAudit.height > 2000, `Full-page stitched height must exceed 2000px (got ${fpAudit.height})`);
+    assert.equal(fpAudit.hasTallClass, true, 'Tall full-page canvas must activate .tall-canvas scrolling mode');
+    assert.ok(fpAudit.renderedWidth >= 300, `Tall canvas must remain legible width (got ${fpAudit.renderedWidth}px)`);
+    assert.ok(
+      fpAudit.topHeaderRgb[0] > 180 && fpAudit.topHeaderRgb[1] < 80,
+      `Top fixed header should appear once at top (got rgb=${fpAudit.topHeaderRgb})`
+    );
+    assert.equal(
+      fpAudit.repeatedFixedRedBelowFold,
+      false,
+      'Fixed header must NOT repeat on scrolled slices'
+    );
+    assert.equal(
+      fpAudit.foundStickyPurple,
+      true,
+      'Below-the-fold position: sticky header must stay visible in-flow'
+    );
+    assert.ok(fpAudit.bandTopRgb[2] > 180, `Top cyan band expected (got ${fpAudit.bandTopRgb})`);
+    assert.ok(fpAudit.bandMidRgb[1] > 150, `Mid green band expected (got ${fpAudit.bandMidRgb})`);
+    assert.ok(fpAudit.bandBotRgb[0] > 200 && fpAudit.bandBotRgb[1] > 80, `Bottom orange band expected (got ${fpAudit.bandBotRgb})`);
+
+    // Verify original /fullpage tab scroll & DOM styles were cleanly restored
+    const fpTargets = (await cdp.send('Target.getTargets')).targetInfos;
+    const fpPageTarget = fpTargets.find((t) => t.type === 'page' && t.url.endsWith('/fullpage'));
+    assert.ok(fpPageTarget);
+    const { sessionId: fpPageSess } = await cdp.send('Target.attachToTarget', {
+      targetId: fpPageTarget.targetId,
+      flatten: true,
+    });
+    const fpRestored = await evalIn(
+      fpPageSess,
+      `(() => ({
+        scrollY: window.scrollY,
+        fixedVisibility: getComputedStyle(document.getElementById('fixed-hdr')).visibility,
+        stickyPosition: getComputedStyle(document.getElementById('sticky-hdr')).position,
+        pillRemoved: !document.getElementById('saveshot-fullpage-host'),
+      }))()`
+    );
+    assert.equal(fpRestored.scrollY, 0, 'Original window scrollY must be restored');
+    assert.equal(fpRestored.fixedVisibility, 'visible', 'Fixed header visibility must be restored');
+    assert.equal(fpRestored.stickyPosition, 'sticky', 'Sticky header position must be restored');
+    assert.equal(fpRestored.pillRemoved, true, 'Progress pill shadow host must be removed after restore');
+    await cdp.send('Target.closeTarget', { targetId: fullPageCase.targetId });
+
+    //     2) SPA inner scroll container (/spa-scroll)
+    const spaTabInfo = await evalIn(
+      swSession,
+      `(async () => {
+        const tab = await chrome.tabs.create({ url: '${baseUrl}/spa-scroll', active: true });
+        await new Promise((resolve) => {
+          const onUpdated = (id, info) => {
+            if (id === tab.id && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(onUpdated);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(onUpdated);
+        });
+        return { tabId: tab.id };
+      })()`
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    const spaCase = await openEditorForTab(spaTabInfo.tabId, { type: 'CAPTURE_FULLPAGE' });
+    assert.equal(spaCase.res.ok, true);
+    const spaAudit = await evalIn(
+      spaCase.edSess,
+      `(() => {
+        const canvas = document.getElementById('base-canvas');
+        const ctx = canvas.getContext('2d');
+        const midX = Math.floor(canvas.width / 2);
+        const topPx = ctx.getImageData(midX, Math.floor(canvas.height * 0.1), 1, 1).data;
+        const botPx = ctx.getImageData(midX, Math.floor(canvas.height * 0.9), 1, 1).data;
+        return { height: canvas.height, topRgb: [topPx[0], topPx[1], topPx[2]], botRgb: [botPx[0], botPx[1], botPx[2]] };
+      })()`
+    );
+    assert.ok(spaAudit.height > 2000, `SPA inner scroll container stitched height must exceed 2000px (got ${spaAudit.height})`);
+    assert.ok(spaAudit.topRgb[2] > 180, `SPA top blue band expected (got ${spaAudit.topRgb})`);
+    assert.ok(spaAudit.botRgb[0] > 200 && spaAudit.botRgb[1] > 120, `SPA bottom amber band expected (got ${spaAudit.botRgb})`);
+    await cdp.send('Target.closeTarget', { targetId: spaCase.targetId });
+    await evalIn(swSession, `chrome.tabs.remove(${spaTabInfo.tabId})`);
+
+    //     3) Esc early stop during background: true full-page capture on /fullpage
+    await evalIn(swSession, `chrome.tabs.update(${fpTabInfo.tabId}, { active: true })`);
+    const beforeEscIds = new Set(
+      (await cdp.send('Target.getTargets')).targetInfos
+        .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+        .map((t) => t.targetId)
+    );
+    const escStartRes = await evalIn(
+      extPageSession,
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_FULLPAGE', tabId: ${fpTabInfo.tabId}, background: true }, resolve))`
+    );
+    assert.equal(escStartRes.ok, true);
+    assert.equal(escStartRes.started, true);
+    await new Promise((r) => setTimeout(r, 220));
+    await cdp.send(
+      'Input.dispatchKeyEvent',
+      { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+      fpPageSess
+    );
+    await cdp.send(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+      fpPageSess
+    );
+
+    let escEditorTarget = null;
+    for (let i = 0; i < 60; i += 1) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      escEditorTarget = targetInfos.find(
+        (t) =>
+          t.type === 'page' &&
+          t.url.includes('/pages/editor.html?session=') &&
+          !beforeEscIds.has(t.targetId)
+      );
+      if (escEditorTarget) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(escEditorTarget, 'Esc early stop must still open Editor with captured slices');
+    const { sessionId: escEdSess } = await cdp.send('Target.attachToTarget', {
+      targetId: escEditorTarget.targetId,
+      flatten: true,
+    });
+    for (let i = 0; i < 30; i += 1) {
+      const ready = await evalIn(
+        escEdSess,
+        `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+      );
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    const escAudit = await evalIn(
+      escEdSess,
+      `(() => ({
+        height: document.getElementById('base-canvas').height,
+        pillText: document.getElementById('status-pill').textContent.trim(),
+      }))()`
+    );
+    assert.ok(escAudit.height > 0 && escAudit.height < fpAudit.height, `Esc early stop should capture partial height (${escAudit.height} < ${fpAudit.height})`);
+    assert.match(escAudit.pillText, /Stopped early/i, `Expected Stopped early pill (got: ${escAudit.pillText})`);
+    await cdp.send('Target.closeTarget', { targetId: escEditorTarget.targetId });
+    await evalIn(swSession, `chrome.tabs.remove(${fpTabInfo.tabId})`);
+
+    // 7C, 7D, 7E: Real Chromium Editor Battle-Test (Crop K, Pixelate Redaction, Meme Text + Caption Bar, Ctrl+V Paste + SVG XSS)
+    const toolsCase = await openAndAttachNewEditor(
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
+    );
+
+    // 7C. Crop Tool (K): drag -> live W x H -> Enter crops losslessly -> Ctrl+Z restores -> K + Esc exits cleanly
+    const cropAudit = await evalIn(
+      toolsCase.edSess,
+      `(async () => {
+        const base = document.getElementById('base-canvas');
+        const preview = document.getElementById('preview-canvas');
+        const origW = base.width;
+        const origH = base.height;
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const cropContextVisible = !document.getElementById('crop-context').hidden;
+        const styleDimmed = document.getElementById('style-group').classList.contains('dimmed');
+        const styleInert = Boolean(document.getElementById('style-group').inert);
+        const applyDisabledBeforeDrag = document.getElementById('apply-crop-btn').disabled;
+
+        const rect = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 10, clientX: rect.left + 40, clientY: rect.top + 30 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 10, clientX: rect.left + 220, clientY: rect.top + 170 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 10, clientX: rect.left + 220, clientY: rect.top + 170 }));
+        await new Promise((r) => setTimeout(r, 40));
+
+        const dimText = document.getElementById('crop-dim-label').textContent.trim();
+        const applyEnabledAfterDrag = !document.getElementById('apply-crop-btn').disabled;
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const croppedW = base.width;
+        const croppedH = base.height;
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const undoneW = base.width;
+        const undoneH = base.height;
+
+        // Pressing Esc in Crop with no pending crop exits back to previous tool
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const exitedCrop = document.getElementById('crop-context').hidden;
+
+        return {
+          origW, origH,
+          cropContextVisible, styleDimmed, styleInert, applyDisabledBeforeDrag,
+          dimText, applyEnabledAfterDrag,
+          croppedW, croppedH,
+          undoneW, undoneH,
+          exitedCrop,
+        };
+      })()`
+    );
+    assert.equal(cropAudit.cropContextVisible, true);
+    assert.equal(cropAudit.styleDimmed, true);
+    assert.equal(cropAudit.styleInert, true);
+    assert.equal(cropAudit.applyDisabledBeforeDrag, true);
+    assert.match(cropAudit.dimText, /^Crop \d+ \u00d7 \d+$/);
+    assert.equal(cropAudit.applyEnabledAfterDrag, true);
+    assert.ok(cropAudit.croppedW < cropAudit.origW && cropAudit.croppedH < cropAudit.origH);
+    assert.equal(cropAudit.undoneW, cropAudit.origW);
+    assert.equal(cropAudit.undoneH, cropAudit.origH);
+    assert.equal(cropAudit.exitedCrop, true, 'Esc in Crop with no selection must exit back to previous tool');
+
+    // 7D. Pixelate Redaction: Solid dims style-group; Pixelate unlocks size-pills while dimming color-swatches;
+    //     zero raw corner sliver left after pixelating non-divisible area; Undo restores raw pixel
+    const pixelateAudit = await evalIn(
+      toolsCase.edSess,
+      `(async () => {
+        const base = document.getElementById('base-canvas');
+        const ctx = base.getContext('2d');
+        const preview = document.getElementById('preview-canvas');
+
+        // Paint a clean 60x60 white test patch at (20,20) with a bright red corner secret at (52,52)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(20, 20, 60, 60);
+        ctx.fillStyle = '#ff0000';
+        ctx.fillRect(52, 52, 1, 1);
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const solidDimsAll = document.getElementById('style-group').classList.contains('dimmed');
+
+        document.querySelector('[data-redact-mode="pixelate"]').click();
+        await new Promise((r) => setTimeout(r, 30));
+        const pixStyleNotDimmed = !document.getElementById('style-group').classList.contains('dimmed');
+        const pixColorsDimmed = document.getElementById('color-swatches').classList.contains('dimmed');
+        const pixColorsInert = Boolean(document.getElementById('color-swatches').inert);
+        document.querySelector('#size-pills [data-size="lg"]').click();
+
+        const rect = preview.getBoundingClientRect();
+        const sx = rect.width / base.width;
+        const sy = rect.height / base.height;
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 11, clientX: rect.left + 20 * sx, clientY: rect.top + 20 * sy }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 11, clientX: rect.left + 53 * sx, clientY: rect.top + 53 * sy }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 11, clientX: rect.left + 53 * sx, clientY: rect.top + 53 * sy }));
+        await new Promise((r) => setTimeout(r, 80));
+
+        const afterPx = Array.from(ctx.getImageData(52, 52, 1, 1).data);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const undonePx = Array.from(ctx.getImageData(52, 52, 1, 1).data);
+
+        return {
+          solidDimsAll,
+          pixStyleNotDimmed,
+          pixColorsDimmed,
+          pixColorsInert,
+          afterPx,
+          undonePx,
+        };
+      })()`
+    );
+    assert.equal(pixelateAudit.solidDimsAll, true);
+    assert.equal(pixelateAudit.pixStyleNotDimmed, true, 'Pixelate must unlock #size-pills');
+    assert.equal(pixelateAudit.pixColorsDimmed, true, 'Pixelate must dim #color-swatches');
+    assert.equal(pixelateAudit.pixColorsInert, true);
+    assert.ok(
+      pixelateAudit.afterPx[1] >= 180 && pixelateAudit.afterPx[2] >= 180,
+      `Corner secret pixel must be averaged by balanced grid (got rgba=${pixelateAudit.afterPx})`
+    );
+    assert.ok(
+      pixelateAudit.undonePx[0] === 255 && pixelateAudit.undonePx[1] === 0,
+      `Undo must restore exact original red pixel (got rgba=${pixelateAudit.undonePx})`
+    );
+
+    // 7E. Meme Toolkit (Meme Text + XL + Focus Retention, Dark Caption Bar + Undo, Ctrl+V Paste + Second Paste Stamp + SVG XSS Block + Filename Input Paste Safety)
+    const memeAndPasteAudit = await evalIn(
+      toolsCase.edSess,
+      `(async () => {
+        const base = document.getElementById('base-canvas');
+        const ctx = base.getContext('2d');
+        const preview = document.getElementById('preview-canvas');
+
+        // 1. Meme text + XL + focus retention
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const xlVisibleInText = !document.getElementById('size-xl-btn').hidden;
+        const rect = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 12, clientX: rect.left + 80, clientY: rect.top + 80 }));
+        await new Promise((r) => setTimeout(r, 40));
+
+        document.querySelector('[data-text-mode="meme"]').click();
+        const textInput = document.getElementById('text-overlay-input');
+        const memeClassApplied = textInput.classList.contains('meme-style');
+        const focusKeptAfterMeme = document.activeElement === textInput;
+
+        document.getElementById('size-xl-btn').click();
+        const focusKeptAfterXl = document.activeElement === textInput;
+        textInput.value = 'ship it';
+        textInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 70));
+
+        // 2. Dark Caption Bar + focus retention + Undo height restore
+        const hBeforeCaption = base.height;
+        document.getElementById('caption-toggle-btn').click();
+        const capInput = document.getElementById('caption-text-input');
+        capInput.value = 'WHEN ALL TESTS PASS';
+        document.querySelector('[data-caption-theme="dark"]').click();
+        const focusKeptAfterCaptionTheme = document.activeElement === capInput;
+        document.getElementById('apply-caption-btn').click();
+        await new Promise((r) => setTimeout(r, 80));
+
+        const hAfterCaption = base.height;
+        const topStripPx = Array.from(ctx.getImageData(4, 4, 1, 1).data);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const hAfterCaptionUndo = base.height;
+
+        // Helper to craft synthetic paste events with files
+        const dispatchFilePaste = (file) => {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          const ev = new Event('paste', { bubbles: true, cancelable: true });
+          Object.defineProperty(ev, 'clipboardData', { value: dt });
+          window.dispatchEvent(ev);
+          return ev;
+        };
+
+        // 3. SVG XSS paste MUST be blocked
+        const svgFile = new File(
+          ['<svg xmlns="http://www.w3.org/2000/svg"><script>window.__xss=1</script></svg>'],
+          'evil.svg',
+          { type: 'image/svg+xml' }
+        );
+        dispatchFilePaste(svgFile);
+        await new Promise((r) => setTimeout(r, 40));
+        const svgBlockedPill = document.getElementById('status-pill').textContent.trim();
+        const svgOverlayHidden = document.getElementById('paste-context').hidden;
+
+        // Helper to generate a solid color PNG File via offscreen canvas
+        const makePngFile = async (color, w, h, name) => {
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          const cx = c.getContext('2d');
+          cx.fillStyle = color;
+          cx.fillRect(0, 0, w, h);
+          const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+          return new File([blob], name, { type: 'image/png' });
+        };
+
+        // 4. Pasting while #filename-input is focused must NOT trigger canvas paste overlay
+        const redPng = await makePngFile('#ff0000', 80, 60, 'red.png');
+        document.getElementById('rename-pencil-btn').click();
+        dispatchFilePaste(redPng);
+        await new Promise((r) => setTimeout(r, 50));
+        const pasteIgnoredInInput = document.getElementById('paste-context').hidden;
+        document.getElementById('filename-input').blur();
+        await new Promise((r) => setTimeout(r, 30));
+
+        // 5. Valid PNG paste -> shows paste-context, hides XL, dims style-group;
+        //    second PNG paste stamps first onto base-canvas (does NOT delete it!); Enter stamps second
+        dispatchFilePaste(redPng);
+        await new Promise((r) => setTimeout(r, 80));
+        const pasteContextVisible = !document.getElementById('paste-context').hidden;
+        const xlHiddenDuringPaste = document.getElementById('size-xl-btn').hidden;
+        const styleDimmedDuringPaste = document.getElementById('style-group').classList.contains('dimmed');
+
+        const bluePng = await makePngFile('#0000ff', 40, 40, 'blue.png');
+        dispatchFilePaste(bluePng);
+        await new Promise((r) => setTimeout(r, 100));
+        // Red image was 80x60 centered on canvas; blue overlay (40x40) is preview-only so base-canvas has red pixels!
+        const cx = Math.floor(base.width / 2);
+        const cy = Math.floor(base.height / 2);
+        const stampedFirstPx = Array.from(ctx.getImageData(cx - 30, cy, 1, 1).data);
+
+        // Press Enter to stamp second (blue) image at center
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 80));
+        const stampedSecondPx = Array.from(ctx.getImageData(cx, cy, 1, 1).data);
+        const pasteContextHiddenAfterStamp = document.getElementById('paste-context').hidden;
+
+        return {
+          xlVisibleInText,
+          memeClassApplied,
+          focusKeptAfterMeme,
+          focusKeptAfterXl,
+          focusKeptAfterCaptionTheme,
+          hBeforeCaption,
+          hAfterCaption,
+          topStripPx,
+          hAfterCaptionUndo,
+          svgBlockedPill,
+          svgOverlayHidden,
+          xssExecuted: Boolean(window.__xss),
+          pasteIgnoredInInput,
+          pasteContextVisible,
+          xlHiddenDuringPaste,
+          styleDimmedDuringPaste,
+          stampedFirstPx,
+          stampedSecondPx,
+          pasteContextHiddenAfterStamp,
+        };
+      })()`
+    );
+    assert.equal(memeAndPasteAudit.xlVisibleInText, true);
+    assert.equal(memeAndPasteAudit.memeClassApplied, true);
+    assert.equal(memeAndPasteAudit.focusKeptAfterMeme, true, 'Switching Clean -> Meme must keep text input focused');
+    assert.equal(memeAndPasteAudit.focusKeptAfterXl, true, 'Clicking XL size must keep text input focused');
+    assert.equal(memeAndPasteAudit.focusKeptAfterCaptionTheme, true, 'Switching Caption theme must keep input focused');
+    assert.ok(memeAndPasteAudit.hAfterCaption > memeAndPasteAudit.hBeforeCaption, 'Caption bar must expand canvas height');
+    assert.ok(
+      memeAndPasteAudit.topStripPx[0] < 40 && memeAndPasteAudit.topStripPx[1] < 40 && memeAndPasteAudit.topStripPx[2] < 40,
+      `Dark caption bar top strip must be dark (got rgba=${memeAndPasteAudit.topStripPx})`
+    );
+    assert.equal(memeAndPasteAudit.hAfterCaptionUndo, memeAndPasteAudit.hBeforeCaption, 'Undo must restore pre-caption height');
+    assert.match(memeAndPasteAudit.svgBlockedPill, /SVG images cannot be pasted/i);
+    assert.equal(memeAndPasteAudit.svgOverlayHidden, true);
+    assert.equal(memeAndPasteAudit.xssExecuted, false);
+    assert.equal(memeAndPasteAudit.pasteIgnoredInInput, true, 'Pasting inside filename input must not hijack into canvas overlay');
+    assert.equal(memeAndPasteAudit.pasteContextVisible, true);
+    assert.equal(memeAndPasteAudit.xlHiddenDuringPaste, true);
+    assert.equal(memeAndPasteAudit.styleDimmedDuringPaste, true);
+    assert.ok(
+      memeAndPasteAudit.stampedFirstPx[0] > 200 && memeAndPasteAudit.stampedFirstPx[2] < 40,
+      `Second paste must stamp first red image instead of deleting it (got rgba=${memeAndPasteAudit.stampedFirstPx})`
+    );
+    assert.ok(
+      memeAndPasteAudit.stampedSecondPx[2] > 200 && memeAndPasteAudit.stampedSecondPx[0] < 40,
+      `Enter must stamp second blue image (got rgba=${memeAndPasteAudit.stampedSecondPx})`
+    );
+    assert.equal(memeAndPasteAudit.pasteContextHiddenAfterStamp, true);
+
+    await cdp.send('Target.closeTarget', { targetId: toolsCase.targetId });
   } finally {
     cleanup();
     server.closeAllConnections();

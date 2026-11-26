@@ -25,27 +25,28 @@
 ## 3. Copy-Paste Full Store Description
 
 ```text
-SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.
+SaveShot is a privacy-first, lightweight Chrome extension for capturing an area, visible tab, or full scrolling page, cropping, highlighting, annotating, pixelating or redacting, adding meme text or caption bars, and copying PNGs straight to your clipboard with no sign-in required, or autosaving directly to your Google Drive. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.
 
-Capture and download screenshots locally right out of the box with no sign-in required, or connect your Google Drive account once to autosave PNGs straight from Chrome with the share link copied automatically.
+Capture, auto-copy to your clipboard, and download screenshots locally right out of the box with no sign-in required, or connect your Google Drive account once to autosave PNGs straight from Chrome.
 
 KEY FEATURES
 
-• Select Area, Full Tab, Right-Click Menu, or Keyboard Shortcuts
-Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, right-click any webpage and choose "Take Screenshot", press Enter inside the selector to grab the full tab, capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
+• Select Area, Visible Tab, Full Scrolling Page, Right-Click Menu, or Keyboard Shortcuts
+Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, capture an entire scrolling webpage with Full page (automatically hides repeated sticky headers and stops cleanly on Esc or infinite feeds), right-click any webpage and choose "Take Screenshot", capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
-• Built-In Screenshot Editor, Highlighter, Pixel Redaction & Instant Clipboard Copy
-Annotate screenshots right in a new tab without leaving Chrome:
+• Built-In Screenshot Editor: Crop, Annotate, Pixelate/Redact & Creator Tools
+Edit screenshots immediately in a new tab without leaving Chrome:
+- Crop screenshots cleanly with rule-of-thirds guides (K)
 - Draw arrows, rectangles, circles, lines, translucent marker highlights (hold Shift for straight lines), and freehand pencil strokes
-- Add clean, legible text callouts
-- Permanently black out sensitive text or numbers with solid pixel redaction
-- Pick preset swatches or any custom #HEX color
-- Rotate 90 degrees, flip horizontally or vertically, undo, or reset
-- Click "Copy image" (or press Ctrl+C / Cmd+C) to copy a lossless PNG straight to your clipboard for pasting into AI tools, chats, docs, or bug trackers, or click "Download" to save locally anytime (no sign-in required)
+- Add clean text callouts, switch to bold outlined Meme text (S / M / L / XL), or add a Light/Dark top Caption bar
+- Paste reaction images or logos directly onto the canvas with Ctrl+V (drag to move, corner to resize)
+- Hide sensitive details with permanent Solid black redaction or mosaic Pixelate redaction
+- Pick preset swatches or any custom #HEX color, rotate 90 degrees, flip horizontally or vertically, undo, or reset
+- Auto-copies your captured PNG straight to the clipboard by default (switch between Image, Drive Link, or Off in Settings), or click "Copy image" (Ctrl+C / Cmd+C) or "Download" anytime with no sign-in required
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Only upload when I click Save" in Settings to redact before anything is uploaded
 
 • Organized in Your Google Drive + Instant Link Sharing
-When connected, SaveShot opens the editor immediately while uploading crisp lossless PNGs in the background into a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). SaveShot copies the Google Drive link to your clipboard automatically, keeps your last 8 captures handy in the popup, and clears recent history when you sign out.
+When connected, SaveShot opens the editor immediately while uploading crisp lossless PNGs in the background into a dedicated "Chrome_SaveShot_ScreenShots" folder in your Google Drive (customizable in Settings). Keep your last 8 captures handy in the popup, copy share links anytime, and clear recent history automatically when you sign out.
 
 • Offline & Full-Drive Backup Protection
 If your internet drops or your Google Drive storage is full when taking a screenshot, your capture stays open in the editor with Retry, Copy image, and Download (plus Save PNG locally fallback) ready so you never lose a capture.

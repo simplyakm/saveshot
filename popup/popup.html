@@ -34,6 +34,8 @@
             id="settings-toggle-btn"
             title="Settings"
             aria-label="Settings"
+            aria-expanded="false"
+            aria-controls="settings-drawer"
             hidden
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -98,18 +100,22 @@
           <div class="setting-row">
             <span class="ss-body">Appearance</span>
             <div class="ss-segmented" id="theme-segmented" role="group" aria-label="Appearance theme">
-              <button type="button" class="ss-seg-item active" data-theme-opt="auto">Auto</button>
-              <button type="button" class="ss-seg-item" data-theme-opt="light">Light</button>
-              <button type="button" class="ss-seg-item" data-theme-opt="dark">Dark</button>
+              <button type="button" class="ss-seg-item active" data-theme-opt="auto" aria-pressed="true">Auto</button>
+              <button type="button" class="ss-seg-item" data-theme-opt="light" aria-pressed="false">Light</button>
+              <button type="button" class="ss-seg-item" data-theme-opt="dark" aria-pressed="false">Dark</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="ss-body">Auto-copy</span>
+            <div class="ss-segmented" id="auto-copy-segmented" role="group" aria-label="Auto-copy after capture">
+              <button type="button" class="ss-seg-item active" data-copy-opt="image" aria-pressed="true" title="Copy PNG image to clipboard on capture">Image</button>
+              <button type="button" class="ss-seg-item" data-copy-opt="link" aria-pressed="false" title="Copy Google Drive link after upload">Link</button>
+              <button type="button" class="ss-seg-item" data-copy-opt="off" aria-pressed="false" title="Do not auto-copy after capture">Off</button>
             </div>
           </div>
 
           <div class="drive-options-group" id="drive-options-group" hidden>
-            <label class="setting-row checkbox-row">
-              <span class="ss-body">Copy Drive link on upload</span>
-              <input type="checkbox" class="setting-checkbox" id="auto-copy-checkbox" />
-            </label>
-
             <label class="setting-row checkbox-row">
               <span class="ss-body">Only upload when I click Save</span>
               <input type="checkbox" class="setting-checkbox" id="edit-before-upload-checkbox" />
@@ -123,7 +129,7 @@
 
         <div class="ss-alert warning" id="restricted-warning" hidden></div>
 
-        <!-- Capture Grid: Select area first, Visible tab second -->
+        <!-- Capture Grid: Select area, Visible tab, and Full page -->
         <div class="capture-grid">
           <button type="button" class="capture-tile" id="capture-region-btn">
             <div class="capture-icon blue">
@@ -150,9 +156,24 @@
               <div class="ss-meta tabular" id="popup-shortcut-visible">Custom shortcut</div>
             </div>
           </button>
+
+          <button type="button" class="capture-tile capture-tile-wide" id="capture-fullpage-btn">
+            <div class="capture-icon amber">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="5" y="3" width="14" height="18" rx="2"></rect>
+                <line x1="9" y1="8" x2="15" y2="8"></line>
+                <line x1="9" y1="12" x2="15" y2="12"></line>
+                <polyline points="9.5 16 12 18.5 14.5 16"></polyline>
+              </svg>
+            </div>
+            <div class="capture-copy">
+              <div class="ss-title-sm">Full page</div>
+              <div class="ss-meta">Scroll and stitch entire page</div>
+            </div>
+          </button>
         </div>
 
-        <div class="status-banner" id="status-banner" hidden></div>
+        <div class="status-banner" id="status-banner" role="status" aria-live="polite" hidden></div>
 
         <!-- Signed Out Connect Google Drive Card -->
         <div class="connect-card" id="signed-out-view" hidden>
@@ -236,7 +257,7 @@
       <!-- Slim Split Footer -->
       <footer class="popup-footer ss-colophon">
         <div class="footer-left">
-          <span class="tabular" id="popup-version">v1.2.1</span>
+          <span class="tabular" id="popup-version">v1.3.0</span>
           <span aria-hidden="true">&middot;</span>
           <button type="button" class="ss-author-link" id="footer-bug-btn">Report bug</button>
           <span aria-hidden="true">&middot;</span>

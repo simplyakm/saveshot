@@ -4,9 +4,14 @@ import {
   sanitizeScreenshotFilename,
 } from '../lib/capture.js';
 import {
+  addCaptionBarToCanvas,
+  computePastedImageBox,
+  cropSourceToCanvas,
   FONT_SIZES,
   HIGHLIGHTER_SIZES,
+  normalizeRect,
   parseHexColorInput,
+  PIXELATE_BLOCK_SIZES,
   renderAnnotation,
   sanitizeHexColor,
   STROKE_SIZES,
@@ -15,6 +20,17 @@ import {
 import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
 
 const MAX_UNDO_STEPS = 20;
+const MIN_UNDO_STEPS = 3;
+const MAX_UNDO_BYTES = 256 * 1024 * 1024;
+const MAX_PASTE_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_PASTE_IMAGE_DIM = 8192;
+const MAX_PASTE_IMAGE_PIXELS = 16_000_000;
+const ALLOWED_PASTE_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
 
 const els = {
   filenameReadonly: document.getElementById('filename-readonly'),
@@ -40,6 +56,25 @@ const els = {
   hexTextInput: document.getElementById('hex-text-input'),
   applyHexBtn: document.getElementById('apply-hex-btn'),
   sizePills: document.getElementById('size-pills'),
+  sizeXlBtn: document.getElementById('size-xl-btn'),
+  contextBar: document.getElementById('context-bar'),
+  redactContext: document.getElementById('redact-context'),
+  redactModeSegmented: document.getElementById('redact-mode-segmented'),
+  textContext: document.getElementById('text-context'),
+  textStyleSegmented: document.getElementById('text-style-segmented'),
+  captionToggleBtn: document.getElementById('caption-toggle-btn'),
+  captionForm: document.getElementById('caption-form'),
+  captionTextInput: document.getElementById('caption-text-input'),
+  captionThemeSegmented: document.getElementById('caption-theme-segmented'),
+  applyCaptionBtn: document.getElementById('apply-caption-btn'),
+  cancelCaptionBtn: document.getElementById('cancel-caption-btn'),
+  cropContext: document.getElementById('crop-context'),
+  cropDimLabel: document.getElementById('crop-dim-label'),
+  applyCropBtn: document.getElementById('apply-crop-btn'),
+  cancelCropBtn: document.getElementById('cancel-crop-btn'),
+  pasteContext: document.getElementById('paste-context'),
+  applyPasteBtn: document.getElementById('apply-paste-btn'),
+  cancelPasteBtn: document.getElementById('cancel-paste-btn'),
   undoBtn: document.getElementById('undo-btn'),
   resetBtn: document.getElementById('reset-btn'),
   stageMessage: document.getElementById('stage-message'),
@@ -55,7 +90,7 @@ const els = {
   confirmReplaceBtn: document.getElementById('confirm-replace-btn'),
 };
 
-const baseCtx = els.baseCanvas.getContext('2d');
+const baseCtx = els.baseCanvas.getContext('2d', { willReadFrequently: true });
 const previewCtx = els.previewCanvas.getContext('2d');
 
 const state = {
@@ -71,11 +106,19 @@ const state = {
   pageUrl: '',
   pageTitle: '',
   incognito: false,
-  autoCopyLink: true,
+  autoCopyMode: 'image', // 'image' | 'link' | 'off'
+  autoImageCopied: false,
+  captureNotice: '',
   tool: 'arrow',
+  previousTool: 'arrow',
+  redactMode: 'solid', // 'solid' | 'pixelate'
+  textStyle: 'clean', // 'clean' | 'meme'
+  captionTheme: 'light', // 'light' | 'dark'
   color: '#ef4444',
   userPickedColor: false,
   highlighterAutoColored: false,
+  memeAutoColored: false,
+  preMemeColor: null,
   sizeKey: 'md',
   ready: false,
   saving: false,
@@ -89,8 +132,11 @@ const state = {
   imageModifiedSinceSave: false,
   initialBitmap: null,
   undoStack: [],
+  undoBytes: 0,
   activeDrag: null,
   activeTextAnchor: null,
+  pendingCrop: null,
+  pastedOverlay: null,
 };
 
 function stripPngSuffix(filename) {
@@ -119,6 +165,7 @@ function hasUnsavedChanges() {
   return (
     state.imageModifiedSinceSave ||
     hasPendingText ||
+    Boolean(state.pastedOverlay) ||
     getDesiredFilename() !== state.savedFilename
   );
 }
@@ -140,7 +187,10 @@ function clearStatusPillIfIdle() {
 function restorePersistentUploadPill() {
   if (!state.ready || state.saving) return;
   if (state.signedIn && state.uploadState === 'uploading') {
-    showStatusPill('warn', 'Uploading to Google Drive...');
+    const uploadingText = state.autoImageCopied
+      ? 'Uploading to Google Drive... \u00b7 Image copied'
+      : 'Uploading to Google Drive...';
+    showStatusPill('warn', uploadingText);
   } else if (state.uploadState === 'failed') {
     showStatusPill(
       'err',
@@ -186,6 +236,21 @@ function updateDimensionsLabel() {
   }
   els.dimLabel.hidden = false;
   els.dimLabel.textContent = `${els.baseCanvas.width} \u00d7 ${els.baseCanvas.height}`;
+}
+
+function updateStyleControlsState() {
+  const showPaste = Boolean(state.pastedOverlay);
+  const dimAll =
+    showPaste ||
+    state.tool === 'crop' ||
+    (state.tool === 'redact' && state.redactMode === 'solid');
+  const dimColorsOnly =
+    !dimAll && state.tool === 'redact' && state.redactMode === 'pixelate';
+
+  els.styleGroup.classList.toggle('dimmed', dimAll);
+  els.styleGroup.inert = dimAll;
+  els.colorSwatches.classList.toggle('dimmed', dimColorsOnly);
+  els.colorSwatches.inert = dimColorsOnly;
 }
 
 function updateUiState() {
@@ -250,14 +315,53 @@ function updateUiState() {
     els.openDriveLink.hidden = true;
   }
 
-  els.undoBtn.disabled = !state.ready || state.saving || state.undoStack.length === 0;
+  const hasUndoableAction =
+    state.undoStack.length > 0 ||
+    !els.textOverlayInput.hidden ||
+    Boolean(state.pastedOverlay) ||
+    Boolean(state.pendingCrop);
+  els.undoBtn.disabled = !state.ready || state.saving || !hasUndoableAction;
   els.resetBtn.disabled = !state.ready || state.saving || state.isAtOriginalCapture;
+  updateContextBar();
+}
+
+function updateContextBar() {
+  const showPaste = Boolean(state.pastedOverlay);
+  const showCrop = !showPaste && state.tool === 'crop';
+  const showRedact = !showPaste && state.tool === 'redact';
+  const showText = !showPaste && state.tool === 'text';
+
+  els.pasteContext.hidden = !showPaste;
+  els.cropContext.hidden = !showCrop;
+  els.redactContext.hidden = !showRedact;
+  els.textContext.hidden = !showText;
+  els.contextBar.hidden = !(showPaste || showCrop || showRedact || showText);
+  els.sizeXlBtn.hidden = showPaste || state.tool !== 'text';
+  updateStyleControlsState();
+
+  if (showCrop) {
+    if (state.pendingCrop && state.pendingCrop.width >= 4 && state.pendingCrop.height >= 4) {
+      els.cropDimLabel.textContent = `Crop ${state.pendingCrop.width} \u00d7 ${state.pendingCrop.height}`;
+      els.applyCropBtn.disabled = !state.ready || state.saving;
+    } else {
+      els.cropDimLabel.textContent = 'Drag on image to select crop area';
+      els.applyCropBtn.disabled = true;
+    }
+  }
+
+  els.previewCanvas.classList.toggle('text-cursor', !showPaste && state.tool === 'text');
+  if (!showPaste) {
+    els.previewCanvas.classList.remove('move-cursor', 'nwse-cursor');
+  }
 }
 
 function syncPreviewCanvasSize() {
   els.previewCanvas.width = els.baseCanvas.width;
   els.previewCanvas.height = els.baseCanvas.height;
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  const isTall =
+    els.baseCanvas.width > 0 && els.baseCanvas.height > els.baseCanvas.width * 1.5;
+  els.canvasWrap.classList.toggle('tall-canvas', isTall);
   updateDimensionsLabel();
 }
 
@@ -271,6 +375,11 @@ function getEffectiveStrokeWidth(tool = state.tool) {
   const sizeTable = tool === 'highlighter' ? HIGHLIGHTER_SIZES : STROKE_SIZES;
   const base = sizeTable[state.sizeKey] || sizeTable.md;
   return Math.round(base * getDisplayScale() * 10) / 10;
+}
+
+function getEffectivePixelateBlockSize() {
+  const base = PIXELATE_BLOCK_SIZES[state.sizeKey] || PIXELATE_BLOCK_SIZES.md;
+  return Math.max(6, Math.min(48, Math.round(base * getDisplayScale())));
 }
 
 function getEffectiveFontSize() {
@@ -290,15 +399,29 @@ function getCanvasCoordinates(event) {
   };
 }
 
+function popUnusedUndoSnapshot() {
+  const popped = state.undoStack.pop();
+  if (!popped) return;
+  state.undoBytes = Math.max(0, state.undoBytes - (popped.bytes || 0));
+  popped.bitmap?.close?.();
+}
+
 async function pushUndoSnapshot() {
   const snapshot = await createImageBitmap(els.baseCanvas);
+  const bytes = Math.max(0, snapshot.width * snapshot.height * 4);
   state.undoStack.push({
     bitmap: snapshot,
+    bytes,
     isAtOriginalCapture: state.isAtOriginalCapture,
     imageModifiedSinceSave: state.imageModifiedSinceSave,
   });
-  while (state.undoStack.length > MAX_UNDO_STEPS) {
+  state.undoBytes += bytes;
+  while (
+    state.undoStack.length > MAX_UNDO_STEPS ||
+    (state.undoStack.length > MIN_UNDO_STEPS && state.undoBytes > MAX_UNDO_BYTES)
+  ) {
     const evicted = state.undoStack.shift();
+    state.undoBytes = Math.max(0, state.undoBytes - (evicted?.bytes || 0));
     evicted?.bitmap?.close?.();
   }
   updateUiState();
@@ -309,6 +432,7 @@ function clearUndoStack() {
     const entry = state.undoStack.pop();
     entry?.bitmap?.close?.();
   }
+  state.undoBytes = 0;
 }
 
 let mutationQueue = Promise.resolve();
@@ -316,6 +440,67 @@ let mutationQueue = Promise.resolve();
 function enqueueCanvasMutation(fn) {
   mutationQueue = mutationQueue.then(fn, fn);
   return mutationQueue;
+}
+
+function clearPendingCrop() {
+  if (!state.pendingCrop) return;
+  state.pendingCrop = null;
+  cancelPreviewRender();
+  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  updateUiState();
+}
+
+function closeCaptionForm({ restoreFocus = false } = {}) {
+  const wasOpen = !els.captionForm.hidden;
+  els.captionForm.hidden = true;
+  els.captionToggleBtn.hidden = false;
+  els.captionToggleBtn.setAttribute('aria-expanded', 'false');
+  els.captionTextInput.value = '';
+  if (restoreFocus && wasOpen) {
+    els.captionToggleBtn.focus();
+  }
+}
+
+function cancelPastedOverlay() {
+  if (!state.pastedOverlay) return;
+  const ov = state.pastedOverlay;
+  state.pastedOverlay = null;
+  ov.bitmap?.close?.();
+  cancelPreviewRender();
+  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  updateUiState();
+}
+
+function commitPastedOverlayIfNeeded() {
+  if (!state.pastedOverlay) return mutationQueue;
+  const ov = state.pastedOverlay;
+  state.pastedOverlay = null;
+  cancelPreviewRender();
+  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  updateUiState();
+
+  return enqueueCanvasMutation(async () => {
+    try {
+      await pushUndoSnapshot();
+      baseCtx.save();
+      baseCtx.globalAlpha = 1;
+      baseCtx.globalCompositeOperation = 'source-over';
+      baseCtx.drawImage(
+        ov.bitmap,
+        Math.round(ov.x),
+        Math.round(ov.y),
+        Math.max(1, Math.round(ov.width)),
+        Math.max(1, Math.round(ov.height))
+      );
+      baseCtx.restore();
+      state.isAtOriginalCapture = false;
+      state.imageModifiedSinceSave = true;
+      clearStatusPillIfIdle();
+      updateUiState();
+    } finally {
+      ov.bitmap?.close?.();
+    }
+  });
 }
 
 function commitActiveTextIfNeeded() {
@@ -343,6 +528,7 @@ function commitActiveTextIfNeeded() {
       {
         tool: 'text',
         text,
+        textStyle: anchor.textStyle || 'clean',
         x: anchor.x,
         y: anchor.y,
         color: anchor.color,
@@ -357,11 +543,16 @@ function commitActiveTextIfNeeded() {
       state.imageModifiedSinceSave = true;
       clearStatusPillIfIdle();
     } else {
-      const popped = state.undoStack.pop();
-      popped?.bitmap?.close?.();
+      popUnusedUndoSnapshot();
     }
     updateUiState();
   });
+}
+
+async function commitPendingEditsIfNeeded() {
+  await commitActiveTextIfNeeded();
+  await commitPastedOverlayIfNeeded();
+  clearPendingCrop();
 }
 
 function cancelActiveText() {
@@ -377,36 +568,175 @@ function cancelActiveText() {
 function openTextOverlayAt(coords) {
   const rect = els.baseCanvas.getBoundingClientRect();
   const cssFontSize = FONT_SIZES[state.sizeKey] || FONT_SIZES.md;
+  const minTextHeight = Math.max(34, Math.ceil(cssFontSize * 1.4));
   const clampedCssX = Math.max(4, Math.min(Math.max(4, rect.width - 120), coords.cssX));
-  const clampedCssY = Math.max(4, Math.min(Math.max(4, rect.height - 34), coords.cssY));
+  const clampedCssY = Math.max(
+    4,
+    Math.min(Math.max(4, rect.height - minTextHeight), coords.cssY)
+  );
 
   state.activeTextAnchor = {
     x: (clampedCssX / Math.max(1, rect.width)) * els.baseCanvas.width,
     y: (clampedCssY / Math.max(1, rect.height)) * els.baseCanvas.height,
     color: state.color,
     fontSize: getEffectiveFontSize(),
+    textStyle: state.textStyle,
   };
 
+  els.textOverlayInput.classList.toggle('meme-style', state.textStyle === 'meme');
   els.textOverlayInput.style.setProperty('--tx', `${clampedCssX}px`);
   els.textOverlayInput.style.setProperty('--ty', `${clampedCssY}px`);
   els.textOverlayInput.style.setProperty('--tcolor', state.color);
   els.textOverlayInput.style.setProperty('--tsize', `${cssFontSize}px`);
   els.textOverlayInput.value = '';
   els.textOverlayInput.hidden = false;
+  updateUiState();
   requestAnimationFrame(() => els.textOverlayInput.focus());
 }
 
-function closeHexPopover() {
+function closeHexPopover({ restoreFocus = false } = {}) {
+  const wasOpen = !els.hexPopover.hidden;
   els.hexPopover.hidden = true;
   els.hexInputWrap.classList.remove('invalid');
+  els.customColorBtn.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && wasOpen) {
+    els.customColorBtn.focus();
+  }
+}
+
+function setRedactMode(mode) {
+  state.redactMode = mode === 'pixelate' ? 'pixelate' : 'solid';
+  for (const btn of els.redactModeSegmented.querySelectorAll('[data-redact-mode]')) {
+    const isActive = btn.dataset.redactMode === state.redactMode;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+  }
+  updateStyleControlsState();
+}
+
+function setTextStyle(styleMode) {
+  const nextStyle = styleMode === 'meme' ? 'meme' : 'clean';
+  state.textStyle = nextStyle;
+  for (const btn of els.textStyleSegmented.querySelectorAll('[data-text-mode]')) {
+    const isActive = btn.dataset.textMode === state.textStyle;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+  }
+  if (
+    state.textStyle === 'meme' &&
+    !state.userPickedColor &&
+    !state.memeAutoColored &&
+    state.color !== '#ffffff'
+  ) {
+    state.preMemeColor = state.color;
+    state.memeAutoColored = true;
+    setColor('#ffffff', { isCustom: false });
+  } else if (
+    state.textStyle === 'clean' &&
+    state.memeAutoColored &&
+    !state.userPickedColor &&
+    state.preMemeColor
+  ) {
+    const restore = state.preMemeColor;
+    state.memeAutoColored = false;
+    state.preMemeColor = null;
+    setColor(restore, { isCustom: false });
+  }
+  if (!els.textOverlayInput.hidden && state.activeTextAnchor) {
+    state.activeTextAnchor.textStyle = state.textStyle;
+    els.textOverlayInput.classList.toggle('meme-style', state.textStyle === 'meme');
+    els.textOverlayInput.focus();
+  }
+}
+
+function setCaptionTheme(theme) {
+  state.captionTheme = theme === 'dark' ? 'dark' : 'light';
+  for (const btn of els.captionThemeSegmented.querySelectorAll('[data-caption-theme]')) {
+    const isActive = btn.dataset.captionTheme === state.captionTheme;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+  }
+  if (!els.captionForm.hidden) {
+    els.captionTextInput.focus();
+  }
+}
+
+function applyCaptionBar() {
+  if (!state.ready || state.saving) return mutationQueue;
+  const raw = els.captionTextInput.value.trim();
+  if (!raw) {
+    els.captionTextInput.focus();
+    return mutationQueue;
+  }
+  const theme = state.captionTheme;
+  closeCaptionForm();
+  commitActiveTextIfNeeded();
+  commitPastedOverlayIfNeeded();
+  clearPendingCrop();
+
+  return enqueueCanvasMutation(async () => {
+    await pushUndoSnapshot();
+    const sourceBitmap = state.undoStack[state.undoStack.length - 1].bitmap;
+    try {
+      addCaptionBarToCanvas(sourceBitmap, { text: raw, theme }, els.baseCanvas);
+      syncPreviewCanvasSize();
+      state.isAtOriginalCapture = false;
+      state.imageModifiedSinceSave = true;
+      clearStatusPillIfIdle();
+      updateUiState();
+    } catch (err) {
+      popUnusedUndoSnapshot();
+      showStatusPill('err', err?.message || 'Could not add caption bar.', 3500);
+      updateUiState();
+    }
+  });
+}
+
+function applyPendingCrop() {
+  if (!state.ready || state.saving || !state.pendingCrop) return mutationQueue;
+  const cropRect = { ...state.pendingCrop };
+  if (cropRect.width < 4 || cropRect.height < 4) return mutationQueue;
+  clearPendingCrop();
+
+  return enqueueCanvasMutation(async () => {
+    await pushUndoSnapshot();
+    const sourceBitmap = state.undoStack[state.undoStack.length - 1].bitmap;
+    try {
+      cropSourceToCanvas(sourceBitmap, cropRect, els.baseCanvas);
+      syncPreviewCanvasSize();
+      state.isAtOriginalCapture = false;
+      state.imageModifiedSinceSave = true;
+      clearStatusPillIfIdle();
+      updateUiState();
+    } catch (err) {
+      popUnusedUndoSnapshot();
+      showStatusPill('err', err?.message || 'Could not crop screenshot.', 3500);
+      updateUiState();
+    }
+  });
 }
 
 async function setTool(nextTool) {
-  await commitActiveTextIfNeeded();
+  if (state.activeDrag) {
+    state.activeDrag = null;
+    cancelPreviewRender();
+    previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  }
+  await commitPendingEditsIfNeeded();
+  closeCaptionForm();
+  if (nextTool === 'crop' && state.tool && state.tool !== 'crop') {
+    state.previousTool = state.tool;
+  }
   state.tool = nextTool;
 
+  if (nextTool !== 'text' && state.sizeKey === 'xl') {
+    setSizeKey('lg');
+  }
+
   for (const btn of document.querySelectorAll('[data-tool]')) {
-    btn.classList.toggle('active', btn.dataset.tool === nextTool);
+    const isActive = btn.dataset.tool === nextTool;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 
   if (
@@ -419,15 +749,13 @@ async function setTool(nextTool) {
     setColor('#f59e0b', { isCustom: false });
   }
 
-  if (nextTool === 'redact') {
+  if (nextTool === 'redact' || nextTool === 'crop') {
     closeHexPopover();
   }
-  els.styleGroup.classList.toggle('dimmed', nextTool === 'redact');
-  els.previewCanvas.classList.toggle('text-cursor', nextTool === 'text');
   updateUiState();
 }
 
-function setColor(nextColor, { isCustom = false } = {}) {
+function setColor(nextColor, { isCustom = false, refocusText = false } = {}) {
   const safeColor = sanitizeHexColor(nextColor, state.color);
   state.color = safeColor;
 
@@ -435,6 +763,7 @@ function setColor(nextColor, { isCustom = false } = {}) {
   for (const btn of els.colorSwatches.querySelectorAll('[data-color]')) {
     const isMatch = !isCustom && btn.dataset.color.toLowerCase() === safeColor;
     btn.classList.toggle('active', isMatch);
+    btn.setAttribute('aria-pressed', String(isMatch));
     if (isMatch) matchedPreset = true;
   }
 
@@ -451,13 +780,18 @@ function setColor(nextColor, { isCustom = false } = {}) {
   if (!els.textOverlayInput.hidden && state.activeTextAnchor) {
     state.activeTextAnchor.color = safeColor;
     els.textOverlayInput.style.setProperty('--tcolor', safeColor);
+    if (refocusText) {
+      els.textOverlayInput.focus();
+    }
   }
 }
 
-function setSizeKey(nextSize) {
+function setSizeKey(nextSize, { refocusText = false } = {}) {
   state.sizeKey = nextSize;
   for (const btn of els.sizePills.querySelectorAll('[data-size]')) {
-    btn.classList.toggle('active', btn.dataset.size === nextSize);
+    const isActive = btn.dataset.size === nextSize;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
   if (!els.textOverlayInput.hidden && state.activeTextAnchor) {
     state.activeTextAnchor.fontSize = getEffectiveFontSize();
@@ -465,12 +799,17 @@ function setSizeKey(nextSize) {
       '--tsize',
       `${FONT_SIZES[nextSize] || FONT_SIZES.md}px`
     );
+    if (refocusText) {
+      els.textOverlayInput.focus();
+    }
   }
 }
 
 function applyTransform(kind) {
   if (!state.ready || state.saving) return mutationQueue;
   commitActiveTextIfNeeded();
+  commitPastedOverlayIfNeeded();
+  clearPendingCrop();
   if (state.activeDrag) {
     state.activeDrag = null;
   }
@@ -495,9 +834,18 @@ function undoLastChange() {
     cancelActiveText();
     return mutationQueue;
   }
+  if (state.pastedOverlay) {
+    cancelPastedOverlay();
+    return mutationQueue;
+  }
+  if (state.pendingCrop) {
+    clearPendingCrop();
+    return mutationQueue;
+  }
   return enqueueCanvasMutation(async () => {
     const prev = state.undoStack.pop();
     if (!prev) return;
+    state.undoBytes = Math.max(0, state.undoBytes - (prev.bytes || 0));
 
     try {
       els.baseCanvas.width = prev.bitmap.width;
@@ -519,7 +867,9 @@ function resetToOriginal() {
   if (!state.ready || state.saving || state.isAtOriginalCapture || !state.initialBitmap) {
     return mutationQueue;
   }
-  commitActiveTextIfNeeded();
+  cancelActiveText();
+  cancelPastedOverlay();
+  clearPendingCrop();
   return enqueueCanvasMutation(async () => {
     await pushUndoSnapshot();
 
@@ -536,8 +886,8 @@ function resetToOriginal() {
   });
 }
 
-function buildDragOp(drag) {
-  return {
+function buildDragOp(drag, { forPreview = false } = {}) {
+  const op = {
     tool: drag.tool,
     color: drag.color,
     strokeWidth: drag.strokeWidth,
@@ -547,6 +897,14 @@ function buildDragOp(drag) {
     y2: drag.currentY,
     points: drag.points,
   };
+  if (drag.tool === 'redact') {
+    op.redactMode = drag.redactMode || 'solid';
+    op.blockSize = drag.blockSize || PIXELATE_BLOCK_SIZES.md;
+    if (forPreview && op.redactMode === 'pixelate') {
+      op.sourceCtx = baseCtx;
+    }
+  }
+  return op;
 }
 
 let previewRafId = 0;
@@ -558,16 +916,133 @@ function cancelPreviewRender() {
   }
 }
 
+function getPasteResizeHandleRadius() {
+  return Math.max(8, Math.round(9 * getDisplayScale()));
+}
+
+function isOnPasteResizeHandle(ov, x, y) {
+  const r = getPasteResizeHandleRadius() * 1.4;
+  const hx = ov.x + ov.width;
+  const hy = ov.y + ov.height;
+  return Math.abs(x - hx) <= r && Math.abs(y - hy) <= r;
+}
+
+function isInsidePasteBox(ov, x, y) {
+  return x >= ov.x && x <= ov.x + ov.width && y >= ov.y && y <= ov.y + ov.height;
+}
+
+function renderCropOverlay(rect) {
+  const cw = els.previewCanvas.width;
+  const ch = els.previewCanvas.height;
+  const ds = getDisplayScale();
+  previewCtx.save();
+  previewCtx.fillStyle = 'rgba(15, 18, 24, 0.52)';
+  previewCtx.fillRect(0, 0, cw, ch);
+  if (rect.width >= 2 && rect.height >= 2) {
+    previewCtx.clearRect(rect.x, rect.y, rect.width, rect.height);
+    previewCtx.strokeStyle = '#ffffff';
+    previewCtx.lineWidth = Math.max(1.5, Math.round(1.5 * ds));
+    previewCtx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+
+    // Subtle rule-of-thirds guides
+    previewCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    previewCtx.lineWidth = Math.max(1, Math.round(ds));
+    previewCtx.beginPath();
+    previewCtx.moveTo(rect.x + rect.width / 3, rect.y);
+    previewCtx.lineTo(rect.x + rect.width / 3, rect.y + rect.height);
+    previewCtx.moveTo(rect.x + (rect.width * 2) / 3, rect.y);
+    previewCtx.lineTo(rect.x + (rect.width * 2) / 3, rect.y + rect.height);
+    previewCtx.moveTo(rect.x, rect.y + rect.height / 3);
+    previewCtx.lineTo(rect.x + rect.width, rect.y + rect.height / 3);
+    previewCtx.moveTo(rect.x, rect.y + (rect.height * 2) / 3);
+    previewCtx.lineTo(rect.x + rect.width, rect.y + (rect.height * 2) / 3);
+    previewCtx.stroke();
+  }
+  previewCtx.restore();
+}
+
+function renderPastedOverlayPreview(ov) {
+  const ds = getDisplayScale();
+  const handleR = getPasteResizeHandleRadius();
+  previewCtx.save();
+  previewCtx.drawImage(ov.bitmap, ov.x, ov.y, ov.width, ov.height);
+  previewCtx.strokeStyle = '#1a73e8';
+  previewCtx.lineWidth = Math.max(2, Math.round(2 * ds));
+  previewCtx.setLineDash([Math.round(6 * ds), Math.round(4 * ds)]);
+  previewCtx.strokeRect(ov.x, ov.y, ov.width, ov.height);
+  previewCtx.setLineDash([]);
+
+  // Bottom-right resize handle
+  previewCtx.fillStyle = '#ffffff';
+  previewCtx.strokeStyle = '#1a73e8';
+  previewCtx.lineWidth = Math.max(2, Math.round(2 * ds));
+  previewCtx.beginPath();
+  previewCtx.arc(ov.x + ov.width, ov.y + ov.height, handleR, 0, Math.PI * 2);
+  previewCtx.fill();
+  previewCtx.stroke();
+  previewCtx.restore();
+}
+
 function renderActiveDragPreview() {
   previewRafId = 0;
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+
+  if (state.pastedOverlay) {
+    renderPastedOverlayPreview(state.pastedOverlay);
+    return;
+  }
+
+  if (state.activeDrag?.tool === 'crop') {
+    const rect = normalizeRect(
+      state.activeDrag.startX,
+      state.activeDrag.startY,
+      state.activeDrag.currentX,
+      state.activeDrag.currentY,
+      els.previewCanvas.width,
+      els.previewCanvas.height,
+      { snapOutward: true }
+    );
+    renderCropOverlay(rect);
+    if (rect.width >= 4 && rect.height >= 4) {
+      els.cropDimLabel.textContent = `Crop ${rect.width} \u00d7 ${rect.height}`;
+    }
+    return;
+  }
+
+  if (state.pendingCrop) {
+    renderCropOverlay(state.pendingCrop);
+    return;
+  }
+
   if (!state.activeDrag) return;
+  const op = buildDragOp(state.activeDrag, { forPreview: true });
   renderAnnotation(
     previewCtx,
-    buildDragOp(state.activeDrag),
+    op,
     els.previewCanvas.width,
     els.previewCanvas.height
   );
+
+  if (op.tool === 'redact' && op.redactMode === 'pixelate') {
+    const rect = normalizeRect(
+      op.x1,
+      op.y1,
+      op.x2,
+      op.y2,
+      els.previewCanvas.width,
+      els.previewCanvas.height,
+      { snapOutward: true }
+    );
+    if (rect.width >= 2 && rect.height >= 2) {
+      const ds = getDisplayScale();
+      previewCtx.save();
+      previewCtx.strokeStyle = '#1a73e8';
+      previewCtx.lineWidth = Math.max(1.5, Math.round(1.5 * ds));
+      previewCtx.setLineDash([Math.max(4, Math.round(4 * ds)), Math.max(3, Math.round(3 * ds))]);
+      previewCtx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+      previewCtx.restore();
+    }
+  }
 }
 
 function schedulePreviewRender() {
@@ -594,11 +1069,47 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
   closeHexPopover();
 
   const coords = getCanvasCoordinates(event);
+
+  // Interactive drag/resize for pasted reaction image overlay
+  if (state.pastedOverlay) {
+    const ov = state.pastedOverlay;
+    if (isOnPasteResizeHandle(ov, coords.x, coords.y)) {
+      ov.dragMode = 'resize';
+      ov.pointerId = event.pointerId;
+      try {
+        els.previewCanvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic pointer events in tests
+      }
+      return;
+    }
+    if (isInsidePasteBox(ov, coords.x, coords.y)) {
+      ov.dragMode = 'move';
+      ov.pointerId = event.pointerId;
+      ov.dragOffsetX = coords.x - ov.x;
+      ov.dragOffsetY = coords.y - ov.y;
+      try {
+        els.previewCanvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic pointer events in tests
+      }
+      return;
+    }
+    // Clicking outside pasted image stamps it cleanly
+    commitPastedOverlayIfNeeded();
+    return;
+  }
+
   commitActiveTextIfNeeded();
 
   if (state.tool === 'text') {
     openTextOverlayAt(coords);
     return;
+  }
+
+  if (state.tool === 'crop') {
+    state.pendingCrop = null;
+    updateUiState();
   }
 
   try {
@@ -613,6 +1124,8 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
   state.activeDrag = {
     pointerId: event.pointerId,
     tool: state.tool,
+    redactMode: state.redactMode,
+    blockSize: getEffectivePixelateBlockSize(),
     color: state.color,
     strokeWidth: getEffectiveStrokeWidth(state.tool),
     startX: coords.x,
@@ -626,6 +1139,37 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
 });
 
 els.previewCanvas.addEventListener('pointermove', (event) => {
+  if (state.pastedOverlay) {
+    const ov = state.pastedOverlay;
+    const coords = getCanvasCoordinates(event);
+    if (!ov.dragMode) {
+      const onHandle = isOnPasteResizeHandle(ov, coords.x, coords.y);
+      const inside = !onHandle && isInsidePasteBox(ov, coords.x, coords.y);
+      els.previewCanvas.classList.toggle('nwse-cursor', onHandle);
+      els.previewCanvas.classList.toggle('move-cursor', inside);
+      return;
+    }
+    if (event.pointerId !== ov.pointerId) return;
+    event.preventDefault();
+    const cw = els.baseCanvas.width;
+    const ch = els.baseCanvas.height;
+    if (ov.dragMode === 'move') {
+      ov.x = Math.max(-ov.width + 24, Math.min(cw - 24, Math.round(coords.x - ov.dragOffsetX)));
+      ov.y = Math.max(-ov.height + 24, Math.min(ch - 24, Math.round(coords.y - ov.dragOffsetY)));
+    } else if (ov.dragMode === 'resize') {
+      const maxW = Math.max(24, cw - ov.x);
+      const maxH = Math.max(24, ch - ov.y);
+      const maxWByH = Math.max(24, maxH * ov.aspectRatio);
+      const upperW = Math.min(maxW, maxWByH);
+      const rawW = Math.max(24, coords.x - ov.x, (coords.y - ov.y) * ov.aspectRatio);
+      const nextW = Math.max(24, Math.min(upperW, rawW));
+      ov.width = Math.max(24, Math.round(nextW));
+      ov.height = Math.max(24, Math.min(maxH, Math.round(ov.width / ov.aspectRatio)));
+    }
+    schedulePreviewRender();
+    return;
+  }
+
   if (!state.activeDrag || event.pointerId !== state.activeDrag.pointerId) return;
   event.preventDefault();
   const coords = getCanvasCoordinates(event);
@@ -645,11 +1189,43 @@ els.previewCanvas.addEventListener('pointermove', (event) => {
 });
 
 function finishPointerDrag(event) {
+  if (state.pastedOverlay?.dragMode && event.pointerId === state.pastedOverlay.pointerId) {
+    event.preventDefault();
+    state.pastedOverlay.dragMode = null;
+    state.pastedOverlay.pointerId = null;
+    renderActiveDragPreview();
+    return;
+  }
+
   if (!state.activeDrag || event.pointerId !== state.activeDrag.pointerId) return;
   event.preventDefault();
   const coords = getCanvasCoordinates(event);
   state.activeDrag.currentX = coords.x;
   state.activeDrag.currentY = coords.y;
+
+  if (state.activeDrag.tool === 'crop') {
+    const rect = normalizeRect(
+      state.activeDrag.startX,
+      state.activeDrag.startY,
+      state.activeDrag.currentX,
+      state.activeDrag.currentY,
+      els.baseCanvas.width,
+      els.baseCanvas.height,
+      { snapOutward: true }
+    );
+    state.activeDrag = null;
+    cancelPreviewRender();
+    if (rect.width >= 4 && rect.height >= 4) {
+      state.pendingCrop = rect;
+      renderActiveDragPreview();
+    } else {
+      state.pendingCrop = null;
+      previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+    }
+    updateUiState();
+    return;
+  }
+
   if (state.activeDrag.rawPoints) {
     state.activeDrag.rawPoints.push({ x: coords.x, y: coords.y });
     state.activeDrag.points =
@@ -677,8 +1253,7 @@ function finishPointerDrag(event) {
       state.imageModifiedSinceSave = true;
       clearStatusPillIfIdle();
     } else {
-      const unused = state.undoStack.pop();
-      unused?.bitmap?.close?.();
+      popUnusedUndoSnapshot();
     }
     updateUiState();
   });
@@ -686,10 +1261,19 @@ function finishPointerDrag(event) {
 
 els.previewCanvas.addEventListener('pointerup', finishPointerDrag);
 els.previewCanvas.addEventListener('pointercancel', (event) => {
+  if (state.pastedOverlay?.dragMode && event.pointerId === state.pastedOverlay.pointerId) {
+    state.pastedOverlay.dragMode = null;
+    state.pastedOverlay.pointerId = null;
+    return;
+  }
   if (state.activeDrag && event.pointerId !== state.activeDrag.pointerId) return;
   state.activeDrag = null;
   cancelPreviewRender();
   previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  if (state.pendingCrop) {
+    renderActiveDragPreview();
+  }
+  updateUiState();
 });
 
 els.textOverlayInput.addEventListener('input', () => {
@@ -762,6 +1346,7 @@ els.customColorBtn.addEventListener('click', (event) => {
   event.stopPropagation();
   const willShow = els.hexPopover.hidden;
   els.hexPopover.hidden = !willShow;
+  els.customColorBtn.setAttribute('aria-expanded', String(willShow));
   els.hexInputWrap.classList.remove('invalid');
   if (willShow) {
     els.hexColorNative.value = state.color;
@@ -792,7 +1377,7 @@ function applyHexFromTextInput() {
   }
   state.userPickedColor = true;
   els.hexInputWrap.classList.remove('invalid');
-  setColor(parsed, { isCustom: true });
+  setColor(parsed, { isCustom: true, refocusText: true });
   closeHexPopover();
   return true;
 }
@@ -807,7 +1392,7 @@ els.hexTextInput.addEventListener('keydown', (event) => {
     applyHexFromTextInput();
   } else if (event.key === 'Escape') {
     event.preventDefault();
-    closeHexPopover();
+    closeHexPopover({ restoreFocus: true });
   }
 });
 
@@ -829,17 +1414,74 @@ for (const swatch of els.colorSwatches.querySelectorAll('[data-color]')) {
   swatch.addEventListener('click', () => {
     state.userPickedColor = true;
     closeHexPopover();
-    setColor(swatch.dataset.color, { isCustom: false });
+    setColor(swatch.dataset.color, { isCustom: false, refocusText: true });
   });
 }
 
 for (const pill of els.sizePills.querySelectorAll('[data-size]')) {
-  pill.addEventListener('click', () => setSizeKey(pill.dataset.size));
+  pill.addEventListener('click', () => setSizeKey(pill.dataset.size, { refocusText: true }));
 }
 
 for (const btn of document.querySelectorAll('[data-transform]')) {
   btn.addEventListener('click', () => applyTransform(btn.dataset.transform));
 }
+
+for (const btn of els.redactModeSegmented.querySelectorAll('[data-redact-mode]')) {
+  btn.addEventListener('click', () => setRedactMode(btn.dataset.redactMode));
+}
+
+for (const btn of els.textStyleSegmented.querySelectorAll('[data-text-mode]')) {
+  btn.addEventListener('click', () => setTextStyle(btn.dataset.textMode));
+}
+
+for (const btn of els.captionThemeSegmented.querySelectorAll('[data-caption-theme]')) {
+  btn.addEventListener('click', () => setCaptionTheme(btn.dataset.captionTheme));
+}
+
+els.captionToggleBtn.addEventListener('click', () => {
+  els.captionToggleBtn.hidden = true;
+  els.captionToggleBtn.setAttribute('aria-expanded', 'true');
+  els.captionForm.hidden = false;
+  els.captionTextInput.focus();
+});
+
+els.applyCaptionBtn.addEventListener('click', () => {
+  applyCaptionBar();
+});
+
+els.cancelCaptionBtn.addEventListener('click', () => {
+  closeCaptionForm({ restoreFocus: true });
+});
+
+els.captionTextInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    applyCaptionBar();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeCaptionForm({ restoreFocus: true });
+  }
+});
+
+els.applyCropBtn.addEventListener('click', () => {
+  applyPendingCrop();
+});
+
+els.cancelCropBtn.addEventListener('click', () => {
+  if (state.pendingCrop) {
+    clearPendingCrop();
+  } else if (state.tool === 'crop') {
+    setTool(state.previousTool || 'arrow');
+  }
+});
+
+els.applyPasteBtn.addEventListener('click', () => {
+  commitPastedOverlayIfNeeded();
+});
+
+els.cancelPasteBtn.addEventListener('click', () => {
+  cancelPastedOverlay();
+});
 
 els.undoBtn.addEventListener('click', () => undoLastChange());
 els.resetBtn.addEventListener('click', () => resetToOriginal());
@@ -859,6 +1501,15 @@ function canvasToPngBlob(canvas) {
 
 let copyImageTimer = null;
 
+function flashCopyImageButton() {
+  if (copyImageTimer) clearTimeout(copyImageTimer);
+  els.copyImageBtn.textContent = 'Copied!';
+  copyImageTimer = setTimeout(() => {
+    copyImageTimer = null;
+    els.copyImageBtn.textContent = 'Copy image';
+  }, 1600);
+}
+
 async function copyCanvasImageToClipboard() {
   if (!state.ready) return false;
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
@@ -867,20 +1518,37 @@ async function copyCanvasImageToClipboard() {
   }
   try {
     const pngBlobPromise = (async () => {
-      await commitActiveTextIfNeeded();
+      await commitPendingEditsIfNeeded();
       return canvasToPngBlob(els.baseCanvas);
     })();
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlobPromise })]);
-    if (copyImageTimer) clearTimeout(copyImageTimer);
-    els.copyImageBtn.textContent = 'Copied!';
-    copyImageTimer = setTimeout(() => {
-      copyImageTimer = null;
-      els.copyImageBtn.textContent = 'Copy image';
-    }, 1600);
+    flashCopyImageButton();
     showStatusPill('ok', 'Copied image to clipboard', 2600);
     return true;
   } catch {
     showStatusPill('err', 'Could not copy image to clipboard.', 3000);
+    return false;
+  }
+}
+
+async function tryAutoCopyInitialImage(pngBlob) {
+  if (
+    state.autoCopyAttempted ||
+    state.autoCopyMode !== 'image' ||
+    !pngBlob ||
+    typeof ClipboardItem === 'undefined' ||
+    !navigator.clipboard?.write
+  ) {
+    return false;
+  }
+  state.autoCopyAttempted = true;
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+    state.autoImageCopied = true;
+    flashCopyImageButton();
+    return true;
+  } catch {
+    // Degrade silently if browser withheld focus/clipboard permission on background tab load
     return false;
   }
 }
@@ -891,7 +1559,7 @@ els.copyImageBtn.addEventListener('click', () => {
 
 els.downloadBtn.addEventListener('click', async () => {
   if (!state.ready) return;
-  await commitActiveTextIfNeeded();
+  await commitPendingEditsIfNeeded();
   const filename = getDesiredFilename();
   els.baseCanvas.toBlob((blob) => {
     if (!blob) return;
@@ -946,6 +1614,17 @@ async function syncAuthStateFromWorker() {
     const res = await sendRuntimeMessage({ type: 'GET_STATE' });
     if (!res?.ok || state.saving) return;
 
+    if (res.settings) {
+      const nextMode = res.settings.autoCopyMode;
+      state.autoCopyMode =
+        nextMode === 'link' || nextMode === 'off' || nextMode === 'image'
+          ? nextMode
+          : res.settings.autoCopyLink
+          ? 'link'
+          : 'image';
+      state.folderName = res.settings.folderName || state.folderName;
+    }
+
     const nowSignedIn = Boolean(res.session?.signedIn);
     if (!nowSignedIn) {
       const keepAuthErrorPill =
@@ -968,10 +1647,6 @@ async function syncAuthStateFromWorker() {
       }
     } else {
       state.signedIn = true;
-      if (res.settings) {
-        state.autoCopyLink = Boolean(res.settings.autoCopyLink);
-        state.folderName = res.settings.folderName || state.folderName;
-      }
     }
     updateUiState();
   } catch {
@@ -1018,7 +1693,7 @@ function startUploadStatusPoll() {
 async function tryAutoCopyShareLink() {
   if (state.autoCopyAttempted) return false;
   const safeLink = safeHttpsUrl(state.webViewLink);
-  if (!state.autoCopyLink || !safeLink || !navigator.clipboard?.writeText) {
+  if (state.autoCopyMode !== 'link' || !safeLink || !navigator.clipboard?.writeText) {
     return false;
   }
   state.autoCopyAttempted = true;
@@ -1046,7 +1721,10 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
     state.uploadErrorCode = '';
     state.uploadRequiresReauth = false;
     if (!state.saving) {
-      showStatusPill('warn', 'Uploading to Google Drive...');
+      const uploadingText = state.autoImageCopied
+        ? 'Uploading to Google Drive... \u00b7 Image copied'
+        : 'Uploading to Google Drive...';
+      showStatusPill('warn', uploadingText);
       updateUiState();
     }
     startUploadStatusPoll();
@@ -1088,7 +1766,7 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
       return;
     }
 
-    const copied = await tryAutoCopyShareLink();
+    const copiedLink = await tryAutoCopyShareLink();
 
     if (state.saving) {
       updateUiState();
@@ -1108,11 +1786,12 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
       return;
     }
 
-    showStatusPill(
-      'ok',
-      copied ? 'Saved to Google Drive \u00b7 Link copied' : 'Saved to Google Drive',
-      5000
-    );
+    const savedText = copiedLink
+      ? 'Saved to Google Drive \u00b7 Link copied'
+      : state.autoImageCopied
+      ? 'Saved to Google Drive \u00b7 Image copied'
+      : 'Saved to Google Drive';
+    showStatusPill('ok', savedText, 5000);
     updateUiState();
     return;
   }
@@ -1151,7 +1830,7 @@ async function performSave(saveMode) {
   updateUiState();
 
   try {
-    await commitActiveTextIfNeeded();
+    await commitPendingEditsIfNeeded();
 
     const desiredFilename = getDesiredFilename();
     syncFilenameDisplay(desiredFilename);
@@ -1237,7 +1916,11 @@ async function performSave(saveMode) {
 
     let copied = false;
     const safeLink = safeHttpsUrl(state.webViewLink);
-    if (res.autoCopyLink && safeLink && navigator.clipboard?.writeText) {
+    const shouldCopyLink =
+      (res.autoCopyMode ? res.autoCopyMode === 'link' : Boolean(res.autoCopyLink)) &&
+      safeLink &&
+      navigator.clipboard?.writeText;
+    if (shouldCopyLink) {
       try {
         await navigator.clipboard.writeText(safeLink);
         copied = true;
@@ -1288,7 +1971,7 @@ els.saveDriveBtn.addEventListener('click', async () => {
   if (!state.ready || state.saving || saveClickPending) return;
   saveClickPending = true;
   try {
-    await commitActiveTextIfNeeded();
+    await commitPendingEditsIfNeeded();
 
     if (state.signedIn && state.mode === 'existing') {
       if (!hasUnsavedChanges()) {
@@ -1326,6 +2009,90 @@ els.confirmReplaceBtn.addEventListener('click', async () => {
   await performSave('replace');
 });
 
+window.addEventListener('paste', async (event) => {
+  if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
+  const activeEl = document.activeElement;
+  const tag = activeEl?.tagName;
+  if ((tag === 'INPUT' || tag === 'TEXTAREA') && activeEl.offsetParent !== null) return;
+
+  const items = event.clipboardData?.items;
+  if (!items) return;
+
+  let imageFile = null;
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    const mime = String(item.type || '').toLowerCase();
+    if (mime === 'image/svg+xml') {
+      event.preventDefault();
+      showStatusPill('err', 'SVG images cannot be pasted for security reasons.', 3200);
+      return;
+    }
+    if (ALLOWED_PASTE_IMAGE_MIMES.has(mime)) {
+      imageFile = item.getAsFile();
+      break;
+    }
+  }
+  if (!imageFile) return;
+
+  event.preventDefault();
+  if (imageFile.size > MAX_PASTE_IMAGE_BYTES) {
+    showStatusPill('err', 'Pasted image exceeds the 15 MB limit.', 3200);
+    return;
+  }
+
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(imageFile);
+    if (
+      bitmap.width > MAX_PASTE_IMAGE_DIM ||
+      bitmap.height > MAX_PASTE_IMAGE_DIM ||
+      bitmap.width * bitmap.height > MAX_PASTE_IMAGE_PIXELS
+    ) {
+      bitmap.close?.();
+      bitmap = null;
+      showStatusPill('err', 'Pasted image dimensions exceed the supported limit.', 3200);
+      return;
+    }
+
+    await commitActiveTextIfNeeded();
+    if (state.pastedOverlay) {
+      await commitPastedOverlayIfNeeded();
+    }
+    clearPendingCrop();
+
+    if (!state.ready || state.saving || els.confirmReplaceDialog.open) {
+      bitmap.close?.();
+      bitmap = null;
+      return;
+    }
+
+    const box = computePastedImageBox(
+      bitmap.width,
+      bitmap.height,
+      els.baseCanvas.width,
+      els.baseCanvas.height
+    );
+    state.pastedOverlay = {
+      bitmap,
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      aspectRatio: Math.max(0.05, bitmap.width / Math.max(1, bitmap.height)),
+      dragMode: null,
+      dragOffsetX: 0,
+      dragOffsetY: 0,
+      pointerId: null,
+    };
+    bitmap = null;
+    renderActiveDragPreview();
+    updateUiState();
+  } catch {
+    bitmap?.close?.();
+    showStatusPill('err', 'Could not decode pasted image.', 3000);
+  }
+});
+
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Shift' && state.activeDrag?.tool === 'highlighter' && state.activeDrag.rawPoints) {
     state.activeDrag.points = computeHighlighterPoints(state.activeDrag, true);
@@ -1349,10 +2116,45 @@ window.addEventListener('keydown', (event) => {
   const tag = activeEl?.tagName;
   if ((tag === 'INPUT' || tag === 'TEXTAREA') && activeEl.offsetParent !== null) return;
 
-  if (event.key === 'Escape' && !els.hexPopover.hidden) {
-    event.preventDefault();
-    closeHexPopover();
-    return;
+  if (event.key === 'Escape') {
+    if (!els.hexPopover.hidden) {
+      event.preventDefault();
+      closeHexPopover({ restoreFocus: true });
+      return;
+    }
+    if (!els.captionForm.hidden) {
+      event.preventDefault();
+      closeCaptionForm({ restoreFocus: true });
+      return;
+    }
+    if (state.pastedOverlay) {
+      event.preventDefault();
+      cancelPastedOverlay();
+      return;
+    }
+    if (state.pendingCrop) {
+      event.preventDefault();
+      clearPendingCrop();
+      return;
+    }
+    if (state.tool === 'crop') {
+      event.preventDefault();
+      setTool(state.previousTool || 'arrow');
+      return;
+    }
+  }
+
+  if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (state.pastedOverlay) {
+      event.preventDefault();
+      commitPastedOverlayIfNeeded();
+      return;
+    }
+    if (state.pendingCrop && state.pendingCrop.width >= 4 && state.pendingCrop.height >= 4) {
+      event.preventDefault();
+      applyPendingCrop();
+      return;
+    }
   }
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
@@ -1387,6 +2189,7 @@ window.addEventListener('keydown', (event) => {
     p: 'pencil',
     t: 'text',
     r: 'redact',
+    k: 'crop',
   };
   const nextTool = keyMap[event.key.toLowerCase()];
   if (nextTool) {
@@ -1412,6 +2215,10 @@ window.addEventListener('beforeunload', (event) => {
 window.addEventListener('pagehide', () => {
   stopUploadStatusPoll();
   clearUndoStack();
+  if (state.pastedOverlay) {
+    state.pastedOverlay.bitmap?.close?.();
+    state.pastedOverlay = null;
+  }
   state.initialBitmap?.close?.();
   state.initialBitmap = null;
 });
@@ -1454,7 +2261,15 @@ async function initEditor() {
     state.pageUrl = res.session.pageUrl || '';
     state.pageTitle = res.session.pageTitle || '';
     state.incognito = Boolean(res.session.incognito);
-    state.autoCopyLink = Boolean(res.session.autoCopyLink);
+    state.autoCopyMode =
+      res.session.autoCopyMode === 'link' ||
+      res.session.autoCopyMode === 'off' ||
+      res.session.autoCopyMode === 'image'
+        ? res.session.autoCopyMode
+        : res.session.autoCopyLink
+        ? 'link'
+        : 'image';
+    state.captureNotice = res.session.captureNotice || '';
     state.uploadState = res.session.uploadState || 'idle';
     state.uploadError = res.session.uploadError || '';
     state.uploadErrorCode = res.session.uploadErrorCode || '';
@@ -1466,6 +2281,13 @@ async function initEditor() {
     els.baseCanvas.height = bitmap.height;
     baseCtx.drawImage(bitmap, 0, 0);
     syncPreviewCanvasSize();
+
+    // Auto-copy PNG image immediately on fresh capture BEFORE marking ready so background
+    // upload status updates cannot race ahead of state.autoImageCopied
+    let copiedInitialImage = false;
+    if (res.session.isFreshCapture && state.autoCopyMode === 'image') {
+      copiedInitialImage = await tryAutoCopyInitialImage(blob);
+    }
 
     state.ready = true;
     els.stageMessage.hidden = true;
@@ -1496,6 +2318,30 @@ async function initEditor() {
         },
         { fromInitialLoad: true }
       );
+    } else if (state.captureNotice) {
+      const notice = state.captureNotice;
+      state.captureNotice = '';
+      showStatusPill(
+        'warn',
+        copiedInitialImage ? `${notice} \u00b7 Image copied` : notice,
+        5500
+      );
+    } else if (copiedInitialImage) {
+      showStatusPill('ok', 'Copied image to clipboard', 3000);
+    }
+
+    if (state.captureNotice && !els.statusPill.classList.contains('err')) {
+      const notice = state.captureNotice;
+      state.captureNotice = '';
+      if (state.uploadState === 'uploading') {
+        const msg = copiedInitialImage ? `${notice} \u00b7 Image copied` : notice;
+        showStatusPill('warn', msg, 4500);
+      } else if (state.uploadState === 'uploaded') {
+        const suffix = state.autoImageCopied
+          ? ' \u00b7 Saved to Drive \u00b7 Image copied'
+          : ' \u00b7 Saved to Drive';
+        showStatusPill('warn', `${notice}${suffix}`, 6000);
+      }
     }
 
     if (pendingAuthRefresh) {
@@ -1528,7 +2374,11 @@ if (chrome?.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener(async (changes, areaName) => {
     if (areaName === 'session' && changes.editorSessionsById?.newValue) {
       if (state.saving && state.mode === 'existing') return;
-      const updatedSession = changes.editorSessionsById.newValue[state.sessionId];
+      const sessionsMap = changes.editorSessionsById.newValue;
+      const updatedSession =
+        sessionsMap && Object.hasOwn(sessionsMap, state.sessionId)
+          ? sessionsMap[state.sessionId]
+          : null;
       if (
         updatedSession &&
         (updatedSession.uploadState === 'uploaded' || updatedSession.uploadState === 'failed')

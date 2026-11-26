@@ -1,6 +1,6 @@
 # Privacy Policy for SaveShot
 
-**Last updated:** November 23, 2026
+**Last updated:** November 26, 2026
 
 SaveShot is a privacy-first Chrome extension that lets you capture and edit screenshots in your browser, download them to your computer, or save them directly to your own Google Drive. SaveShot operates with no external or private servers, no analytics, no tracking, no ads, and does not sell or share your data with anyone.
 
@@ -8,7 +8,7 @@ SaveShot is a privacy-first Chrome extension that lets you capture and edit scre
 
 SaveShot only accesses data when you choose to take a screenshot or connect Google Drive:
 
-1. **Screenshots you capture**: When you click **Select area**, click **Visible tab**, choose **Take Screenshot** from the right-click menu, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it in memory, let you download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.
+1. **Screenshots you capture**: When you click **Select area**, **Visible tab**, or **Full page**, choose **Take Screenshot** from the right-click menu, or press a SaveShot keyboard shortcut, Chrome captures the current tab image (or scrolls and stitches visible slices for **Full page**) so SaveShot can crop or annotate it in memory, let you copy or download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.
 2. **Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests Google's narrow `https://www.googleapis.com/auth/drive.file` permission when you choose to connect Google Drive. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete any of your other Google Drive files.
 
 ## Where your data goes

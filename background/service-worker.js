@@ -10,7 +10,9 @@ import {
   createThumbnailDataUrl,
   cropPngDataUrl,
   dataUrlToBlob,
+  FULLPAGE_LIMITS,
   isCapturableUrl,
+  planFullPageSlice,
   sanitizeScreenshotFilename,
 } from '../lib/capture.js';
 import {
@@ -37,6 +39,7 @@ import {
 const CONTENT_SCRIPT_ALLOWED_TYPES = new Set([
   'REGION_SELECTED',
   'CAPTURE_VISIBLE_FROM_OVERLAY',
+  'FULLPAGE_CANCEL',
   'GET_FALLBACK_PNG',
   'OPEN_LAST_CAPTURE_EDITOR',
 ]);
@@ -95,6 +98,7 @@ let lastUploadedFileId = '';
 const recentUploadedCaptures = new Map();
 const editorSessions = new Map();
 const pendingRegionTabIds = new Map();
+const activeFullPageTabs = new Map();
 const inflightUploadsBySessionId = new Map();
 const inflightSavesBySessionId = new Map();
 
@@ -234,7 +238,13 @@ function cacheUploadedCapture(entry) {
   }, RECENT_CAPTURE_TTL_MS);
   timer?.unref?.();
 
-  recentUploadedCaptures.set(entry.fileId, { ...entry, timer });
+  const isIncognito = Boolean(entry.incognito);
+  recentUploadedCaptures.set(entry.fileId, {
+    ...entry,
+    pageUrl: isIncognito ? '' : entry.pageUrl || '',
+    pageTitle: isIncognito ? '' : entry.pageTitle || '',
+    timer,
+  });
   lastUploadedFileId = entry.fileId;
 
   sessionStoreSet({
@@ -243,10 +253,10 @@ function cacheUploadedCapture(entry) {
       filename: entry.filename,
       webViewLink: entry.webViewLink || '',
       folderName: entry.folderName || '',
-      pageUrl: entry.pageUrl || '',
-      pageTitle: entry.pageTitle || '',
-      mode: entry.mode === 'region' ? 'region' : 'visible',
-      incognito: Boolean(entry.incognito),
+      pageUrl: isIncognito ? '' : entry.pageUrl || '',
+      pageTitle: isIncognito ? '' : entry.pageTitle || '',
+      mode: normalizeCaptureMode(entry.mode),
+      incognito: isIncognito,
     },
   });
 }
@@ -258,7 +268,13 @@ function normalizeUploadState(value) {
   return 'idle';
 }
 
+function normalizeCaptureMode(value) {
+  if (value === 'region' || value === 'fullpage') return value;
+  return 'visible';
+}
+
 function serializeSessionMeta(session) {
+  const isIncognito = Boolean(session.incognito);
   return {
     sessionId: session.sessionId,
     mode: session.mode === 'new' ? 'new' : 'existing',
@@ -266,10 +282,12 @@ function serializeSessionMeta(session) {
     filename: sanitizeScreenshotFilename(session.filename || 'Screenshot.png'),
     folderName: session.folderName || 'Chrome_SaveShot_ScreenShots',
     webViewLink: session.webViewLink || '',
-    pageUrl: session.pageUrl || '',
-    pageTitle: session.pageTitle || '',
-    captureMode: session.captureMode === 'region' ? 'region' : 'visible',
-    incognito: Boolean(session.incognito),
+    pageUrl: isIncognito ? '' : session.pageUrl || '',
+    pageTitle: isIncognito ? '' : session.pageTitle || '',
+    captureMode: normalizeCaptureMode(session.captureMode),
+    incognito: isIncognito,
+    isFreshCapture: Boolean(session.isFreshCapture),
+    captureNotice: typeof session.captureNotice === 'string' ? session.captureNotice : '',
     justUploaded: Boolean(session.justUploaded),
     editorLoaded: Boolean(session.editorLoaded),
     uploadState: normalizeUploadState(session.uploadState),
@@ -410,6 +428,7 @@ function persistEditorSessionMeta(
 
 async function createEditorSession(data) {
   const sessionId = crypto.randomUUID();
+  const isIncognito = Boolean(data.incognito);
   const session = {
     sessionId,
     mode: data.mode === 'new' ? 'new' : 'existing',
@@ -419,10 +438,12 @@ async function createEditorSession(data) {
     webViewLink: data.webViewLink || '',
     pngBlob: data.pngBlob || null,
     pngDataUrl: typeof data.pngDataUrl === 'string' ? data.pngDataUrl : '',
-    pageUrl: data.pageUrl || '',
-    pageTitle: data.pageTitle || '',
-    captureMode: data.captureMode === 'region' ? 'region' : 'visible',
-    incognito: Boolean(data.incognito),
+    pageUrl: isIncognito ? '' : data.pageUrl || '',
+    pageTitle: isIncognito ? '' : data.pageTitle || '',
+    captureMode: normalizeCaptureMode(data.captureMode),
+    incognito: isIncognito,
+    isFreshCapture: Boolean(data.isFreshCapture),
+    captureNotice: typeof data.captureNotice === 'string' ? data.captureNotice : '',
     justUploaded: Boolean(data.justUploaded),
     editorLoaded: Boolean(data.editorLoaded),
     uploadState: normalizeUploadState(data.uploadState),
@@ -490,8 +511,10 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
       pngBlob,
       pageUrl: storedMeta.pageUrl || '',
       pageTitle: storedMeta.pageTitle || '',
-      captureMode: storedMeta.captureMode === 'region' ? 'region' : 'visible',
+      captureMode: normalizeCaptureMode(storedMeta.captureMode),
       incognito: Boolean(storedMeta.incognito),
+      isFreshCapture: Boolean(storedMeta.isFreshCapture),
+      captureNotice: typeof storedMeta.captureNotice === 'string' ? storedMeta.captureNotice : '',
       justUploaded: Boolean(storedMeta.justUploaded),
       editorLoaded: Boolean(storedMeta.editorLoaded),
       uploadState: normalizeUploadState(storedMeta.uploadState),
@@ -523,8 +546,10 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
         pngBlob: null,
         pageUrl: typeof fallbackContext.pageUrl === 'string' ? fallbackContext.pageUrl : '',
         pageTitle: typeof fallbackContext.pageTitle === 'string' ? fallbackContext.pageTitle : '',
-        captureMode: fallbackContext.captureMode === 'region' ? 'region' : 'visible',
+        captureMode: normalizeCaptureMode(fallbackContext.captureMode),
         incognito: Boolean(fallbackContext.incognito),
+        isFreshCapture: false,
+        captureNotice: '',
         justUploaded: false,
         editorLoaded: true,
         uploadState: fileId ? 'uploaded' : 'idle',
@@ -590,6 +615,7 @@ export function resetInMemoryWorkerStateForTests() {
   clearRecentCaptureCache();
   clearAllEditorSessions();
   pendingRegionTabIds.clear();
+  activeFullPageTabs.clear();
   inflightUploadsBySessionId.clear();
   inflightSavesBySessionId.clear();
   if (fallbackExpiryTimer) {
@@ -1067,6 +1093,7 @@ async function captureVisibleTabFlow({
       pageTitle: targetTab?.title || '',
       captureMode: 'visible',
       incognito,
+      isFreshCapture: true,
       uploadState: shouldAutoUpload ? 'uploading' : 'idle',
     });
 
@@ -1180,6 +1207,7 @@ async function handleRegionSelected(selection, senderTab) {
       pageTitle: liveTab?.title || '',
       captureMode: 'region',
       incognito,
+      isFreshCapture: true,
       uploadState: shouldAutoUpload ? 'uploading' : 'idle',
     });
 
@@ -1211,6 +1239,403 @@ async function handleRegionSelected(selection, senderTab) {
       fallbackFilename: normalized.fallbackFilename || 'Screenshot.png',
     });
   }
+}
+
+async function stitchFullPageSlices(slices, canvasWidth, totalPhysicalHeight) {
+  if (!slices || slices.length === 0) {
+    throw new SaveShotError({
+      code: 'EMPTY_CAPTURE',
+      userMessage: 'Could not capture any screens from this page.',
+    });
+  }
+
+  // Fallback for Node unit-test environments without OffscreenCanvas / createImageBitmap
+  if (typeof OffscreenCanvas === 'undefined' || !slices[0].bitmap) {
+    return slices[0].fallbackBlob;
+  }
+
+  const canvas = new OffscreenCanvas(
+    Math.max(1, Math.round(canvasWidth)),
+    Math.max(1, Math.round(totalPhysicalHeight))
+  );
+  const ctx = canvas.getContext('2d');
+  for (const s of slices) {
+    ctx.drawImage(s.bitmap, s.sx, s.sy, s.sw, s.sh, 0, s.dy, s.sw, s.sh);
+    s.bitmap.close?.();
+    s.bitmap = null;
+  }
+  return canvas.convertToBlob({ type: 'image/png' });
+}
+
+async function captureFullPageFlow({
+  tab,
+  tabId,
+  showPageToast = false,
+  interactiveAuth = false,
+  background = false,
+} = {}) {
+  const startEpoch = workerSessionEpoch;
+  const targetTab = tab || (await resolveTargetTab(tabId));
+  const check = await checkTabCapturable(targetTab);
+  if (!check.canCaptureVisible) {
+    throw new SaveShotError({
+      code: check.code || 'UNCAPTURABLE_TAB',
+      userMessage: check.reason,
+    });
+  }
+  if (!check.canCaptureRegion) {
+    throw new SaveShotError({
+      code: check.code || 'FULLPAGE_UNSUPPORTED',
+      userMessage:
+        'Full-page capture does not work on data: or blob: URLs. Use "Visible Tab" instead.',
+    });
+  }
+
+  if (activeFullPageTabs.has(targetTab.id)) {
+    throw new SaveShotError({
+      code: 'FULLPAGE_IN_PROGRESS',
+      userMessage: 'A full-page capture is already running on this tab.',
+    });
+  }
+
+  const runState = { cancelled: false, abortedBySignOut: false };
+  activeFullPageTabs.set(targetTab.id, runState);
+
+  let prep;
+  try {
+    prep = await sendMessageToContentScript(targetTab.id, {
+      type: 'FULLPAGE_PREPARE',
+    });
+    if (!prep || prep.ok === false) {
+      throw new SaveShotError({
+        code: prep?.code || 'FULLPAGE_UNSUPPORTED',
+        userMessage:
+          prep?.reason ||
+          'Full-page capture does not work on this page. Use "Visible Tab" instead.',
+      });
+    }
+  } catch (err) {
+    if (activeFullPageTabs.get(targetTab.id) === runState) {
+      activeFullPageTabs.delete(targetTab.id);
+    }
+    throw err;
+  }
+
+  const isAbortedBySignOut = () =>
+    runState.abortedBySignOut || workerSessionEpoch !== startEpoch;
+
+  const runLoop = async () => {
+    const slices = [];
+    let truncated = false;
+    let stoppedEarly = false;
+    let canvasWidth = 0;
+    let totalPhysicalHeight = 0;
+
+    setBadge('...', '#1a73e8');
+    try {
+      const initialUrl = targetTab.url || '';
+      let metrics = prep;
+      let prevScrollY = 0;
+
+      const isTabStillValid = async () => {
+        const liveTab = await chrome.tabs.get(targetTab.id).catch(() => null);
+        return Boolean(
+          liveTab &&
+            liveTab.active &&
+            liveTab.windowId === targetTab.windowId &&
+            (!initialUrl || !liveTab.url || liveTab.url === initialUrl)
+        );
+      };
+
+      for (let sliceIndex = 0; sliceIndex < FULLPAGE_LIMITS.MAX_SLICES; sliceIndex += 1) {
+        if (isAbortedBySignOut()) {
+          return { aborted: true };
+        }
+        if (runState.cancelled || metrics.cancelled) {
+          stoppedEarly = true;
+          break;
+        }
+
+        if (!(await isTabStillValid())) {
+          if (slices.length > 0) {
+            stoppedEarly = true;
+            break;
+          }
+          throw new SaveShotError({
+            code: 'TAB_SWITCHED',
+            userMessage: 'The tab changed before capture finished. Stay on the tab and try again.',
+          });
+        }
+
+        const stepH = Math.max(1, Number(metrics.scrollStepHeight || metrics.viewportHeight) || 1);
+        const estimatedTotal = Math.max(
+          1,
+          Math.min(
+            FULLPAGE_LIMITS.MAX_SLICES,
+            Math.ceil(Math.max(1, metrics.totalHeight) / stepH)
+          )
+        );
+        if (estimatedTotal > 1) {
+          setBadge(`${sliceIndex + 1}/${estimatedTotal}`, '#1a73e8');
+        }
+
+        const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
+
+        // Re-check after captureVisibleTabSafe (which may have slept for Chrome's rate-limit gap)
+        if (isAbortedBySignOut()) {
+          return { aborted: true };
+        }
+        if (runState.cancelled) {
+          stoppedEarly = true;
+          break;
+        }
+        if (!(await isTabStillValid())) {
+          if (slices.length > 0) {
+            stoppedEarly = true;
+            break;
+          }
+          throw new SaveShotError({
+            code: 'TAB_SWITCHED',
+            userMessage: 'The tab changed before capture finished. Stay on the tab and try again.',
+          });
+        }
+
+        const sliceBlob = await dataUrlToBlob(dataUrl);
+        let fullBitmap = null;
+        let bmpW = Math.max(
+          1,
+          Math.round((metrics.viewportWidth || 1) * (metrics.devicePixelRatio || 1))
+        );
+        let bmpH = Math.max(
+          1,
+          Math.round((metrics.viewportHeight || 1) * (metrics.devicePixelRatio || 1))
+        );
+
+        if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
+          fullBitmap = await createImageBitmap(sliceBlob);
+          bmpW = fullBitmap.width;
+          bmpH = fullBitmap.height;
+        }
+
+        const plan = planFullPageSlice({
+          sliceIndex,
+          prevScrollY,
+          actualScrollY: metrics.actualY || 0,
+          viewportHeight: metrics.viewportHeight || bmpH,
+          viewportWidth: metrics.viewportWidth || bmpW,
+          bitmapWidth: bmpW,
+          bitmapHeight: bmpH,
+          containerRect: metrics.isInnerContainer ? metrics.containerRect : null,
+          lockedCanvasWidth: canvasWidth,
+          currentPhysicalHeight: totalPhysicalHeight,
+        });
+
+        if (!plan.skip && plan.sh > 0) {
+          canvasWidth = canvasWidth || plan.canvasWidth;
+          totalPhysicalHeight = plan.nextPhysicalHeight;
+
+          // Crop slice immediately and close full-viewport bitmap to minimize live GPU RAM
+          let croppedBitmap = null;
+          let drawSx = plan.sx;
+          let drawSy = plan.sy;
+          if (fullBitmap) {
+            try {
+              croppedBitmap = await createImageBitmap(
+                fullBitmap,
+                plan.sx,
+                plan.sy,
+                plan.sw,
+                plan.sh
+              );
+              fullBitmap.close?.();
+              fullBitmap = null;
+              drawSx = 0;
+              drawSy = 0;
+            } catch {
+              croppedBitmap = fullBitmap;
+              fullBitmap = null;
+            }
+          }
+
+          slices.push({
+            bitmap: croppedBitmap,
+            fallbackBlob: croppedBitmap ? null : sliceBlob,
+            sx: drawSx,
+            sy: drawSy,
+            sw: plan.sw,
+            sh: plan.sh,
+            dy: plan.dy,
+          });
+        } else {
+          fullBitmap?.close?.();
+        }
+
+        if (plan.truncated) {
+          truncated = true;
+          break;
+        }
+
+        const currentY = Number(metrics.actualY) || 0;
+        const totalH = Math.max(stepH, Number(metrics.totalHeight) || stepH);
+        if (currentY + stepH >= totalH - 2) {
+          break;
+        }
+
+        if (sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES) {
+          truncated = true;
+          break;
+        }
+
+        if (isAbortedBySignOut()) {
+          return { aborted: true };
+        }
+        if (runState.cancelled) {
+          stoppedEarly = true;
+          break;
+        }
+
+        prevScrollY = currentY;
+        const nextTargetY = currentY + stepH;
+        const stepRes = await sendMessageToContentScript(targetTab.id, {
+          type: 'FULLPAGE_STEP',
+          targetY: nextTargetY,
+          hideFixed: true,
+          progressText: `Capturing ${sliceIndex + 2}/${estimatedTotal}... \u00b7 Press Esc to stop`,
+          holdPillMs: 360,
+        });
+
+        if (isAbortedBySignOut()) {
+          return { aborted: true };
+        }
+        if (!stepRes || stepRes.ok === false) {
+          break;
+        }
+        if (stepRes.cancelled || runState.cancelled) {
+          stoppedEarly = true;
+          break;
+        }
+        if ((Number(stepRes.actualY) || 0) <= prevScrollY + 0.5) {
+          break;
+        }
+        metrics = stepRes;
+      }
+
+      if (isAbortedBySignOut()) {
+        return { aborted: true };
+      }
+
+      if (slices.length === 0) {
+        throw new SaveShotError({
+          code: stoppedEarly ? 'FULLPAGE_CANCELLED' : 'EMPTY_CAPTURE',
+          userMessage: stoppedEarly
+            ? 'Full-page capture was cancelled.'
+            : 'Could not capture full page. Try "Visible Tab" instead.',
+        });
+      }
+
+      const [stitchedBlob, settings, authSession] = await Promise.all([
+        stitchFullPageSlices(slices, canvasWidth, totalPhysicalHeight),
+        getSettings(),
+        getSilentAuthSession(),
+      ]);
+
+      if (isAbortedBySignOut()) {
+        return { aborted: true };
+      }
+
+      const incognito = Boolean(targetTab?.incognito);
+      const filename = buildScreenshotFilename(targetTab?.url || '', new Date(), {
+        incognito,
+      });
+      const shouldAutoUpload = Boolean(authSession.signedIn) && !settings.editBeforeUpload;
+      const captureNotice = truncated
+        ? 'Captured top section (page height limit reached)'
+        : stoppedEarly
+        ? `Stopped early \u00b7 Captured ${slices.length} ${slices.length === 1 ? 'screen' : 'screens'}`
+        : '';
+
+      const session = await createEditorSession({
+        mode: 'new',
+        fileId: null,
+        filename,
+        folderName: settings.folderName,
+        webViewLink: '',
+        pngBlob: stitchedBlob,
+        pageUrl: targetTab?.url || '',
+        pageTitle: targetTab?.title || '',
+        captureMode: 'fullpage',
+        incognito,
+        isFreshCapture: true,
+        captureNotice,
+        uploadState: shouldAutoUpload ? 'uploading' : 'idle',
+      });
+
+      if (isAbortedBySignOut()) {
+        return { aborted: true };
+      }
+
+      if (shouldAutoUpload) {
+        startBackgroundUploadForSession({
+          session,
+          pngBlob: stitchedBlob,
+          tab: targetTab,
+          mode: 'fullpage',
+          interactiveAuth,
+          settings,
+          showPageToast,
+          customFilename: filename,
+        });
+      } else if (inflightUploadsBySessionId.size === 0) {
+        setBadge('', '');
+      }
+
+      await openEditorTab(session.sessionId, targetTab?.windowId);
+      return {
+        openedEditor: true,
+        uploadingInBackground: shouldAutoUpload,
+        sessionId: session.sessionId,
+        sliceCount: slices.length,
+        truncated,
+        stoppedEarly,
+        settings,
+      };
+    } catch (err) {
+      if (isAbortedBySignOut()) {
+        return { aborted: true };
+      }
+      const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+      lastErrorCode = normalized.code || 'CAPTURE_ERROR';
+      setBadge('!', '#dc2626', 4000);
+      if (showPageToast) {
+        await sendTabToast(targetTab?.id, {
+          status: 'error',
+          title: 'Full-page capture failed',
+          message: normalized.userMessage,
+        });
+      }
+      throw normalized;
+    } finally {
+      for (const s of slices) {
+        try {
+          s.bitmap?.close?.();
+        } catch {
+          // Ignore already closed bitmaps
+        }
+      }
+      await chrome.tabs
+        .sendMessage(targetTab.id, { type: 'FULLPAGE_RESTORE' })
+        .catch(() => {});
+      if (activeFullPageTabs.get(targetTab.id) === runState) {
+        activeFullPageTabs.delete(targetTab.id);
+      }
+    }
+  };
+
+  if (background) {
+    runLoop().catch(() => {});
+    return { started: true };
+  }
+  return runLoop();
 }
 
 async function parseEditedPngDataUrl(dataUrl) {
@@ -1365,6 +1790,7 @@ async function executeSaveEditedScreenshot(message) {
         webViewLink: updatedFile.webViewLink,
         folderName: session.folderName || settings.folderName,
       },
+      autoCopyMode: settings.autoCopyMode,
       autoCopyLink: Boolean(settings.autoCopyLink),
     };
   }
@@ -1423,6 +1849,7 @@ async function executeSaveEditedScreenshot(message) {
       webViewLink: result.upload.webViewLink,
       folderName: result.upload.folderName,
     },
+    autoCopyMode: result.settings?.autoCopyMode || activeSettings.autoCopyMode,
     autoCopyLink: Boolean(result.settings?.autoCopyLink),
   };
 }
@@ -1586,6 +2013,10 @@ export function registerServiceWorkerListeners() {
               clearRecentCaptureCache();
               clearAllEditorSessions();
               pendingRegionTabIds.clear();
+              for (const run of activeFullPageTabs.values()) {
+                run.cancelled = true;
+                run.abortedBySignOut = true;
+              }
               lastErrorCode = '';
               setBadge('', '');
               sessionMetaWriteChain = sessionMetaWriteChain
@@ -1621,6 +2052,42 @@ export function registerServiceWorkerListeners() {
                 sessionId: result.sessionId || '',
                 settings: result.settings,
               });
+              return;
+            }
+
+            case 'CAPTURE_FULLPAGE': {
+              const runInBackground = Boolean(message.background);
+              const result = await captureFullPageFlow({
+                tabId: message.tabId,
+                showPageToast: runInBackground,
+                interactiveAuth: false,
+                background: runInBackground,
+              });
+              sendResponse({
+                ok: true,
+                started: Boolean(result.started),
+                aborted: Boolean(result.aborted),
+                openedEditor: Boolean(result.openedEditor),
+                uploadingInBackground: Boolean(result.uploadingInBackground),
+                sessionId: result.sessionId || '',
+                sliceCount: result.sliceCount || 0,
+                truncated: Boolean(result.truncated),
+                stoppedEarly: Boolean(result.stoppedEarly),
+                settings: result.settings,
+              });
+              return;
+            }
+
+            case 'FULLPAGE_CANCEL': {
+              const senderTabId = sender?.tab?.id;
+              const activeRun =
+                typeof senderTabId === 'number' ? activeFullPageTabs.get(senderTabId) : null;
+              if (!activeRun) {
+                sendResponse({ ok: false, code: 'NO_ACTIVE_FULLPAGE_SESSION' });
+                return;
+              }
+              activeRun.cancelled = true;
+              sendResponse({ ok: true });
               return;
             }
 
@@ -1828,9 +2295,17 @@ export function registerServiceWorkerListeners() {
                 stateBeforeLoad === 'uploading' &&
                 currentUploadState === 'uploaded';
               const justUploaded = Boolean(session.justUploaded) || transitionedDuringLoad;
+              const isFreshCapture = Boolean(session.isFreshCapture) && !wasLoaded;
+              const captureNotice = !wasLoaded ? session.captureNotice || '' : '';
               session.editorLoaded = true;
               if (session.justUploaded) {
                 session.justUploaded = false;
+              }
+              if (session.isFreshCapture) {
+                session.isFreshCapture = false;
+              }
+              if (session.captureNotice) {
+                session.captureNotice = '';
               }
 
               const sessionSnapshot = {
@@ -1845,7 +2320,10 @@ export function registerServiceWorkerListeners() {
                 pageUrl: session.pageUrl || '',
                 pageTitle: session.pageTitle || '',
                 incognito: Boolean(session.incognito),
+                autoCopyMode: settings.autoCopyMode,
                 autoCopyLink: Boolean(settings.autoCopyLink),
+                isFreshCapture,
+                captureNotice,
                 justUploaded,
                 uploadState: currentUploadState,
                 uploadError: session.uploadError || '',
@@ -1853,7 +2331,7 @@ export function registerServiceWorkerListeners() {
                 uploadRequiresReauth: Boolean(session.uploadRequiresReauth),
               };
 
-              if (justUploaded || !wasLoaded) {
+              if (justUploaded || isFreshCapture || Boolean(captureNotice) || !wasLoaded) {
                 await persistEditorSessionMeta(session);
               }
 

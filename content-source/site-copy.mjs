@@ -8,8 +8,8 @@
 export const SITE_COPY = {
   brandName: 'SaveShot',
   extensionTitle: 'SaveShot: Screenshot to Google Drive',
-  version: '1.2.1',
-  lastUpdated: 'November 23, 2026',
+  version: '1.3.0',
+  lastUpdated: 'November 26, 2026',
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation
   shortDescription:
@@ -18,7 +18,7 @@ export const SITE_COPY = {
   tagline: 'Private screenshots straight to Google Drive or your computer.',
 
   overviewLead:
-    'SaveShot is a privacy-first, lightweight Chrome extension for capturing, highlighting, annotating, redacting, copying, and downloading screenshots locally right away with no sign-in required, or autosaving straight to your Google Drive with instant share links. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.',
+    'SaveShot is a privacy-first, lightweight Chrome extension for capturing an area, visible tab, or full scrolling page, cropping, highlighting, annotating, pixelating or redacting, adding meme text or caption bars, and copying PNGs straight to your clipboard with no sign-in required, or autosaving directly to your Google Drive. Everything runs in Chrome with no external servers, no tracking, and no external dependencies.',
 
   urls: {
     chromeWebStore:
@@ -59,29 +59,29 @@ export const SITE_COPY = {
   // Shared feature cards / bullets used across README.md, docs/index.html, and Store SEO
   features: [
     {
-      title: 'Select area or full tab',
-      webTitle: 'Select Area or Full Tab',
+      title: 'Area, tab, or full page',
+      webTitle: 'Area, Tab, or Full Page',
       summary:
-        'Drag a box over any part of a webpage to crop just that section with pixel-exact HiDPI and zoom accuracy, right-click any page and choose **Take Screenshot**, press `Enter` for the full tab, capture the visible tab in one click, or use customizable keyboard shortcuts.',
+        'Drag a box over any part of a webpage with pixel-exact HiDPI and zoom accuracy, scroll and stitch a **Full page** (automatically hiding repeated sticky headers, press `Esc` to stop early), right-click any page and choose **Take Screenshot**, capture the visible tab in one click, or use customizable keyboard shortcuts.',
       readmeBullet:
-        '**Select area, full tab, or right-click**: Drag a box over any part of a page to crop just that section, right-click any page and choose **Take Screenshot**, press `Enter` to capture the full tab, or capture the visible tab in one click.',
+        '**Select area, visible tab, full page, or right-click**: Drag a box over any part of a page, scroll and stitch a **Full page** (with repeated sticky-header hiding and `Esc` early stop), right-click any page and choose **Take Screenshot**, press `Enter` for the full tab, or capture the visible tab in one click.',
     },
     {
-      title: 'Annotate, redact & download',
-      webTitle: 'Annotate, Redact & Copy',
+      title: 'Edit, crop, redact & create',
+      webTitle: 'Edit, Crop, Redact & Create',
       summary:
-        'Opens automatically in a new tab so you can highlight text, add arrows, boxes, circles, lines, freehand strokes, text, custom `#HEX` colors, or solid black pixel redactions, rotate or flip, rename, **Copy image** (`Ctrl+C`) or **Download** a PNG with no sign-in required, or save straight to Google Drive.',
+        'Opens immediately in a new tab and auto-copies your PNG to the clipboard by default (switch between `Image`, `Link`, or `Off` in Settings). Crop (`K`), highlight, annotate, use solid black or **Pixelate** redaction, switch Text to **Meme** style or add a **+ Caption bar**, paste images onto the canvas (`Ctrl+V`), rotate or flip, and download or save to Google Drive.',
       readmeBullet:
-        '**Customizable keyboard shortcuts**: Trigger area selection or visible-tab capture from the keyboard, and customize your preferred keys anytime at `chrome://extensions/shortcuts`.',
+        '**Auto-copy & customizable shortcuts**: Copies your captured PNG straight to the clipboard by default (switch between `Image`, `Link`, or `Off` in Settings), and supports customizable shortcuts anytime at `chrome://extensions/shortcuts`.',
     },
     {
       title: 'No External Servers',
       webTitle: 'No External Servers',
       summary:
         'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
-        'Chrome_SaveShot_ScreenShots` and copy the share link automatically. SaveShot has no private servers, analytics, or ads.',
+        'Chrome_SaveShot_ScreenShots` while keeping your editor instant. SaveShot has no private servers, analytics, or ads.',
       readmeBullet:
-        '**Works locally or autosaves to your Drive**: Capture, edit, copy, and download PNGs locally right away without signing in, or connect Google Drive once to open the editor immediately while autosaving in the background to `Chrome_SaveShot_ScreenShots` (customizable in Settings) with the share link copied automatically. Turn on **Only upload when I click Save** in Settings to redact before anything is uploaded.',
+        '**Works locally or autosaves to your Drive**: Capture, auto-copy, edit, and download PNGs locally right away without signing in, or connect Google Drive once to open the editor immediately while autosaving in the background to `Chrome_SaveShot_ScreenShots` (customizable in Settings). Turn on **Only upload when I click Save** in Settings to redact before anything is uploaded.',
     },
     {
       title: 'Narrow `drive.file` Scope',
@@ -89,7 +89,7 @@ export const SITE_COPY = {
       summary:
         'Uses only `activeTab` and Google\'s narrow `drive.file` permission. SaveShot can only access the screenshots and folder it creates itself, never any other files in your Google Drive.',
       readmeBullet:
-        '**Built-in lightweight editor**: Opens immediately in a new tab so you can rename the file, highlight text, add arrows, boxes, circles, lines, freehand strokes, text, solid black pixel redactions, custom hex colors, rotate or flip, click **Copy image** (`Ctrl+C`) to paste straight into AI tools or docs, click **Download** to save a PNG on your computer, or click **Save** (or **Save to Google Drive**) to upload and keep your share link.',
+        '**Built-in lightweight editor**: Opens immediately in a new tab so you can crop, rename, highlight text, add arrows, boxes, circles, lines, freehand strokes, clean or **Meme** text, top **Caption bars**, paste images (`Ctrl+V`), apply solid black or **Pixelate** redactions, pick custom `#HEX` colors, rotate or flip, click **Copy image** (`Ctrl+C`), click **Download**, or click **Save** to update Google Drive.',
     },
   ],
 
@@ -104,7 +104,7 @@ export const SITE_COPY = {
     {
       question: 'Do I need to sign in to capture and download screenshots?',
       answer:
-        'No. You can capture an area or visible tab, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
+        'No. You can capture an area, visible tab, or full page, crop, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
     },
     {
       question: 'Does SaveShot use any external servers or track my data?',
@@ -163,7 +163,7 @@ export const SITE_COPY = {
         heading: 'What data SaveShot accesses',
         lead: 'SaveShot only accesses data when you choose to take a screenshot or connect Google Drive:',
         orderedList: [
-          '**Screenshots you capture**: When you click **Select area**, click **Visible tab**, choose **Take Screenshot** from the right-click menu, or press a SaveShot keyboard shortcut, Chrome captures the current tab image so SaveShot can crop or annotate it in memory, let you download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.',
+          '**Screenshots you capture**: When you click **Select area**, **Visible tab**, or **Full page**, choose **Take Screenshot** from the right-click menu, or press a SaveShot keyboard shortcut, Chrome captures the current tab image (or scrolls and stitches visible slices for **Full page**) so SaveShot can crop or annotate it in memory, let you copy or download it locally, or upload it directly to your Google Drive when connected. SaveShot never captures your screen in the background.',
           '**Google Drive files created by SaveShot (`drive.file`)**: SaveShot only requests Google\'s narrow `https://www.googleapis.com/auth/drive.file` permission when you choose to connect Google Drive. It can only create and access the destination folder (default: `Chrome_SaveShot_ScreenShots`) and the screenshots uploaded by SaveShot itself, plus read your Drive account display name, email, and avatar to show which Google Drive is connected in the popup. It cannot read, list, edit, or delete any of your other Google Drive files.',
         ],
       },
