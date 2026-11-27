@@ -1023,11 +1023,11 @@ export async function generateAllStoreAssets() {
                 </div>
               </div>
               <p class="promo-sm-desc">
-                Capture any area or tab, annotate or redact in Chrome, save to Drive with the link copied, or download locally.
+                Capture any area, tab, or full page, crop, annotate, or redact in Chrome, save to Drive, or download PNG/PDF.
               </p>
               <div style="display:flex;gap:6px;margin-top:14px;">
-                <span class="ss-kbd">Area &amp; Tab</span>
-                <span class="ss-kbd">Annotate &amp; Redact</span>
+                <span class="ss-kbd">Area &amp; Full Page</span>
+                <span class="ss-kbd">PNG &amp; PDF</span>
                 <span class="ss-kbd">drive.file</span>
               </div>
             </div>
@@ -1152,7 +1152,7 @@ export async function generateAllStoreAssets() {
               </div>
               <h1 class="mq-h1">Capture &amp; edit screenshots straight to Google Drive.</h1>
               <p class="mq-sub">
-                Select any area or tab, annotate or redact sensitive details in Chrome, copy your Drive link automatically, or download locally in one click.
+                Capture an area, visible tab, or full scrolling page, crop, annotate, or pixelate in Chrome, save to Drive, or download PNG or smart-paged PDF.
               </p>
               <div class="mq-meta-row">
                 <span class="mq-chip"><span class="mq-chip-dot"></span>Privacy-First</span>
@@ -1326,9 +1326,9 @@ export async function generateAllStoreAssets() {
           <div class="cws-slide">
             ${renderSlideHeader(
               iconDataUri,
-              'Area & Tab Capture',
-              'Select any screen area or capture the visible tab',
-              'Drag to crop with pixel-exact zoom accuracy, capture the visible tab in one click, or use customizable shortcuts.'
+              'Area, Tab & Full Page',
+              'Capture an area, visible tab, or full scrolling page',
+              'Drag to select with pixel-exact zoom accuracy, press Enter for full tab or F for full page, or use custom shortcuts.'
             )}
             <div class="cws-frame">
               <div class="browser-bar">
@@ -1395,9 +1395,9 @@ export async function generateAllStoreAssets() {
           <div class="cws-slide">
             ${renderSlideHeader(
               iconDataUri,
-              'Built-In Editor & Instant Copy',
-              'Highlight, annotate, redact sensitive details, or copy PNG',
-              'Opens automatically so you can highlight, add arrows, shapes, text, or pixel redactions, copy to clipboard, or save.'
+              'Built-In Editor & PNG / PDF Export',
+              'Crop, annotate, pixelate, copy PNG, or export smart PDF',
+              'Opens instantly so you can crop, highlight, add arrows, Meme text, captions, or redactions, download PNG or PDF, or save.'
             )}
             <div class="cws-frame">
               <iframe src="${editorUrl}" style="width:1136px;height:640px;border:0;display:block;" scrolling="no"></iframe>

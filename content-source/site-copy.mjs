@@ -104,7 +104,7 @@ export const SITE_COPY = {
     {
       question: 'Do I need to sign in to capture and download screenshots?',
       answer:
-        'No. You can capture an area, visible tab, or full page, crop, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
+        'No. You can capture an area, visible tab, or full page, crop, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** (PNG or smart-paged PDF) with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.',
     },
     {
       question: 'Does SaveShot use any external servers or track my data?',
@@ -119,7 +119,7 @@ export const SITE_COPY = {
     {
       question: 'How do keyboard shortcuts work?',
       answer:
-        'SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).',
+        'SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. Inside the area selector, press `Enter` for the full tab or `F` for a full scrolling page (and `Esc` to stop a full-page capture early). You can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).',
     },
     {
       question: 'Why are capture buttons disabled on some tabs?',
@@ -129,12 +129,12 @@ export const SITE_COPY = {
     {
       question: 'What happens if my Google Drive is full or offline?',
       answer:
-        'If a background upload fails, your screenshot stays open in the editor with a clear error status pill so you can click **Retry**, **Copy image**, or **Download** (or **Save PNG locally**) without losing it.',
+        'If a background upload fails, your screenshot stays open in the editor with a clear error message so you can click **Retry**, **Copy image**, or **Download** (PNG or PDF, plus **Save PNG locally**) without losing it.',
     },
     {
       question: 'How does Incognito mode work?',
       answer:
-        'If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.',
+        'If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history and temporary browser caches are skipped for privacy.',
     },
   ],
 

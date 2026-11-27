@@ -883,9 +883,9 @@ Capture, auto-copy to your clipboard, and download screenshots locally right out
 KEY FEATURES
 
 • Select Area, Visible Tab, Full Scrolling Page, Right-Click Menu, or Keyboard Shortcuts
-Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, capture an entire scrolling webpage with Full page (automatically hides repeated sticky headers and stops cleanly on Esc or infinite feeds), right-click any webpage and choose "Take Screenshot", capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
+Drag across any part of a webpage for pixel-exact region screenshots across Retina/HiDPI displays and browser zoom levels, press Enter for the full tab or F for a full scrolling page right from the floating bar (automatically hides repeated sticky headers and stops cleanly on Esc or infinite feeds), right-click any webpage and choose "Take Screenshot", capture the visible tab in one click, or set your preferred keyboard shortcuts in Chrome.
 
-• Built-In Screenshot Editor: Crop, Annotate, Pixelate/Redact & Creator Tools
+• Built-In Screenshot Editor: Crop, Annotate, Pixelate/Redact, Creator Tools & Smart PDF Export
 Edit screenshots immediately in a new tab without leaving Chrome:
 - Crop screenshots cleanly with rule-of-thirds guides (K)
 - Draw arrows, rectangles, circles, lines, translucent marker highlights (hold Shift for straight lines), and freehand pencil strokes
@@ -893,14 +893,14 @@ Edit screenshots immediately in a new tab without leaving Chrome:
 - Paste reaction images or logos directly onto the canvas with Ctrl+V (drag to move, corner to resize)
 - Hide sensitive details with permanent Solid black redaction or mosaic Pixelate redaction
 - Pick preset swatches or any custom #HEX color, rotate 90 degrees, flip horizontally or vertically, undo, or reset
-- Auto-copies your captured PNG straight to the clipboard by default (switch between Image, Drive Link, or Off in Settings), or click "Copy image" (Ctrl+C / Cmd+C) or "Download" anytime with no sign-in required
+- Auto-copies your captured PNG straight to the clipboard by default (switch between Image, Drive Link, or Off in Settings), or click "Copy image" (Ctrl+C / Cmd+C) or "Download" (lossless PNG or smart-paged PDF that avoids clipping text at page breaks) anytime with no sign-in required
 - Rename screenshots and update the existing Google Drive file while keeping the exact same share link, or turn on "Only upload when I click Save" in Settings to redact before anything is uploaded
 
 • Organized in Your Google Drive + Instant Link Sharing
 When connected, ${copy.brandName} opens the editor immediately while uploading crisp lossless PNGs in the background into a dedicated "${copy.defaultFolderName}" folder in your Google Drive (customizable in Settings). Keep your last 8 captures handy in the popup, copy share links anytime, and clear recent history automatically when you sign out.
 
 • Offline & Full-Drive Backup Protection
-If your internet drops or your Google Drive storage is full when taking a screenshot, your capture stays open in the editor with Retry, Copy image, and Download (plus Save PNG locally fallback) ready so you never lose a capture.
+If your internet drops or your Google Drive storage is full when taking a screenshot, your capture stays open in the editor with Retry, Copy image, and Download (PNG or PDF, plus Save PNG locally fallback) ready so you never lose a capture.
 
 • Light & Neutral Graphite Dark Mode
 Matches your system appearance automatically, or choose Light or Dark mode in Settings.
@@ -910,7 +910,7 @@ PRIVACY FIRST BY DESIGN
 • No External Servers: Uploads go directly from your browser to Google's official Drive API (https://www.googleapis.com). ${copy.brandName} has zero private or third-party servers.
 • Narrow Google Drive Permission (drive.file): ${copy.brandName} can only access the screenshots and folder it creates itself. It cannot read, list, edit, or delete any other files in your Google Drive.
 • Active-Tab Only (activeTab): ${copy.brandName} never runs in the background and only captures when you click ${copy.brandName}, choose Take Screenshot from the right-click menu, or press your shortcut.
-• Incognito Ready: When allowed in Incognito, ${copy.brandName} leaves page URLs out of filenames and skips local device history.
+• Incognito Ready: When allowed in Incognito, ${copy.brandName} leaves page URLs out of filenames and skips local device history and temporary browser caches.
 • Zero External Dependencies: Lightweight vanilla code with zero third-party libraries, SDKs, analytics, or trackers.
 \`\`\`
 
@@ -918,8 +918,8 @@ PRIVACY FIRST BY DESIGN
 
 ## 4. Store Visual Assets (Included in \`store-assets/\`)
 
-1. \`screenshot-1-capture-1280x800.png\` (\`1280 x 800\`) - Region & Tab Capture + Popup + Instant Drive Upload
-2. \`screenshot-2-editor-1280x800.png\` (\`1280 x 800\`) - Built-in Editor: Annotate, Redact, Rotate, Download & Save
+1. \`screenshot-1-capture-1280x800.png\` (\`1280 x 800\`) - Area, Tab & Full-Page Capture + Popup + Instant Drive Upload
+2. \`screenshot-2-editor-1280x800.png\` (\`1280 x 800\`) - Built-in Editor: Crop, Annotate, Pixelate, Meme/Caption, PNG/PDF Download & Save
 3. \`screenshot-3-privacy-1280x800.png\` (\`1280 x 800\`) - Privacy First, No External Servers (\`drive.file\`)
 4. \`screenshot-4-themes-1280x800.png\` (\`1280 x 800\`) - Light & Graphite Dark Themes + Instant Toast Actions
 5. \`screenshot-welcome-1280x800.png\` (\`1280 x 800\`) - Pin Setup, 4-Step Workflow & Customizable Shortcuts
@@ -1009,9 +1009,9 @@ ${copy.overviewLead}
 
 ## Key Capabilities
 
-- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, capture a **Full page** scrolling screenshot (automatically hides repeated sticky headers, press \`Esc\` to stop early, capped safely on endless feeds), press \`Enter\` inside the selector for the full tab, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at \`chrome://extensions/shortcuts\`.
+- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, capture a **Full page** scrolling screenshot (automatically hides repeated sticky headers, press \`Esc\` to stop early, capped safely on endless feeds), press \`Enter\` for the full tab or \`F\` for full page inside the selector, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at \`chrome://extensions/shortcuts\`.
 - **Built-in screenshot editor**: Crop (\`K\`), add arrows, rectangles, circles, lines, translucent marker highlights (\`H\`, hold \`Shift\` for a straight line), freehand pencil strokes, clean or bold outlined **Meme** text (\`S/M/L/XL\`), Light/Dark top **Caption bars**, paste images onto the canvas (\`Ctrl+V\`), custom \`#HEX\` colors, or permanent solid black and mosaic **Pixelate** redactions, plus rotate 90 degrees, flip, undo, or reset.
-- **Instant auto-copy and local export (no sign-in required)**: Automatically copies fresh captures as lossless PNGs to your clipboard by default (choose \`Image\`, \`Link\`, or \`Off\` in Settings), or click **Copy image** (\`Ctrl+C\` / \`Cmd+C\`) or **Download** anytime.
+- **Instant auto-copy and local PNG/PDF export (no sign-in required)**: Automatically copies fresh captures as lossless PNGs to your clipboard by default (choose \`Image\`, \`Link\`, or \`Off\` in Settings), or click **Copy image** (\`Ctrl+C\` / \`Cmd+C\`) or **Download** (lossless PNG or smart-paged PDF that avoids clipping text at page breaks) anytime.
 - **Direct Google Drive autosave**: Optionally connect Google Drive once to open the editor immediately while uploading screenshots straight from Chrome into \`${copy.defaultFolderName}\` (customizable in Settings). Turn on **Only upload when I click Save** in Settings to redact before uploading, with **Retry**, **Copy image**, and **Download** ready if Drive is offline or full.
 
 ## Privacy and Security
