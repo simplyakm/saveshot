@@ -12,6 +12,7 @@ import {
   computeCropRect,
   createThumbnailDataUrl,
   dataUrlToBlob,
+  estimateFullPageSlices,
   FULLPAGE_LIMITS,
   isCapturableUrl,
   isSameDocumentCaptureUrl,
@@ -228,9 +229,9 @@ function installChromeMock({
         if (onCaptureVisibleTab) return onCaptureVisibleTab(windowId, opts);
         return TINY_PNG_DATA_URL;
       },
-      sendMessage: async (tabId, message) => {
-        sentTabMessages.push({ tabId, message });
-        if (onTabSendMessage) return onTabSendMessage(tabId, message);
+      sendMessage: async (tabId, message, options) => {
+        sentTabMessages.push({ tabId, message, options });
+        if (onTabSendMessage) return onTabSendMessage(tabId, message, options);
         return { ok: true, removed: false };
       },
     },
@@ -6218,7 +6219,8 @@ test('Zero-dependency PDF exporter (IHDR/IDAT passthrough, smart non-clipping pa
       if (msg.type === 'HIDE_UI_FOR_CAPTURE') return { ok: true, removed: false };
       if (msg.type === 'FULLPAGE_PREPARE') {
         if (!injected.includes('content/fullpage.js')) {
-          throw new Error('Receiving end does not exist');
+          // Simulate real Chrome MV3 behavior when content/selector.js is already listening on the tab
+          return undefined;
         }
         return {
           ok: true,
@@ -6280,11 +6282,323 @@ test('Zero-dependency PDF exporter (IHDR/IDAT passthrough, smart non-clipping pa
   const blockedCount = [raceA, raceB].filter((r) => !r.ok && r.code === 'NO_ACTIVE_REGION_SESSION').length;
   assert.equal(okCount, 1, `Concurrent overlay requests must allow strictly 1 (got ${JSON.stringify([raceA, raceB])})`);
   assert.equal(blockedCount, 1, 'Second concurrent overlay request must be atomically rejected');
+  assert.ok(injected.includes('content/fullpage.js'), 'Overlay full-page must lazy-inject content/fullpage.js when selector.js resolves undefined');
 
   const replayRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811Sender);
   assert.equal(replayRes.ok, false);
   assert.equal(replayRes.code, 'NO_ACTIVE_REGION_SESSION');
 });
+
+test('MV3 bidirectional undefined lazy injection, frameId 0 targeting, mid-prepare nav guard, and cap-aware estimateFullPageSlices parity', async () => {
+  // 1. Cap-aware estimateFullPageSlices across real-world displays & inner containers
+  // 1920x900 @ 1x (overlap 72 -> advance 828): hits 16,000 px at slice 20 (NOT 24)
+  const est1080p = estimateFullPageSlices({
+    metrics: { viewportWidth: 1920, viewportHeight: 900, scrollStepHeight: 900, actualY: 0, totalHeight: 50000, devicePixelRatio: 1 },
+    sliceIndex: 0,
+    overlapCss: 72,
+    currentSliceApplied: false,
+  });
+  assert.equal(est1080p.effectiveMaxHeight, 16000);
+  assert.equal(est1080p.total, 20);
+  assert.equal(est1080p.remainingSlices, 19);
+
+  // MacBook Retina 1440x800 @ 2x (2880 wide -> 40M/2880 = 13,888 px): hits pixel cap at slice 10 (NOT 24)
+  const estRetina = estimateFullPageSlices({
+    metrics: { viewportWidth: 1440, viewportHeight: 800, scrollStepHeight: 800, actualY: 0, totalHeight: 50000, devicePixelRatio: 2 },
+    sliceIndex: 0,
+    overlapCss: 72,
+    currentSliceApplied: false,
+  });
+  assert.equal(estRetina.effectiveMaxHeight, 13888);
+  assert.equal(estRetina.total, 10);
+
+  // 4K @ 200% (1920x965 @ 2x -> 3840 wide -> 40M/3840 = 10,416 px): hits pixel cap at slice 6
+  const est4k = estimateFullPageSlices({
+    metrics: { viewportWidth: 1920, viewportHeight: 965, scrollStepHeight: 965, actualY: 0, totalHeight: 50000, devicePixelRatio: 2 },
+    sliceIndex: 0,
+    overlapCss: 72,
+    currentSliceApplied: false,
+  });
+  assert.equal(est4k.effectiveMaxHeight, 10416);
+  assert.equal(est4k.total, 6);
+
+  // Narrow inner scroll container (700px wide inside 1920px @ 2x): budget uses cropped width 1400 -> full 16,000 px
+  const estInner = estimateFullPageSlices({
+    metrics: {
+      viewportWidth: 1920,
+      viewportHeight: 900,
+      scrollStepHeight: 600,
+      actualY: 0,
+      totalHeight: 50000,
+      devicePixelRatio: 2,
+      isInnerContainer: true,
+      containerRect: { left: 260, top: 80, width: 700, height: 600 },
+    },
+    sliceIndex: 0,
+    overlapCss: 0,
+    currentSliceApplied: false,
+  });
+  assert.equal(estInner.effectiveMaxHeight, 16000);
+  assert.equal(estInner.total, 14);
+
+  // Small 1x laptop (1366x650 @ 1x): hits MAX_SLICES (24) cleanly
+  const estSmall1x = estimateFullPageSlices({
+    metrics: { viewportWidth: 1366, viewportHeight: 650, scrollStepHeight: null, actualY: 0, totalHeight: 50000, devicePixelRatio: 1 },
+    sliceIndex: 0,
+    overlapCss: 72,
+    currentSliceApplied: false,
+  });
+  assert.equal(estSmall1x.total, FULLPAGE_LIMITS.MAX_SLICES);
+
+  // 2px DOM-bottom tolerance band (1920x900, overlap 72 -> advance 828, totalH 1730 -> slice 1 covers to 1728 >= 1730 - 2 -> 2 slices)
+  const est2pxBand = estimateFullPageSlices({
+    metrics: { viewportWidth: 1920, viewportHeight: 900, scrollStepHeight: 900, actualY: 0, totalHeight: 1730, devicePixelRatio: 1 },
+    sliceIndex: 0,
+    overlapCss: 72,
+    currentSliceApplied: false,
+  });
+  assert.equal(est2pxBand.total, 2, '2px DOM-bottom tolerance band must predict 2 slices (not 3)');
+
+  // 2. End-to-end integer parity between estimateFullPageSlices (pre-plan & post-plan) and planFullPageSlice
+  //    across integer DPR, fractional DPR (1.25x, 1.5x, 1.1x zoom), and exact-hit physical cap (zero wasted slice)
+  const scenarios = [
+    { name: '1080p 1x', vpW: 1920, vpH: 900, dpr: 1, overlap: 72, totalH: 50000 },
+    { name: 'Retina 2x', vpW: 1440, vpH: 800, dpr: 2, overlap: 72, totalH: 50000 },
+    { name: 'Win 1.25x', vpW: 1536, vpH: 745, dpr: 1.25, overlap: 72, totalH: 50000 },
+    { name: 'Win 1.5x', vpW: 1280, vpH: 605, dpr: 1.5, overlap: 72, totalH: 50000 },
+    { name: 'Zoom 1.1x', vpW: 1600, vpH: 810, dpr: 1.1, overlap: 72, totalH: 50000 },
+    { name: 'Exact-hit 16000', vpW: 1000, vpH: 800, dpr: 1, overlap: 0, totalH: 50000 },
+    { name: '2px band finite', vpW: 1920, vpH: 900, dpr: 1, overlap: 72, totalH: 1730 },
+  ];
+  for (const sc of scenarios) {
+    const bmpW = Math.round(sc.vpW * sc.dpr);
+    const bmpH = Math.round(sc.vpH * sc.dpr);
+    const stepAdvance = Math.max(1, Math.floor(sc.vpH - sc.overlap));
+    let prevY = 0;
+    let curY = 0;
+    let totalPhysH = 0;
+    let canvasW = 0;
+    let actualScaleX = 0;
+    let actualScaleY = 0;
+    let lastContainerH = 0;
+    const preTotals = [];
+    const postTotals = [];
+    let finalSliceCount = 0;
+
+    for (let i = 0; i < FULLPAGE_LIMITS.MAX_SLICES; i += 1) {
+      const m = {
+        viewportWidth: sc.vpW,
+        viewportHeight: sc.vpH,
+        scrollStepHeight: sc.vpH,
+        actualY: curY,
+        totalHeight: sc.totalH,
+        devicePixelRatio: sc.dpr,
+      };
+      const preEst = estimateFullPageSlices({
+        metrics: m,
+        sliceIndex: i,
+        prevScrollY: prevY,
+        totalPhysicalHeight: totalPhysH,
+        canvasWidth: canvasW,
+        actualScaleX,
+        actualScaleY,
+        lastContainerHeightPx: lastContainerH,
+        overlapCss: sc.overlap,
+        currentSliceApplied: false,
+      });
+      preTotals.push(preEst.total);
+
+      const plan = planFullPageSlice({
+        sliceIndex: i,
+        prevScrollY: prevY,
+        actualScrollY: curY,
+        viewportHeight: sc.vpH,
+        viewportWidth: sc.vpW,
+        bitmapWidth: bmpW,
+        bitmapHeight: bmpH,
+        devicePixelRatio: sc.dpr,
+        lockedCanvasWidth: canvasW,
+        currentPhysicalHeight: totalPhysH,
+      });
+      actualScaleX = plan.scaleX;
+      actualScaleY = plan.scaleY;
+      lastContainerH = plan.containerHeightPx;
+      assert.equal(plan.skip, false, `${sc.name} slice ${i} must never be a wasted skipped slice`);
+      canvasW = canvasW || plan.canvasWidth;
+      totalPhysH = plan.nextPhysicalHeight;
+      finalSliceCount = i + 1;
+
+      const postEst = estimateFullPageSlices({
+        metrics: m,
+        sliceIndex: i,
+        prevScrollY: prevY,
+        totalPhysicalHeight: totalPhysH,
+        canvasWidth: canvasW,
+        actualScaleX,
+        actualScaleY,
+        lastContainerHeightPx: lastContainerH,
+        overlapCss: sc.overlap,
+        currentSliceApplied: true,
+      });
+      postTotals.push(postEst.total);
+      assert.equal(
+        postEst.total,
+        preEst.total,
+        `${sc.name} slice ${i}: pre-plan (${preEst.total}) and post-plan (${postEst.total}) must match with zero jitter`
+      );
+
+      if (plan.truncated || totalPhysH >= plan.effectiveMaxHeight || curY + sc.vpH >= sc.totalH - 2) {
+        assert.equal(preEst.remainingSlices, 0, `${sc.name} final slice ${i} must predict remainingSlices === 0`);
+        break;
+      }
+      assert.ok(preEst.remainingSlices > 0, `${sc.name} non-final slice ${i} must predict remainingSlices > 0`);
+      prevY = curY;
+      curY = Math.floor(curY + stepAdvance);
+    }
+
+    assert.ok(
+      preTotals.every((t) => t === finalSliceCount),
+      `${sc.name}: every predicted denominator (${preTotals.join(',')}) must match exact stopped slice count (${finalSliceCount})`
+    );
+    assert.ok(
+      postTotals.every((t) => t === finalSliceCount),
+      `${sc.name}: every post-plan denominator must match exact stopped slice count (${finalSliceCount})`
+    );
+  }
+
+  // 3. Reverse direction MV3 undefined resolution (fullpage.js loaded -> START_REGION_SELECT resolves undefined -> selector.js injects)
+  //    PLUS every chrome.tabs.sendMessage call passes { frameId: 0 }
+  //    PLUS startRegionCaptureFlow rejects undefined after retry without registering pendingRegionTabIds
+  //    PLUS mid-FULLPAGE_PREPARE cross-origin navigation throws TAB_SWITCHED on BOTH thrown-error AND undefined paths without injecting
+  const injectedScripts = [];
+  const loadedByTab = new Map([
+    [951, new Set(['content/fullpage.js'])], // fullpage.js already loaded on tab 951
+    [952, new Set()], // tab 952 will always return undefined for START_REGION_SELECT
+    [953, new Set(['content/fullpage.js'])], // tab 953 navigates cross-origin during FULLPAGE_PREPARE (rejects)
+    [954, new Set(['content/selector.js'])], // tab 954 navigates cross-origin during FULLPAGE_PREPARE (resolves undefined)
+  ]);
+  const tabList = [
+    { id: 951, active: true, windowId: 1, url: 'https://x.com/home', title: 'X', incognito: false },
+    { id: 952, active: true, windowId: 1, url: 'https://example.com/broken', title: 'Broken', incognito: false },
+    { id: 953, active: true, windowId: 1, url: 'https://example.com/start', title: 'Start', incognito: false },
+    { id: 954, active: true, windowId: 1, url: 'https://example.com/start-undef', title: 'StartUndef', incognito: false },
+  ];
+  const mock = installChromeMock({
+    tabs: tabList,
+    initialStore: {
+      signedOut: true,
+      userProfile: null,
+      settings: { folderName: 'Shots', editBeforeUpload: true },
+    },
+    onTabSendMessage: async (tabId, msg) => {
+      const loaded = loadedByTab.get(tabId) || new Set();
+      if (tabId === 952 && msg.type === 'START_REGION_SELECT') {
+        return undefined;
+      }
+      if (tabId === 953 && msg.type === 'FULLPAGE_PREPARE') {
+        tabList[2].url = 'https://other-origin.example/navigated';
+        throw new Error('The message port closed before a response was received.');
+      }
+      if (tabId === 954 && msg.type === 'FULLPAGE_PREPARE') {
+        tabList[3].url = 'https://other-origin.example/navigated-undef';
+        return undefined;
+      }
+      if (msg.type === 'START_REGION_SELECT' || msg.type === 'SHOW_TOAST') {
+        if (!loaded.has('content/selector.js')) {
+          // Simulate real Chrome MV3 when fullpage.js is already listening: resolves undefined
+          return loaded.size > 0 ? undefined : Promise.reject(new Error('Receiving end does not exist'));
+        }
+        return { ok: true };
+      }
+      if (msg.type === 'FULLPAGE_PREPARE') {
+        if (!loaded.has('content/fullpage.js')) {
+          return loaded.size > 0 ? undefined : Promise.reject(new Error('Receiving end does not exist'));
+        }
+        return {
+          ok: true,
+          sessionToken: 'tok-cap-20',
+          viewportWidth: 1920,
+          viewportHeight: 900,
+          scrollStepHeight: 900,
+          actualY: 0,
+          totalHeight: 40000,
+          devicePixelRatio: 1,
+          containerRect: null,
+        };
+      }
+      if (msg.type === 'FULLPAGE_RESTORE') return { ok: true };
+      return { ok: true };
+    },
+  });
+  globalThis.chrome.scripting.executeScript = async ({ target, files }) => {
+    const loaded = loadedByTab.get(target.tabId) || new Set();
+    for (const f of files || []) {
+      loaded.add(f);
+      injectedScripts.push({ tabId: target.tabId, file: f });
+    }
+    loadedByTab.set(target.tabId, loaded);
+    return [];
+  };
+
+  const {
+    registerServiceWorkerListeners,
+    resetInMemoryWorkerStateForTests,
+  } = await import('../background/service-worker.js');
+  resetInMemoryWorkerStateForTests();
+  if (mock.listeners.onMessage.length === 0) {
+    registerServiceWorkerListeners();
+  }
+  const extSender = { url: 'chrome-extension://testext/popup/popup.html' };
+
+  // Reverse lazy injection: fullpage.js already loaded on tab 951 -> START_REGION_SELECT returns undefined -> injects selector.js -> succeeds
+  const regRes = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 951 }, extSender);
+  assert.equal(regRes.ok, true);
+  assert.ok(
+    injectedScripts.some((e) => e.tabId === 951 && e.file === 'content/selector.js'),
+    'START_REGION_CAPTURE must lazy-inject content/selector.js when fullpage.js causes undefined response'
+  );
+
+  // Persistent undefined on tab 952 -> must fail cleanly and NOT authorize overlay capture
+  const brokenReg = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 952 }, extSender);
+  assert.equal(brokenReg.ok, false);
+  assert.equal(brokenReg.code, 'REGION_UNSUPPORTED');
+  const blockedOverlay = await mock.dispatchMessage(
+    { type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' },
+    { frameId: 0, tab: tabList[1] }
+  );
+  assert.equal(blockedOverlay.ok, false);
+  assert.equal(blockedOverlay.code, 'NO_ACTIVE_REGION_SESSION');
+
+  // Mid-FULLPAGE_PREPARE cross-origin navigation on tab 953 (throw) & tab 954 (undefined) -> TAB_SWITCHED without injecting onto new URL
+  const navRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE', tabId: 953 }, extSender);
+  assert.equal(navRes.ok, false);
+  assert.equal(navRes.code, 'TAB_SWITCHED');
+  assert.equal(
+    injectedScripts.some((e) => e.tabId === 953 && e.file === 'content/fullpage.js'),
+    false,
+    'Must not inject fullpage.js into a newly navigated cross-origin page (throw path)'
+  );
+
+  const navUndefRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE', tabId: 954 }, extSender);
+  assert.equal(navUndefRes.ok, false);
+  assert.equal(navUndefRes.code, 'TAB_SWITCHED');
+  assert.equal(
+    injectedScripts.some((e) => e.tabId === 954 && e.file === 'content/fullpage.js'),
+    false,
+    'Must not inject fullpage.js into a newly navigated cross-origin page (undefined path)'
+  );
+
+  // Verify every single chrome.tabs.sendMessage call passed { frameId: 0 }
+  assert.ok(mock.sentTabMessages.length > 0);
+  for (const call of mock.sentTabMessages) {
+    assert.deepEqual(
+      call.options,
+      { frameId: 0 },
+      `chrome.tabs.sendMessage(${call.message?.type}) must explicitly target { frameId: 0 }`
+    );
+  }
+});
+
 
 
 

@@ -385,6 +385,40 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       return;
     }
 
+    if (req.url === '/tall-cap') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!doctype html>
+        <html>
+        <body style="margin:0; padding:0; height:30000px; background:linear-gradient(180deg, #eff6ff 0%, #dbeafe 50%, #bfdbfe 100%);">
+          <div style="padding:32px; font-family:sans-serif;">Tall Infinite Feed Simulation (30,000px)</div>
+          <script>
+            window.__pillTexts = [];
+            const recordPill = (host) => {
+              const txt = host?.shadowRoot?.querySelector('.fp-pill')?.textContent?.replace(/\\s+/g, ' ').trim() || '';
+              if (txt && window.__pillTexts[window.__pillTexts.length - 1] !== txt) {
+                window.__pillTexts.push(txt);
+              }
+            };
+            const watchShadow = (host) => {
+              if (!host || !host.shadowRoot || host.__watched) return;
+              host.__watched = true;
+              recordPill(host);
+              new MutationObserver(() => recordPill(host)).observe(host.shadowRoot, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+            };
+            new MutationObserver(() => {
+              const host = document.getElementById('__saveshot-fullpage-pill-host');
+              if (host) watchShadow(host);
+            }).observe(document.documentElement, { childList: true, subtree: true });
+          </script>
+        </body>
+        </html>`);
+      return;
+    }
+
     if (req.url === '/spa-scroll') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(`<!doctype html>
@@ -601,7 +635,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     for (let i = 0; i < 25; i += 1) {
       const welcomeSettled = await evalIn(
         welcomeSession,
-        `document.getElementById('account-heading')?.textContent?.trim() !== 'Checking Google account...'`
+        `document.getElementById('account-heading')?.textContent?.trim() !== 'Checking Google account...' && (!document.getElementById('pin-nudge-card')?.hidden || !document.getElementById('pin-done-card')?.hidden)`
       );
       if (welcomeSettled) break;
       await new Promise((r) => setTimeout(r, 80));
@@ -3566,7 +3600,247 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.ok(escAudit.height > 0 && escAudit.height < fpAudit.height, `Esc early stop should capture partial height (${escAudit.height} < ${fpAudit.height})`);
     assert.match(escAudit.pillText, /Stopped early/i, `Expected Stopped early pill (got: ${escAudit.pillText})`);
     await cdp.send('Target.closeTarget', { targetId: escEditorTarget.targetId });
+
+    // 7B-bis: Reverse MV3 lazy injection on SAME tab without refresh (fullpage.js already loaded -> Select Area)
+    await evalIn(swSession, `chrome.tabs.update(${fpTabInfo.tabId}, { active: true })`);
+    const reverseRegRes = await evalIn(
+      extPageSession,
+      `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'START_REGION_CAPTURE', tabId: ${fpTabInfo.tabId} }, resolve))`
+    );
+    assert.equal(
+      reverseRegRes.ok,
+      true,
+      `START_REGION_CAPTURE must lazy-inject selector.js when fullpage.js is already loaded (got ${JSON.stringify(reverseRegRes)})`
+    );
+    const reverseOverlayMounted = await evalIn(
+      fpPageSess,
+      `Boolean(document.getElementById('__saveshot-overlay-host')?.shadowRoot?.getElementById('full-page-btn'))`
+    );
+    assert.equal(reverseOverlayMounted, true, 'Floating overlay must mount after fullpage.js was loaded first');
+    await cdp.send(
+      'Input.dispatchKeyEvent',
+      { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+      fpPageSess
+    );
+    await cdp.send(
+      'Input.dispatchKeyEvent',
+      { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+      fpPageSess
+    );
     await evalIn(swSession, `chrome.tabs.remove(${fpTabInfo.tabId})`);
+
+    // 7B-ter: Forward MV3 lazy injection on fresh tabs without refresh (Overlay bar -> Click #full-page-btn AND press F)
+    const runOverlayToFullPageCheck = async (triggerMode) => {
+      const tabInfo = await evalIn(
+        swSession,
+        `(async () => {
+          const t = await chrome.tabs.create({ url: 'http://127.0.0.1:${port}/fullpage', active: true });
+          return { tabId: t.id, windowId: t.windowId };
+        })()`
+      );
+      for (let i = 0; i < 30; i += 1) {
+        const st = await evalIn(swSession, `(async () => (await chrome.tabs.get(${tabInfo.tabId})).status)()`);
+        if (st === 'complete') break;
+        await new Promise((r) => setTimeout(r, 80));
+      }
+      await new Promise((r) => setTimeout(r, 120));
+      const targetsNow = (await cdp.send('Target.getTargets')).targetInfos;
+      const overlayPageTarget = targetsNow.find(
+        (t) => t.type === 'page' && t.url.includes('/fullpage')
+      );
+      assert.ok(overlayPageTarget, `Expected /fullpage target for overlay ${triggerMode}`);
+      const { sessionId: overlayPageSess } = await cdp.send('Target.attachToTarget', {
+        targetId: overlayPageTarget.targetId,
+        flatten: true,
+      });
+
+      // Open floating overlay (loads ONLY content/selector.js onto this fresh tab)
+      const openOverlayRes = await evalIn(
+        extPageSession,
+        `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'START_REGION_CAPTURE', tabId: ${tabInfo.tabId} }, resolve))`
+      );
+      assert.equal(openOverlayRes.ok, true);
+
+      const beforeEdIds = new Set(
+        (await cdp.send('Target.getTargets')).targetInfos
+          .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+          .map((t) => t.targetId)
+      );
+
+      if (triggerMode === 'click') {
+        await evalIn(
+          overlayPageSess,
+          `document.getElementById('__saveshot-overlay-host')?.shadowRoot?.getElementById('full-page-btn')?.click()`
+        );
+      } else {
+        await cdp.send(
+          'Input.dispatchKeyEvent',
+          { type: 'keyDown', key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70 },
+          overlayPageSess
+        );
+        await cdp.send(
+          'Input.dispatchKeyEvent',
+          { type: 'keyUp', key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70 },
+          overlayPageSess
+        );
+      }
+
+      let edTarget = null;
+      for (let i = 0; i < 120; i += 1) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        edTarget = targetInfos.find(
+          (t) =>
+            t.type === 'page' &&
+            t.url.includes('/pages/editor.html?session=') &&
+            !beforeEdIds.has(t.targetId)
+        );
+        if (edTarget) break;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      const errToastText = await evalIn(
+        overlayPageSess,
+        `document.getElementById('__saveshot-toast-host')?.shadowRoot?.textContent?.trim() || ''`
+      );
+      assert.ok(
+        edTarget,
+        `Overlay ${triggerMode} -> Full page must succeed without refresh (error toast: "${errToastText}")`
+      );
+      const { sessionId: edSess } = await cdp.send('Target.attachToTarget', {
+        targetId: edTarget.targetId,
+        flatten: true,
+      });
+      for (let i = 0; i < 40; i += 1) {
+        const ready = await evalIn(
+          edSess,
+          `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+        );
+        if (ready) break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      const dims = await evalIn(
+        edSess,
+        `(() => ({ w: document.getElementById('base-canvas').width, h: document.getElementById('base-canvas').height }))()`
+      );
+      assert.ok(dims.h > 1800, `Overlay ${triggerMode} full-page capture must stitch multiple slices (got ${dims.w}x${dims.h})`);
+      await cdp.send('Target.closeTarget', { targetId: edTarget.targetId });
+      await evalIn(swSession, `chrome.tabs.remove(${tabInfo.tabId})`);
+    };
+
+    await runOverlayToFullPageCheck('click');
+    await runOverlayToFullPageCheck('key-F');
+
+    // 7B-quater: Tall page physical-cap denominator accuracy on native 1000x800 viewport (16,000px cap -> 22 slices, NEVER /24)
+    const tallTabInfo = await evalIn(
+      swSession,
+      `(async () => {
+        const t = await chrome.tabs.create({ url: 'http://127.0.0.1:${port}/tall-cap', active: true });
+        return { tabId: t.id, windowId: t.windowId };
+      })()`
+    );
+    try {
+      for (let i = 0; i < 30; i += 1) {
+        const st = await evalIn(swSession, `(async () => (await chrome.tabs.get(${tallTabInfo.tabId})).status)()`);
+        if (st === 'complete') break;
+        await new Promise((r) => setTimeout(r, 80));
+      }
+      await new Promise((r) => setTimeout(r, 120));
+      const tallTargets = (await cdp.send('Target.getTargets')).targetInfos;
+      const tallTarget = tallTargets.find((t) => t.type === 'page' && t.url.includes('/tall-cap'));
+      assert.ok(tallTarget);
+      const { sessionId: tallSess } = await cdp.send('Target.attachToTarget', {
+        targetId: tallTarget.targetId,
+        flatten: true,
+      });
+      await cdp.send(
+        'Emulation.setDeviceMetricsOverride',
+        { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false },
+        tallSess
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      const beforeTallEdIds = new Set(
+        (await cdp.send('Target.getTargets')).targetInfos
+          .filter((t) => t.type === 'page' && t.url.includes('/pages/editor.html?session='))
+          .map((t) => t.targetId)
+      );
+      const tallStartRes = await evalIn(
+        extPageSession,
+        `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_FULLPAGE', tabId: ${tallTabInfo.tabId}, background: true }, resolve))`
+      );
+      assert.equal(tallStartRes.ok, true, `Tall cap capture failed to start: ${JSON.stringify(tallStartRes)}`);
+      assert.equal(tallStartRes.started, true);
+
+      let tallEdTarget = null;
+      for (let i = 0; i < 250; i += 1) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        tallEdTarget = targetInfos.find(
+          (t) =>
+            t.type === 'page' &&
+            t.url.includes('/pages/editor.html?session=') &&
+            !beforeTallEdIds.has(t.targetId)
+        );
+        if (tallEdTarget) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      assert.ok(tallEdTarget, 'Tall capped full-page capture must open Editor tab');
+      const { sessionId: tallEdSess } = await cdp.send('Target.attachToTarget', {
+        targetId: tallEdTarget.targetId,
+        flatten: true,
+      });
+      for (let i = 0; i < 50; i += 1) {
+        const ready = await evalIn(
+          tallEdSess,
+          `Boolean(document.getElementById('canvas-wrap') && !document.getElementById('canvas-wrap').hidden)`
+        );
+        if (ready) break;
+        await new Promise((r) => setTimeout(r, 80));
+      }
+
+      const tallPillTexts = await evalIn(tallSess, `window.__pillTexts || []`);
+      assert.ok(tallPillTexts.length >= 10, `Tall capture must render progress pill texts (got ${JSON.stringify(tallPillTexts)})`);
+      const parsedPills = tallPillTexts.map((txt) => {
+        const m = txt.match(/^Capturing (\d+)\/(\d+) \.\. Press ESC to stop$/);
+        assert.ok(m, `Unexpected progress pill format: "${txt}"`);
+        return { cur: Number(m[1]), denom: Number(m[2]), txt };
+      });
+      const expectedDenom = parsedPills[0].denom;
+      assert.ok(
+        expectedDenom >= 15 && expectedDenom < 24,
+        `1000x800 tall capture pill denominator must reflect 16,000px cap (< 24), got ${expectedDenom} (${JSON.stringify(tallPillTexts)})`
+      );
+      for (const p of parsedPills) {
+        assert.equal(
+          p.denom,
+          expectedDenom,
+          `Pill denominator must stay rock-steady at ${expectedDenom} with zero jitter (saw "${p.txt}")`
+        );
+        assert.ok(p.cur <= p.denom, `Pill numerator (${p.cur}) must never exceed denominator (${p.denom}) in "${p.txt}"`);
+      }
+      assert.equal(
+        parsedPills[parsedPills.length - 1].cur,
+        expectedDenom,
+        `Final pill must reach ${expectedDenom}/${expectedDenom} cleanly without over-counting or stopping early`
+      );
+
+      const tallAudit = await evalIn(
+        tallEdSess,
+        `(() => ({
+          w: document.getElementById('base-canvas').width,
+          h: document.getElementById('base-canvas').height,
+          pillText: document.getElementById('status-pill').textContent.trim(),
+        }))()`
+      );
+      const expectedMaxH = Math.min(16000, Math.floor(40_000_000 / Math.max(1, tallAudit.w)));
+      assert.equal(
+        tallAudit.h,
+        expectedMaxH,
+        `Capped stitched canvas must hit exact physical cap height ${expectedMaxH} (got ${tallAudit.w}x${tallAudit.h})`
+      );
+      assert.match(tallAudit.pillText, /page height limit reached/i);
+      await cdp.send('Target.closeTarget', { targetId: tallEdTarget.targetId });
+    } finally {
+      await evalIn(swSession, `chrome.tabs.remove(${tallTabInfo.tabId}).catch(() => {})`);
+    }
 
     // 7C, 7D, 7E: Real Chromium Editor Battle-Test (No-Tool Default + Unselect + Zoom/Pan, Crop K, Pixelate Redaction, Meme Text + Caption Bar, Ctrl+V Paste + SVG XSS)
     const toolsCase = await openAndAttachNewEditor(
