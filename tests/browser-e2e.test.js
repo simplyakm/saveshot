@@ -226,6 +226,33 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               background: rgb(220, 38, 38);
               z-index: 9999;
             }
+            #fixed-left-rail {
+              position: fixed;
+              top: 48px;
+              left: 0;
+              width: 120px;
+              height: calc(100vh - 48px);
+              background: rgb(234, 179, 8);
+              z-index: 900;
+            }
+            .x-layout {
+              display: flex;
+              margin-left: 120px;
+            }
+            .x-feed {
+              flex: 1;
+              min-width: 0;
+            }
+            #sticky-right-rail {
+              width: 140px;
+              flex-shrink: 0;
+              position: sticky;
+              top: 48px;
+              align-self: flex-start;
+              height: calc(100vh - 48px);
+              background: rgb(236, 72, 153);
+              z-index: 100;
+            }
             .band-top { height: 1100px; background: rgb(14, 165, 233); }
             #sticky-hdr {
               position: sticky;
@@ -240,10 +267,16 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         </head>
         <body>
           <header id="fixed-hdr">Fixed Top Nav</header>
-          <div class="band-top"></div>
-          <div id="sticky-hdr">Below-Fold Sticky Section</div>
-          <div class="band-mid"></div>
-          <div class="band-bot"></div>
+          <aside id="fixed-left-rail">Fixed Left Rail</aside>
+          <div class="x-layout">
+            <main class="x-feed">
+              <div class="band-top"></div>
+              <div id="sticky-hdr">Below-Fold Sticky Section</div>
+              <div class="band-mid"></div>
+              <div class="band-bot"></div>
+            </main>
+            <aside id="sticky-right-rail">Sticky Right Rail</aside>
+          </div>
         </body>
         </html>`);
       return;
@@ -2410,6 +2443,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const initialEnabled = !saveBtn.disabled;
 
         // Draw an arrow while signed out -> verify unsaved-pill STILL stays hidden
+        document.querySelector('[data-tool="arrow"]').click();
         const preview = document.getElementById('preview-canvas');
         const rect = preview.getBoundingClientRect();
         preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: rect.left + 15, clientY: rect.top + 15 }));
@@ -2672,6 +2706,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     const duringEdit6B = await evalIn(
       editRaceCase.edSess,
       `(async () => {
+        document.querySelector('[data-tool="arrow"]').click();
         const preview = document.getElementById('preview-canvas');
         const rect = preview.getBoundingClientRect();
         preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 3, clientX: rect.left + 14, clientY: rect.top + 14 }));
@@ -2733,6 +2768,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     const clickedSaveInFlight = await evalIn(
       dedupCase.edSess,
       `(async () => {
+        document.querySelector('[data-tool="arrow"]').click();
         const preview = document.getElementById('preview-canvas');
         const rect = preview.getBoundingClientRect();
         preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 4, clientX: rect.left + 18, clientY: rect.top + 18 }));
@@ -3125,12 +3161,15 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const wrap = document.getElementById('canvas-wrap');
         const rect = canvas.getBoundingClientRect();
         const midX = Math.floor(canvas.width / 2);
-        const sample = (fracY) => {
+        const leftRailX = Math.min(canvas.width - 1, Math.max(10, Math.floor(canvas.width * 0.04)));
+        const rightRailX = Math.max(0, Math.floor(canvas.width * 0.96));
+        const sampleAt = (x, fracY) => {
           const y = Math.min(canvas.height - 1, Math.max(0, Math.floor(canvas.height * fracY)));
-          const d = ctx.getImageData(midX, y, 1, 1).data;
+          const d = ctx.getImageData(x, y, 1, 1).data;
           return [d[0], d[1], d[2]];
         };
-        // Find purple sticky band (r>110, g<90, b>180) and verify red fixed header is NOT repeated below y=150
+        const sample = (fracY) => sampleAt(midX, fracY);
+        // Find purple sticky band (r>110, g<90, b>180) and verify red fixed header is NOT repeated below y=200
         let foundStickyPurple = false;
         let repeatedFixedRedBelowFold = false;
         for (let y = 0; y < canvas.height; y += 8) {
@@ -3147,6 +3186,12 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           bandTopRgb: sample(0.18),
           bandMidRgb: sample(0.55),
           bandBotRgb: sample(0.92),
+          leftRailTopRgb: sampleAt(leftRailX, 0.05),
+          leftRailMidRgb: sampleAt(leftRailX, 0.55),
+          leftRailBotRgb: sampleAt(leftRailX, 0.92),
+          rightRailTopRgb: sampleAt(rightRailX, 0.05),
+          rightRailMidRgb: sampleAt(rightRailX, 0.55),
+          rightRailBotRgb: sampleAt(rightRailX, 0.92),
           foundStickyPurple,
           repeatedFixedRedBelowFold,
         };
@@ -3169,6 +3214,30 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       true,
       'Below-the-fold position: sticky header must stay visible in-flow'
     );
+    assert.ok(
+      fpAudit.leftRailTopRgb[0] > 200 && fpAudit.leftRailTopRgb[1] > 150 && fpAudit.leftRailTopRgb[2] < 50,
+      `Left fixed sidebar should appear once in slice 0 (got rgb=${fpAudit.leftRailTopRgb})`
+    );
+    assert.ok(
+      !(fpAudit.leftRailMidRgb[0] > 200 && fpAudit.leftRailMidRgb[1] > 150 && fpAudit.leftRailMidRgb[2] < 50),
+      `Left fixed sidebar must NOT repeat on mid slice (got rgb=${fpAudit.leftRailMidRgb})`
+    );
+    assert.ok(
+      !(fpAudit.leftRailBotRgb[0] > 200 && fpAudit.leftRailBotRgb[1] > 150 && fpAudit.leftRailBotRgb[2] < 50),
+      `Left fixed sidebar must NOT repeat on bottom slice (got rgb=${fpAudit.leftRailBotRgb})`
+    );
+    assert.ok(
+      fpAudit.rightRailTopRgb[0] > 200 && fpAudit.rightRailTopRgb[1] < 110 && fpAudit.rightRailTopRgb[2] > 120,
+      `Right tall sticky sidebar should appear once in slice 0 (got rgb=${fpAudit.rightRailTopRgb})`
+    );
+    assert.ok(
+      !(fpAudit.rightRailMidRgb[0] > 200 && fpAudit.rightRailMidRgb[1] < 110 && fpAudit.rightRailMidRgb[2] > 120),
+      `Right tall sticky sidebar must NOT repeat on mid slice (got rgb=${fpAudit.rightRailMidRgb})`
+    );
+    assert.ok(
+      !(fpAudit.rightRailBotRgb[0] > 200 && fpAudit.rightRailBotRgb[1] < 110 && fpAudit.rightRailBotRgb[2] > 120),
+      `Right tall sticky sidebar must NOT repeat on bottom slice (got rgb=${fpAudit.rightRailBotRgb})`
+    );
     assert.ok(fpAudit.bandTopRgb[2] > 180, `Top cyan band expected (got ${fpAudit.bandTopRgb})`);
     assert.ok(fpAudit.bandMidRgb[1] > 150, `Mid green band expected (got ${fpAudit.bandMidRgb})`);
     assert.ok(fpAudit.bandBotRgb[0] > 200 && fpAudit.bandBotRgb[1] > 80, `Bottom orange band expected (got ${fpAudit.bandBotRgb})`);
@@ -3185,15 +3254,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       fpPageSess,
       `(() => ({
         scrollY: window.scrollY,
-        fixedVisibility: getComputedStyle(document.getElementById('fixed-hdr')).visibility,
+        fixedOpacity: getComputedStyle(document.getElementById('fixed-hdr')).opacity,
+        leftRailOpacity: getComputedStyle(document.getElementById('fixed-left-rail')).opacity,
+        rightRailOpacity: getComputedStyle(document.getElementById('sticky-right-rail')).opacity,
+        rightRailPosition: getComputedStyle(document.getElementById('sticky-right-rail')).position,
         stickyPosition: getComputedStyle(document.getElementById('sticky-hdr')).position,
-        pillRemoved: !document.getElementById('saveshot-fullpage-host'),
+        pillRemoved: !document.getElementById('__saveshot-fullpage-pill-host'),
+        styleRemoved: !document.getElementById('__saveshot-fullpage-style'),
       }))()`
     );
     assert.equal(fpRestored.scrollY, 0, 'Original window scrollY must be restored');
-    assert.equal(fpRestored.fixedVisibility, 'visible', 'Fixed header visibility must be restored');
+    assert.equal(fpRestored.fixedOpacity, '1', 'Fixed header opacity must be restored');
+    assert.equal(fpRestored.leftRailOpacity, '1', 'Fixed left rail opacity must be restored');
+    assert.equal(fpRestored.rightRailOpacity, '1', 'Sticky right rail opacity must be restored');
+    assert.equal(fpRestored.rightRailPosition, 'sticky', 'Sticky right rail position must be restored');
     assert.equal(fpRestored.stickyPosition, 'sticky', 'Sticky header position must be restored');
     assert.equal(fpRestored.pillRemoved, true, 'Progress pill shadow host must be removed after restore');
+    assert.equal(fpRestored.styleRemoved, true, 'Full-page helper style must be removed after restore');
     await cdp.send('Target.closeTarget', { targetId: fullPageCase.targetId });
 
     //     2) SPA inner scroll container (/spa-scroll)
@@ -3295,10 +3372,212 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     await cdp.send('Target.closeTarget', { targetId: escEditorTarget.targetId });
     await evalIn(swSession, `chrome.tabs.remove(${fpTabInfo.tabId})`);
 
-    // 7C, 7D, 7E: Real Chromium Editor Battle-Test (Crop K, Pixelate Redaction, Meme Text + Caption Bar, Ctrl+V Paste + SVG XSS)
+    // 7C, 7D, 7E: Real Chromium Editor Battle-Test (No-Tool Default + Unselect + Zoom/Pan, Crop K, Pixelate Redaction, Meme Text + Caption Bar, Ctrl+V Paste + SVG XSS)
     const toolsCase = await openAndAttachNewEditor(
       `new Promise((resolve) => chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE', tabId: ${testTabInfo.tabId} }, resolve))`
     );
+
+    // 7C0. UX Polish: Editor starts with NO tool selected, click-outside/toggle/Esc unselects,
+    //      topbar Zoom control, drag-pan when zoomed, scrollbar gutter guard, Ctrl+wheel accumulation,
+    //      and live text overlay scaling + Esc cancel under zoom
+    const uxPolishAudit = await evalIn(
+      toolsCase.edSess,
+      `(async () => {
+        const preview = document.getElementById('preview-canvas');
+        const stage = document.getElementById('stage');
+        const wrap = document.getElementById('canvas-wrap');
+        const zoomResetBtn = document.getElementById('zoom-reset-btn');
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+
+        // 1. Starts with NO tool selected
+        const initialActiveTools = document.querySelectorAll('[data-tool].active').length;
+        const initialStyleDimmed = document.getElementById('style-group').classList.contains('dimmed');
+        const initialStyleInert = Boolean(document.getElementById('style-group').inert);
+        const initialZoomLabel = zoomResetBtn.textContent.trim();
+        const initialZoomAria = zoomResetBtn.getAttribute('aria-label') || '';
+
+        // Dragging on canvas with no tool selected draws nothing
+        const r0 = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 20, clientX: r0.left + 20, clientY: r0.top + 20 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 20, clientX: r0.left + 90, clientY: r0.top + 70 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 20, clientX: r0.left + 90, clientY: r0.top + 70 }));
+        await new Promise((r) => setTimeout(r, 40));
+        const undoStillDisabledAfterIdleDrag = document.getElementById('undo-btn').disabled;
+
+        // 2. Click tool -> active; click same tool again -> toggles off
+        const arrowBtn = document.querySelector('[data-tool="arrow"]');
+        arrowBtn.click();
+        await new Promise((r) => setTimeout(r, 25));
+        const arrowActiveAfterFirstClick = arrowBtn.classList.contains('active');
+        arrowBtn.click();
+        await new Promise((r) => setTimeout(r, 25));
+        const activeAfterToggleOff = document.querySelectorAll('[data-tool].active').length;
+
+        // 3. Click empty stage backdrop -> unselects active tool
+        document.querySelector('[data-tool="box"]').click();
+        await new Promise((r) => setTimeout(r, 25));
+        const sr0 = stage.getBoundingClientRect();
+        stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 21, clientX: sr0.left + 6, clientY: sr0.top + 6 }));
+        await new Promise((r) => setTimeout(r, 25));
+        const activeAfterStageClick = document.querySelectorAll('[data-tool].active').length;
+
+        // 4. Press Escape -> unselects active tool
+        arrowBtn.click();
+        await new Promise((r) => setTimeout(r, 25));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 25));
+        const activeAfterEsc = document.querySelectorAll('[data-tool].active').length;
+
+        // 5. Topbar zoom: Fit -> 100% -> 125% -> 150% -> 200%, pan when zoomed in with no tool selected
+        zoomResetBtn.click();
+        await new Promise((r) => setTimeout(r, 25));
+        const labelAfterActual = zoomResetBtn.textContent.trim();
+        const hasZoomedClass = wrap.classList.contains('zoomed-canvas');
+        zoomInBtn.click();
+        zoomInBtn.click();
+        zoomInBtn.click();
+        await new Promise((r) => setTimeout(r, 35));
+        const labelAt200 = zoomResetBtn.textContent.trim();
+        const panCursorAt200 = preview.classList.contains('pan-cursor');
+
+        // Drag-pan canvas at 200% with no tool selected
+        stage.scrollLeft = 0;
+        stage.scrollTop = 0;
+        const rZoom = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 22, clientX: rZoom.left + 200, clientY: rZoom.top + 200 }));
+        preview.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, pointerId: 22, clientX: rZoom.left + 120, clientY: rZoom.top + 130 }));
+        preview.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 22, clientX: rZoom.left + 120, clientY: rZoom.top + 130 }));
+        await new Promise((r) => setTimeout(r, 35));
+        const pannedScroll = { left: stage.scrollLeft, top: stage.scrollTop };
+        const undoStillDisabledAfterPan = document.getElementById('undo-btn').disabled;
+
+        // 6. Scrollbar gutter click on #stage must NOT unselect active tool
+        document.querySelector('[data-tool="box"]').click();
+        await new Promise((r) => setTimeout(r, 25));
+        const srZoom = stage.getBoundingClientRect();
+        stage.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          button: 0,
+          pointerId: 23,
+          clientX: srZoom.left + stage.clientWidth + 2,
+          clientY: srZoom.top + 40,
+        }));
+        await new Promise((r) => setTimeout(r, 25));
+        const boxStillActiveAfterScrollbarClick = document.querySelector('[data-tool="box"]').classList.contains('active');
+
+        // 7. Ctrl+wheel: deltaY=0 is no-op; tiny trackpad deltas accumulate until >= 40 -> zooms to 300%
+        stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: 0, clientX: srZoom.left + 100, clientY: srZoom.top + 100 }));
+        const labelAfterZeroWheel = zoomResetBtn.textContent.trim();
+        stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -15, clientX: srZoom.left + 100, clientY: srZoom.top + 100 }));
+        const labelAfterSmallWheel = zoomResetBtn.textContent.trim();
+        stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -30, clientX: srZoom.left + 100, clientY: srZoom.top + 100 }));
+        await new Promise((r) => setTimeout(r, 30));
+        const labelAfterAccumWheel = zoomResetBtn.textContent.trim();
+        const zoomInDisabledAtMax = zoomInBtn.disabled;
+
+        // 8. Text overlay --tsize scales under zoom, keeps focus on zoom click, and Esc cancels without stamping
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 25));
+        const rText = preview.getBoundingClientRect();
+        preview.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 24, clientX: rText.left + 120, clientY: rText.top + 120 }));
+        await new Promise((r) => setTimeout(r, 35));
+        const textInput = document.getElementById('text-overlay-input');
+        textInput.value = 'ShouldCancel';
+        const tsizeAt300 = parseInt(textInput.style.getPropertyValue('--tsize'), 10);
+        zoomOutBtn.click();
+        await new Promise((r) => setTimeout(r, 30));
+        const tsizeAt200 = parseInt(textInput.style.getPropertyValue('--tsize'), 10);
+        const textFocusedAfterZoom = document.activeElement === textInput;
+        // Blur input (simulating focus elsewhere) then press Esc on window -> must cancel text, not stamp it
+        textInput.blur();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 35));
+        const textHiddenAfterEsc = textInput.hidden;
+        const undoStillDisabledAfterEscCancel = document.getElementById('undo-btn').disabled;
+
+        // 9. Keyboard zoom 0 -> Fit, 1 -> 100%, + -> 125%, - -> 100%, 0 -> Fit; Esc unselects text tool
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', bubbles: true }));
+        const labelAfterKey0 = zoomResetBtn.textContent.trim();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }));
+        const labelAfterKey1 = zoomResetBtn.textContent.trim();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '+', bubbles: true }));
+        const labelAfterKeyPlus = zoomResetBtn.textContent.trim();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', bubbles: true }));
+        const labelAfterKeyMinus = zoomResetBtn.textContent.trim();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 25));
+
+        return {
+          initialActiveTools,
+          initialStyleDimmed,
+          initialStyleInert,
+          initialZoomLabel,
+          initialZoomAria,
+          undoStillDisabledAfterIdleDrag,
+          arrowActiveAfterFirstClick,
+          activeAfterToggleOff,
+          activeAfterStageClick,
+          activeAfterEsc,
+          labelAfterActual,
+          hasZoomedClass,
+          labelAt200,
+          panCursorAt200,
+          pannedScroll,
+          undoStillDisabledAfterPan,
+          boxStillActiveAfterScrollbarClick,
+          labelAfterZeroWheel,
+          labelAfterSmallWheel,
+          labelAfterAccumWheel,
+          zoomInDisabledAtMax,
+          tsizeAt300,
+          tsizeAt200,
+          textFocusedAfterZoom,
+          textHiddenAfterEsc,
+          undoStillDisabledAfterEscCancel,
+          labelAfterKey0,
+          labelAfterKey1,
+          labelAfterKeyPlus,
+          labelAfterKeyMinus,
+        };
+      })()`
+    );
+    assert.equal(uxPolishAudit.initialActiveTools, 0, 'Fresh editor must start with NO tool selected');
+    assert.equal(uxPolishAudit.initialStyleDimmed, true, 'Style controls must be dimmed when no tool is selected');
+    assert.equal(uxPolishAudit.initialStyleInert, true, 'Style controls must be inert when no tool is selected');
+    assert.equal(uxPolishAudit.initialZoomLabel, 'Fit');
+    assert.match(uxPolishAudit.initialZoomAria, /^Zoom: Fit/i);
+    assert.equal(uxPolishAudit.undoStillDisabledAfterIdleDrag, true, 'Dragging with no tool selected must not draw');
+    assert.equal(uxPolishAudit.arrowActiveAfterFirstClick, true);
+    assert.equal(uxPolishAudit.activeAfterToggleOff, 0, 'Clicking active tool again must toggle it off');
+    assert.equal(uxPolishAudit.activeAfterStageClick, 0, 'Clicking empty stage backdrop must unselect tool');
+    assert.equal(uxPolishAudit.activeAfterEsc, 0, 'Pressing Escape must unselect active tool');
+    assert.equal(uxPolishAudit.labelAfterActual, '100%');
+    assert.equal(uxPolishAudit.hasZoomedClass, true);
+    assert.equal(uxPolishAudit.labelAt200, '200%');
+    assert.equal(uxPolishAudit.panCursorAt200, true, 'Zoomed canvas with no tool selected must show grab pan cursor');
+    assert.ok(
+      uxPolishAudit.pannedScroll.left > 0 || uxPolishAudit.pannedScroll.top > 0,
+      `Dragging zoomed canvas with no tool selected must pan stage (got ${JSON.stringify(uxPolishAudit.pannedScroll)})`
+    );
+    assert.equal(uxPolishAudit.undoStillDisabledAfterPan, true, 'Panning must not mutate canvas or undo stack');
+    assert.equal(uxPolishAudit.boxStillActiveAfterScrollbarClick, true, 'Clicking stage scrollbar gutter must NOT unselect active tool');
+    assert.equal(uxPolishAudit.labelAfterZeroWheel, '200%', 'Ctrl+wheel with deltaY=0 must be a no-op');
+    assert.equal(uxPolishAudit.labelAfterSmallWheel, '200%', 'Small trackpad wheel delta must accumulate before stepping');
+    assert.equal(uxPolishAudit.labelAfterAccumWheel, '300%', 'Accumulated Ctrl+wheel must step zoom to 300%');
+    assert.equal(uxPolishAudit.zoomInDisabledAtMax, true, 'Zoom in button must disable at max zoom');
+    assert.ok(
+      uxPolishAudit.tsizeAt300 > uxPolishAudit.tsizeAt200,
+      `Text overlay --tsize must scale down when zooming out (${uxPolishAudit.tsizeAt300} > ${uxPolishAudit.tsizeAt200})`
+    );
+    assert.equal(uxPolishAudit.textFocusedAfterZoom, true, 'Clicking zoom button must refocus active text input');
+    assert.equal(uxPolishAudit.textHiddenAfterEsc, true, 'Pressing Esc must cancel open text overlay');
+    assert.equal(uxPolishAudit.undoStillDisabledAfterEscCancel, true, 'Cancelled text overlay must NOT be stamped onto canvas');
+    assert.equal(uxPolishAudit.labelAfterKey0, 'Fit');
+    assert.equal(uxPolishAudit.labelAfterKey1, '100%');
+    assert.equal(uxPolishAudit.labelAfterKeyPlus, '125%');
+    assert.equal(uxPolishAudit.labelAfterKeyMinus, '100%');
 
     // 7C. Crop Tool (K): drag -> live W x H -> Enter crops losslessly -> Ctrl+Z restores -> K + Esc exits cleanly
     const cropAudit = await evalIn(

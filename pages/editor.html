@@ -71,6 +71,40 @@
           </div>
 
           <span class="ss-meta tabular dim-label" id="dim-label"></span>
+          <div class="zoom-control" id="zoom-control" role="group" aria-label="Canvas zoom" hidden>
+            <button
+              type="button"
+              class="ss-icon-btn zoom-btn"
+              id="zoom-out-btn"
+              title="Zoom out (-)"
+              aria-label="Zoom out"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="zoom-level-btn tabular"
+              id="zoom-reset-btn"
+              title="Toggle Fit and 100% (0 / 1)"
+              aria-label="Zoom: Fit. Click for 100%"
+            >
+              Fit
+            </button>
+            <button
+              type="button"
+              class="ss-icon-btn zoom-btn"
+              id="zoom-in-btn"
+              title="Zoom in (+)"
+              aria-label="Zoom in"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+          </div>
           <span class="status-pill" id="status-pill" role="status" aria-live="polite" hidden></span>
           <span class="unsaved-pill" id="unsaved-pill" role="status" aria-live="polite" hidden>
             <span class="unsaved-dot" aria-hidden="true"></span>
@@ -101,7 +135,7 @@
       <div class="dock-bar">
         <div class="dock" id="editor-dock" role="toolbar" aria-label="Editing tools">
           <div class="dock-group" role="group" aria-label="Annotation tools">
-            <button type="button" class="ss-dock-icon active" data-tool="arrow" title="Arrow (A)" aria-label="Arrow" aria-pressed="true">
+            <button type="button" class="ss-dock-icon" data-tool="arrow" title="Arrow (A)" aria-label="Arrow" aria-pressed="false">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="5" y1="19" x2="19" y2="5"></line>
                 <polyline points="9 5 19 5 19 15"></polyline>

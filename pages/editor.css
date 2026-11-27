@@ -87,7 +87,7 @@ body {
 }
 
 .filename-display {
-  max-width: 240px;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -110,8 +110,8 @@ body {
 }
 
 .filename-edit-input {
-  width: 210px;
-  max-width: 40vw;
+  width: 190px;
+  max-width: 36vw;
   border: none;
   background: transparent;
   color: var(--ss-text);
@@ -125,9 +125,53 @@ body {
   white-space: nowrap;
 }
 
+.zoom-control {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 2px;
+  gap: 1px;
+  border-radius: var(--ss-radius-ctrl);
+  background: var(--ss-surface);
+  border: 1px solid var(--ss-border);
+  flex-shrink: 0;
+}
+
+.zoom-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--ss-radius-xs);
+}
+
+.zoom-level-btn {
+  height: 24px;
+  min-width: 42px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--ss-radius-xs);
+  background: transparent;
+  color: var(--ss-text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+.zoom-level-btn:hover:not(:disabled) {
+  background: var(--ss-surface-hover);
+  color: var(--ss-text);
+}
+
+.zoom-level-btn:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+}
+
 .status-pill {
   height: 24px;
-  max-width: 280px;
+  max-width: 230px;
   padding: 0 9px;
   border-radius: var(--ss-radius-sm);
   font-size: 11.5px;
@@ -476,12 +520,34 @@ body {
   max-height: none;
 }
 
+.canvas-wrap.zoomed-canvas #base-canvas {
+  max-width: none;
+  max-height: none;
+  width: var(--zoom-w, auto);
+  height: var(--zoom-h, auto);
+}
+
 #preview-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   cursor: crosshair;
+  touch-action: none;
+}
+
+#preview-canvas.idle-cursor {
+  cursor: default;
+  touch-action: auto;
+}
+
+#preview-canvas.pan-cursor {
+  cursor: grab;
+  touch-action: none;
+}
+
+#preview-canvas.panning-cursor {
+  cursor: grabbing;
   touch-action: none;
 }
 

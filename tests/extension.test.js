@@ -2280,7 +2280,7 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
 
   // 4. Page stylesheets contain zero :root redefinitions, zero @import, zero loose #hex or rgb()/hsl() colors,
   //    and every referenced var(--ss-*) exists in tokens.css
-  const allowedDynamicVars = new Set(['--tx', '--ty', '--tcolor', '--tsize']);
+  const allowedDynamicVars = new Set(['--tx', '--ty', '--tcolor', '--tsize', '--zoom-w', '--zoom-h']);
   const pageCssFiles = ['popup/popup.css', 'pages/editor.css', 'pages/welcome.css'];
   for (const rel of pageCssFiles) {
     const rawCss = fs.readFileSync(path.join(rootDir, rel), 'utf8');
@@ -2378,6 +2378,10 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
     'Open in Google Drive icon must sit beside the pencil rename button on topbar-left'
   );
   assert.ok(
+    topbarLeftChunk.indexOf('id="dim-label"') < topbarLeftChunk.indexOf('id="zoom-control"'),
+    'Zoom control must sit right next to image dimensions in topbar-left'
+  );
+  assert.ok(
     topbarLeftChunk.includes('id="unsaved-pill"') && !topbarRightChunk.includes('id="unsaved-pill"'),
     'Unsaved changes pill must live in topbar-left status slot so right-side buttons never shift'
   );
@@ -2392,6 +2396,10 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
   assert.ok(
     editorHtml.includes('data-tool="highlighter"'),
     'Editor dock must include Highlighter tool button'
+  );
+  assert.ok(
+    !/data-tool="[^"]+"[^>]*aria-pressed="true"/.test(editorHtml),
+    'Editor must start with no drawing tool active by default'
   );
 });
 
@@ -4889,6 +4897,8 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     let stepGate = null;
     let stepCalls = 0;
     let restoreCalls = 0;
+    let prepareCancelledOnce = false;
+    const pillMessages = [];
 
     const mock = installChromeMock({
       tabs: [
@@ -4907,16 +4917,22 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
       },
       onTabSendMessage: async (tabId, message) => {
         if (message.type === 'FULLPAGE_PREPARE') {
+          const cancelled = prepareCancelledOnce;
+          prepareCancelledOnce = false;
           return {
             ok: true,
+            cancelled,
             viewportWidth: 500,
             viewportHeight: 250,
             scrollStepHeight: 250,
-            scrollTop: 0,
-            maxScrollTop: 500,
+            actualY: 0,
             totalHeight: 750,
             containerRect: null,
           };
+        }
+        if (message.type === 'FULLPAGE_PILL') {
+          pillMessages.push({ tabId, hidden: Boolean(message.hidden), progressText: message.progressText || '' });
+          return { ok: true };
         }
         if (message.type === 'FULLPAGE_STEP') {
           stepCalls += 1;
@@ -4925,14 +4941,13 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
             stepGate = null;
             await gate.promise;
           }
-          const y = Math.min(500, message.targetScrollTop || 0);
+          const y = Math.min(500, message.targetY || 0);
           return {
             ok: true,
             viewportWidth: 500,
             viewportHeight: 250,
             scrollStepHeight: 250,
-            scrollTop: y,
-            maxScrollTop: 500,
+            actualY: y,
             totalHeight: 750,
             containerRect: null,
           };
@@ -5037,7 +5052,9 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(reloadLoad.session.captureNotice, '', 'Tab reload must NOT re-show one-shot captureNotice');
 
     // 3. Incognito full-page capture scrubs pageUrl and pageTitle from chrome.storage.session
+    //    and sends non-blinking FULLPAGE_PILL progress messages ("Capturing x/yy .. Press ESC to stop")
     const tabsBeforeIncog = mock.createdTabs.length;
+    pillMessages.length = 0;
     const incogRes = await mock.dispatchMessage(
       { type: 'CAPTURE_FULLPAGE', tabId: 602 },
       trustedSender
@@ -5045,6 +5062,10 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(incogRes.ok, true);
     assert.equal(incogRes.openedEditor, true);
     assert.equal(mock.createdTabs.length, tabsBeforeIncog + 1);
+    assert.ok(
+      pillMessages.some((m) => !m.hidden && /^Capturing \d+\/\d+ \.\. Press ESC to stop$/.test(m.progressText)),
+      `Expected static FULLPAGE_PILL progress text (got: ${JSON.stringify(pillMessages)})`
+    );
 
     const sessionDump = await globalThis.chrome.storage.session.get('editorSessionsById');
     const incogMeta = sessionDump.editorSessionsById?.[incogRes.sessionId];
@@ -5053,7 +5074,24 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(incogMeta.pageUrl, '', 'Incognito pageUrl must be scrubbed from chrome.storage.session');
     assert.equal(incogMeta.pageTitle, '', 'Incognito pageTitle must be scrubbed from chrome.storage.session');
 
-    // 4. SIGN_OUT mid-full-page capture aborts cleanly with zero session resurrection, zero editor tab, and zero red '!' badge
+    // 4. Pre-slice-0 Esc cancel exits silently with { ok: true, cancelled: true } and zero red '!' error badge
+    const badgesBeforePreEsc = mock.badges.length;
+    const tabsBeforePreEsc = mock.createdTabs.length;
+    prepareCancelledOnce = true;
+    const preEscRes = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601 },
+      trustedSender
+    );
+    assert.equal(preEscRes.ok, true);
+    assert.equal(preEscRes.cancelled, true);
+    assert.equal(mock.createdTabs.length, tabsBeforePreEsc, 'Pre-slice-0 Esc cancel must not open editor tab');
+    assert.equal(
+      mock.badges.slice(badgesBeforePreEsc).filter((b) => b.text === '!').length,
+      0,
+      'Pre-slice-0 Esc cancel must not set red ! error badge'
+    );
+
+    // 5. SIGN_OUT mid-full-page capture aborts cleanly with zero session resurrection, zero editor tab, and zero red '!' badge
     const gateSignOut = makeDeferred();
     stepGate = gateSignOut;
     const tabsBeforeSignOut = mock.createdTabs.length;

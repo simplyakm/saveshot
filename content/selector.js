@@ -1119,33 +1119,167 @@
     };
   }
 
-  function hideFixedAndStickyElements(session) {
-    if (!session || session.fixedHidden) return;
-    session.fixedHidden = true;
-    const vpH = window.innerHeight || 1;
-    const all = document.querySelectorAll('*');
-    const limit = Math.min(all.length, 4000);
-    const toMutate = [];
+  function walkDomElements(root, visit, { maxNodes = 20000, skipSubtreeSet = null } = {}) {
+    if (!root) return;
+    const stack = [root];
+    let visited = 0;
 
-    // Batch all layout/style reads first to avoid forced synchronous reflow thrashing
-    for (let i = 0; i < limit; i += 1) {
-      const el = all[i];
-      if (
-        !el ||
-        !(el instanceof HTMLElement) ||
-        el.id === OVERLAY_HOST_ID ||
-        el.id === TOAST_HOST_ID ||
-        el.id === FULLPAGE_PILL_HOST_ID
-      ) {
+    while (stack.length > 0 && visited < maxNodes) {
+      const currentRoot = stack.pop();
+      if (!currentRoot) continue;
+      let walker;
+      try {
+        walker = document.createTreeWalker(currentRoot, NodeFilter.SHOW_ELEMENT, {
+          acceptNode(node) {
+            if (
+              node.namespaceURI === 'http://www.w3.org/2000/svg' ||
+              node.tagName === 'SVG' ||
+              node.tagName === 'svg'
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (
+              node.id === OVERLAY_HOST_ID ||
+              node.id === TOAST_HOST_ID ||
+              node.id === FULLPAGE_PILL_HOST_ID
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (skipSubtreeSet && skipSubtreeSet.has(node)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            if (!(node instanceof HTMLElement)) {
+              return NodeFilter.FILTER_SKIP;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        });
+      } catch {
         continue;
       }
+
+      let el = walker.nextNode();
+      while (el && visited < maxNodes) {
+        visited += 1;
+        visit(el);
+        if (el.shadowRoot) {
+          stack.push(el.shadowRoot);
+        }
+        el = walker.nextNode();
+      }
+    }
+  }
+
+  function snapshotSlice0StickyElements(session) {
+    if (!session) return;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    try {
+      walkDomElements(root, (el) => {
+        const pos = getComputedStyle(el).position;
+        if (pos === 'sticky' || pos === '-webkit-sticky') {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < vpH) {
+            session.slice0VisibleSet.add(el);
+          }
+        }
+      });
+    } catch {
+      // Never abort capture on hostile DOM getters
+    }
+  }
+
+  function attachFullPageMutationObserver(session) {
+    if (!session || typeof MutationObserver !== 'function') return;
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    const MAX_DIRTY = 2000;
+    const recordDirty = (node) => {
+      if (!node || session.dirtyNodes.size >= MAX_DIRTY) return;
+      if (
+        node.id === OVERLAY_HOST_ID ||
+        node.id === TOAST_HOST_ID ||
+        node.id === FULLPAGE_PILL_HOST_ID
+      ) {
+        return;
+      }
+      if (node instanceof HTMLElement) {
+        session.dirtyNodes.add(node);
+      }
+    };
+    try {
+      const observer = new MutationObserver((mutations) => {
+        if (!session || session.cancelled || session.dirtyNodes.size >= MAX_DIRTY) return;
+        for (const m of mutations) {
+          if (m.type === 'attributes') {
+            recordDirty(m.target);
+          } else if (m.type === 'childList' && m.addedNodes?.length) {
+            for (const added of m.addedNodes) {
+              if (!(added instanceof HTMLElement)) continue;
+              recordDirty(added);
+              if (session.dirtyNodes.size < MAX_DIRTY && added.childElementCount > 0) {
+                walkDomElements(
+                  added,
+                  (child) => recordDirty(child),
+                  { maxNodes: Math.max(0, MAX_DIRTY - session.dirtyNodes.size) }
+                );
+              }
+            }
+          }
+        }
+      });
+      observer.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style'],
+      });
+      session.mutationObserver = observer;
+    } catch {
+      // Ignore MutationObserver failures
+    }
+  }
+
+  function hideFixedAndStickyElements(session) {
+    if (!session) return;
+    const vpW = window.innerWidth || document.documentElement.clientWidth || 1;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
+    const root = document.body || document.documentElement;
+    if (!root) return;
+
+    const toMutate = [];
+    const MAX_ZERO_RECT = 500;
+
+    const inspectElement = (el) => {
+      if (!(el instanceof HTMLElement) || !el.isConnected) return;
+      if (session.handledSet.has(el)) return;
       const pos = getComputedStyle(el).position;
-      if (pos !== 'fixed' && pos !== 'sticky') continue;
+      if (pos !== 'fixed' && pos !== 'sticky' && pos !== '-webkit-sticky') return;
+
       const rect = el.getBoundingClientRect();
-      // Skip invisible elements or full-viewport SPA root wrappers
-      if (rect.width <= 0 || rect.height <= 0 || rect.height >= vpH * 0.85) continue;
-      const prop = pos === 'sticky' ? 'position' : 'visibility';
-      const val = pos === 'sticky' ? 'static' : 'hidden';
+      if (rect.width <= 0 || rect.height <= 0) {
+        if (session.zeroRectNodes.size < MAX_ZERO_RECT) {
+          session.zeroRectNodes.add(el);
+        }
+        return;
+      }
+      session.zeroRectNodes.delete(el);
+
+      const isScrollContainerOrAncestor =
+        el === session.element || (session.element && el.contains(session.element));
+      // Only skip true full-viewport SPA root wrappers covering BOTH width and height
+      const isFullViewportWrapper =
+        rect.width >= vpW * 0.85 && rect.height >= vpH * 0.85;
+      if (isScrollContainerOrAncestor || isFullViewportWrapper) return;
+
+      const isSticky = pos === 'sticky' || pos === '-webkit-sticky';
+      // Hide fixed overlays and slice-0-visible sticky chrome (e.g. X.com sidebars, top navbars)
+      // via opacity: 0 (zero flex reflow and cannot be undone by descendant visibility: visible).
+      // Convert below-the-fold sticky elements to position: static so they appear once in flow.
+      const hideViaOpacity = !isSticky || session.slice0VisibleSet.has(el);
+      const prop = hideViaOpacity ? 'opacity' : 'position';
+      const val = hideViaOpacity ? '0' : 'static';
       toMutate.push({
         el,
         prop,
@@ -1153,22 +1287,66 @@
         prevValue: el.style.getPropertyValue(prop),
         prevPriority: el.style.getPropertyPriority(prop),
       });
+      session.handledSet.add(el);
+      if (hideViaOpacity) {
+        session.opacityHiddenSet.add(el);
+      }
+    };
+
+    try {
+      if (!session.fullWalkDone) {
+        walkDomElements(root, inspectElement, {
+          maxNodes: 20000,
+          skipSubtreeSet: session.opacityHiddenSet,
+        });
+        session.fullWalkDone = true;
+        session.dirtyNodes.clear();
+      } else {
+        const candidates = [];
+        for (const node of session.dirtyNodes) {
+          candidates.push(node);
+          if (candidates.length >= 2000) break;
+        }
+        session.dirtyNodes.clear();
+        for (const node of Array.from(session.zeroRectNodes)) {
+          if (candidates.length >= 2500) break;
+          if (!node.isConnected) {
+            session.zeroRectNodes.delete(node);
+            continue;
+          }
+          candidates.push(node);
+        }
+        for (const el of candidates) {
+          inspectElement(el);
+        }
+      }
+    } catch {
+      // Never abort capture on hostile DOM getters
     }
 
     for (const item of toMutate) {
-      session.hiddenElements.push(item);
-      item.el.style.setProperty(item.prop, item.val, 'important');
+      try {
+        session.hiddenElements.push(item);
+        item.el.style.setProperty(item.prop, item.val, 'important');
+      } catch {
+        // Ignore detached or read-only style targets
+      }
     }
   }
 
-  function mountFullPageProgressPill(text) {
+  function ensureFullPageProgressPill(session) {
+    if (!session) return null;
+    if (session.pillHost && session.pillHost.isConnected && session.pillTextEl) {
+      return { host: session.pillHost, pill: session.pillTextEl };
+    }
     removeHostElement(FULLPAGE_PILL_HOST_ID);
     const vv = window.visualViewport;
-    const topPx = Math.round((vv?.offsetTop || 0) + 14);
+    const vvScale = vv?.scale || 1;
+    const topPx = Math.round((vv?.offsetTop || 0) + 14 / vvScale);
     const leftPx = Math.round((vv?.offsetLeft || 0) + (vv?.width || window.innerWidth || 320) / 2);
     const { host, shadow } = mountTopLayerHost(FULLPAGE_PILL_HOST_ID, {
       interactiveModalFallback: false,
-      cssBounds: `top:${topPx}px !important;left:${leftPx}px !important;transform:translateX(-50%) !important;`,
+      cssBounds: `top:${topPx}px !important;left:${leftPx}px !important;transform:translateX(-50%) scale(${1 / vvScale}) !important;transform-origin:top center !important;pointer-events:none !important;`,
     });
     const style = document.createElement('style');
     style.textContent = `
@@ -1177,8 +1355,9 @@
         font-size: 12.5px;
         font-weight: 500;
         line-height: 18px;
+        font-variant-numeric: tabular-nums;
         color: #f3f4f6;
-        background: rgba(20, 21, 24, 0.92);
+        background: rgba(20, 21, 24, 0.94);
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 999px;
         padding: 6px 14px;
@@ -1190,9 +1369,48 @@
     `;
     const pill = document.createElement('div');
     pill.className = 'fp-pill';
-    pill.textContent = text;
+    pill.setAttribute('role', 'status');
+    pill.setAttribute('aria-live', 'polite');
     shadow.append(style, pill);
+    session.pillHost = host;
+    session.pillTextEl = pill;
     return { host, pill };
+  }
+
+  async function setFullPagePillState({ hidden = false, progressText = '' } = {}) {
+    const session = fullPageSession;
+    if (!session || session.cancelled) return { ok: true };
+    const safeText = typeof progressText === 'string' ? progressText.slice(0, 120) : '';
+    if (safeText) {
+      const refs = ensureFullPageProgressPill(session);
+      if (refs) {
+        refs.pill.textContent = safeText;
+      }
+    }
+    const host = session.pillHost;
+    if (!host || !host.isConnected) return { ok: true };
+    if (hidden) {
+      try {
+        if (typeof host.hidePopover === 'function') {
+          host.hidePopover();
+        }
+      } catch {
+        // Ignore if not an open popover
+      }
+      host.style.setProperty('display', 'none', 'important');
+      // Wait for compositor repaint with document.hidden + timeout guard so pill never burns into PNG
+      await waitNextPaint(0);
+    } else {
+      host.style.setProperty('display', 'block', 'important');
+      try {
+        if (typeof host.showPopover === 'function' && !host.matches(':popover-open')) {
+          host.showPopover();
+        }
+      } catch {
+        // Fallback fixed positioning already active
+      }
+    }
+    return { ok: true };
   }
 
   function restoreFullPageSession() {
@@ -1203,6 +1421,16 @@
     if (existingStyle) existingStyle.remove();
 
     if (!session) return;
+    session.pillHost = null;
+    session.pillTextEl = null;
+    try {
+      session.mutationObserver?.disconnect?.();
+    } catch {
+      // Ignore disconnect errors
+    }
+    session.mutationObserver = null;
+    session.dirtyNodes?.clear?.();
+    session.zeroRectNodes?.clear?.();
     if (session.onKeyDown) {
       window.removeEventListener('keydown', session.onKeyDown, true);
     }
@@ -1283,7 +1511,15 @@
       origScrollX,
       origScrollY,
       hiddenElements: [],
-      fixedHidden: false,
+      handledSet: new WeakSet(),
+      opacityHiddenSet: new WeakSet(),
+      slice0VisibleSet: new WeakSet(),
+      dirtyNodes: new Set(),
+      zeroRectNodes: new Set(),
+      fullWalkDone: false,
+      mutationObserver: null,
+      pillHost: null,
+      pillTextEl: null,
       cancelled: false,
       onKeyDown: null,
       containerScrollbarPatched: false,
@@ -1302,8 +1538,12 @@
     session.onKeyDown = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         session.cancelled = true;
         removeHostElement(FULLPAGE_PILL_HOST_ID);
+        session.pillHost = null;
+        session.pillTextEl = null;
         try {
           const maybePromise = chrome.runtime.sendMessage({ type: 'FULLPAGE_CANCEL' });
           if (maybePromise && typeof maybePromise.catch === 'function') {
@@ -1320,6 +1560,8 @@
     // Scroll to top cleanly for slice 0
     scrollTargetInstant(session, origScrollX, 0);
     await waitNextPaint(40);
+    snapshotSlice0StickyElements(session);
+    attachFullPageMutationObserver(session);
 
     return {
       ok: true,
@@ -1332,7 +1574,6 @@
     targetY = 0,
     hideFixed = false,
     progressText = '',
-    holdPillMs = 280,
   } = {}) {
     const session = fullPageSession;
     if (!session) {
@@ -1342,22 +1583,18 @@
       return { ok: true, cancelled: true, ...readScrollMetrics(session) };
     }
 
-    if (hideFixed) {
-      hideFixedAndStickyElements(session);
-    }
-
     if (progressText) {
-      mountFullPageProgressPill(progressText);
+      await setFullPagePillState({ hidden: false, progressText });
     }
 
     const safeY = Math.max(0, Math.round(Number(targetY) || 0));
     scrollTargetInstant(session, session.origScrollX, safeY);
 
-    // Hold progress pill visibly during inter-capture settle window, then hide cleanly before capture
-    const safeHoldMs = Math.max(40, Math.min(600, Number(holdPillMs) || 280));
-    await waitNextPaint(safeHoldMs);
-    removeHostElement(FULLPAGE_PILL_HOST_ID);
-    await waitNextPaint(20);
+    // Wait a brief frame after scroll so dynamic sticky/fixed wrappers settle before hiding
+    await waitNextPaint(30);
+    if (hideFixed && !session.cancelled) {
+      hideFixedAndStickyElements(session);
+    }
 
     return {
       ok: true,
@@ -1366,7 +1603,9 @@
     };
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (sender?.id && chrome?.runtime?.id && sender.id !== chrome.runtime.id) return;
+    if (sender?.tab) return;
     if (!message || !message.type) return;
 
     if (message.type === 'START_REGION_SELECT') {
@@ -1398,6 +1637,13 @@
             reason: err?.message || 'Could not scroll page for capture.',
           })
         );
+      return true;
+    }
+
+    if (message.type === 'FULLPAGE_PILL') {
+      setFullPagePillState(message)
+        .then((res) => sendResponse(res))
+        .catch(() => sendResponse({ ok: true }));
       return true;
     }
 

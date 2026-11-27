@@ -22,6 +22,7 @@ import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
 const MAX_UNDO_STEPS = 20;
 const MIN_UNDO_STEPS = 3;
 const MAX_UNDO_BYTES = 256 * 1024 * 1024;
+const ZOOM_STEPS = Object.freeze([0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3]);
 const MAX_PASTE_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_PASTE_IMAGE_DIM = 8192;
 const MAX_PASTE_IMAGE_PIXELS = 16_000_000;
@@ -39,6 +40,10 @@ const els = {
   filenameEditing: document.getElementById('filename-editing'),
   filenameInput: document.getElementById('filename-input'),
   dimLabel: document.getElementById('dim-label'),
+  zoomControl: document.getElementById('zoom-control'),
+  zoomOutBtn: document.getElementById('zoom-out-btn'),
+  zoomResetBtn: document.getElementById('zoom-reset-btn'),
+  zoomInBtn: document.getElementById('zoom-in-btn'),
   statusPill: document.getElementById('status-pill'),
   unsavedPill: document.getElementById('unsaved-pill'),
   editorHelpBtn: document.getElementById('editor-help-btn'),
@@ -47,6 +52,7 @@ const els = {
   copyLinkBtn: document.getElementById('copy-link-btn'),
   openDriveLink: document.getElementById('open-drive-link'),
   saveDriveBtn: document.getElementById('save-drive-btn'),
+  editorDock: document.getElementById('editor-dock'),
   styleGroup: document.getElementById('style-group'),
   colorSwatches: document.getElementById('color-swatches'),
   customColorBtn: document.getElementById('custom-color-btn'),
@@ -77,6 +83,7 @@ const els = {
   cancelPasteBtn: document.getElementById('cancel-paste-btn'),
   undoBtn: document.getElementById('undo-btn'),
   resetBtn: document.getElementById('reset-btn'),
+  stage: document.getElementById('stage'),
   stageMessage: document.getElementById('stage-message'),
   stageSpinner: document.getElementById('stage-spinner'),
   stageMessageText: document.getElementById('stage-message-text'),
@@ -109,8 +116,9 @@ const state = {
   autoCopyMode: 'image', // 'image' | 'link' | 'off'
   autoImageCopied: false,
   captureNotice: '',
-  tool: 'arrow',
-  previousTool: 'arrow',
+  tool: null, // null = safe browse/scroll/pan mode until a tool is picked
+  previousTool: null,
+  zoom: 'fit', // 'fit' | number (0.25 .. 3)
   redactMode: 'solid', // 'solid' | 'pixelate'
   textStyle: 'clean', // 'clean' | 'meme'
   captionTheme: 'light', // 'light' | 'dark'
@@ -134,6 +142,7 @@ const state = {
   undoStack: [],
   undoBytes: 0,
   activeDrag: null,
+  activePan: null,
   activeTextAnchor: null,
   pendingCrop: null,
   pastedOverlay: null,
@@ -232,15 +241,203 @@ function updateDimensionsLabel() {
   if (!state.ready) {
     els.dimLabel.textContent = '';
     els.dimLabel.hidden = true;
+    els.zoomControl.hidden = true;
     return;
   }
   els.dimLabel.hidden = false;
   els.dimLabel.textContent = `${els.baseCanvas.width} \u00d7 ${els.baseCanvas.height}`;
+  els.zoomControl.hidden = false;
+  updateZoomUi();
+}
+
+const MAX_ZOOM_CSS_DIM = 16384;
+
+function getMaxZoomScale() {
+  const maxDim = Math.max(els.baseCanvas.width || 0, els.baseCanvas.height || 0);
+  const upperStep = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  if (!maxDim) return upperStep;
+  const rawCap = MAX_ZOOM_CSS_DIM / maxDim;
+  let best = ZOOM_STEPS[0];
+  for (const s of ZOOM_STEPS) {
+    if (s <= rawCap + 0.001) best = s;
+  }
+  return best;
+}
+
+function getEffectiveZoomScale() {
+  if (typeof state.zoom === 'number' && Number.isFinite(state.zoom) && state.zoom > 0) {
+    return state.zoom;
+  }
+  const rect = els.baseCanvas.getBoundingClientRect();
+  if (rect.width > 0 && els.baseCanvas.width > 0) {
+    return rect.width / els.baseCanvas.width;
+  }
+  return 1;
+}
+
+function computeTextOverlayCssFontSize(canvasFontSize) {
+  const rect = els.baseCanvas.getBoundingClientRect();
+  if (!rect.width || !els.baseCanvas.width) {
+    return FONT_SIZES[state.sizeKey] || FONT_SIZES.md;
+  }
+  return Math.max(10, Math.round(canvasFontSize * (rect.width / els.baseCanvas.width)));
+}
+
+function isStagePannable() {
+  if (!els.stage) return false;
+  return (
+    els.stage.scrollWidth > els.stage.clientWidth + 2 ||
+    els.stage.scrollHeight > els.stage.clientHeight + 2
+  );
+}
+
+function updateZoomUi() {
+  if (!els.zoomControl) return;
+  const eff = getEffectiveZoomScale();
+  const minZoom = ZOOM_STEPS[0];
+  const maxZoom = getMaxZoomScale();
+  const isFit = state.zoom === 'fit';
+  const actualPct = Math.round(Math.min(1, maxZoom) * 100);
+  const label = isFit ? 'Fit' : `${Math.round(state.zoom * 100)}%`;
+  els.zoomResetBtn.textContent = label;
+  els.zoomResetBtn.title = isFit
+    ? `Click for ${actualPct}% actual size (1)`
+    : 'Click to fit screen (0)';
+  els.zoomResetBtn.setAttribute(
+    'aria-label',
+    isFit
+      ? `Zoom: Fit. Click for ${actualPct}%`
+      : `Zoom: ${label}. Click to fit`
+  );
+  els.zoomOutBtn.disabled = !state.ready || eff <= minZoom + 0.01;
+  els.zoomInBtn.disabled = !state.ready || eff >= maxZoom - 0.01;
+}
+
+function repositionActiveTextOverlay() {
+  if (els.textOverlayInput.hidden || !state.activeTextAnchor) return;
+  const rect = els.baseCanvas.getBoundingClientRect();
+  if (!rect.width || !els.baseCanvas.width) return;
+  const cssFontSize = computeTextOverlayCssFontSize(state.activeTextAnchor.fontSize);
+  const minTextHeight = Math.max(34, Math.ceil(cssFontSize * 1.4));
+  const rawX = (state.activeTextAnchor.x / els.baseCanvas.width) * rect.width;
+  const rawY = (state.activeTextAnchor.y / els.baseCanvas.height) * rect.height;
+  const clampedX = Math.max(4, Math.min(Math.max(4, rect.width - 120), rawX));
+  const clampedY = Math.max(4, Math.min(Math.max(4, rect.height - minTextHeight), rawY));
+  els.textOverlayInput.style.setProperty('--tx', `${clampedX}px`);
+  els.textOverlayInput.style.setProperty('--ty', `${clampedY}px`);
+  els.textOverlayInput.style.setProperty('--tsize', `${cssFontSize}px`);
+}
+
+function updatePreviewCursor() {
+  const showPaste = Boolean(state.pastedOverlay);
+  if (showPaste) {
+    els.previewCanvas.classList.remove('text-cursor', 'idle-cursor', 'pan-cursor', 'panning-cursor');
+    return;
+  }
+  els.previewCanvas.classList.remove('move-cursor', 'nwse-cursor');
+  const isIdle = !state.tool;
+  const isPanning = isIdle && Boolean(state.activePan);
+  const canPan = isIdle && !isPanning && isStagePannable();
+  els.previewCanvas.classList.toggle('text-cursor', state.tool === 'text');
+  els.previewCanvas.classList.toggle('panning-cursor', isPanning);
+  els.previewCanvas.classList.toggle('pan-cursor', canPan);
+  els.previewCanvas.classList.toggle('idle-cursor', isIdle && !isPanning && !canPan);
+}
+
+function applyZoom(
+  nextZoom,
+  { preserveCenter = true, anchorClientX = null, anchorClientY = null } = {}
+) {
+  const minZoom = ZOOM_STEPS[0];
+  const maxZoom = getMaxZoomScale();
+  const normalized =
+    nextZoom === 'fit'
+      ? 'fit'
+      : Math.max(minZoom, Math.min(maxZoom, Number(nextZoom) || 1));
+
+  state.activePan = null;
+
+  let anchorRelX = 0.5;
+  let anchorRelY = 0.5;
+  let viewportOffsetX = 0;
+  let viewportOffsetY = 0;
+  const canPreserve = preserveCenter && state.ready && els.stage && !els.canvasWrap.hidden;
+
+  if (canPreserve) {
+    const stageRect = els.stage.getBoundingClientRect();
+    const canvasRect = els.baseCanvas.getBoundingClientRect();
+    const cx = anchorClientX ?? stageRect.left + stageRect.width / 2;
+    const cy = anchorClientY ?? stageRect.top + stageRect.height / 2;
+    viewportOffsetX = cx - stageRect.left;
+    viewportOffsetY = cy - stageRect.top;
+    if (canvasRect.width > 0 && canvasRect.height > 0) {
+      anchorRelX = Math.max(0, Math.min(1, (cx - canvasRect.left) / canvasRect.width));
+      anchorRelY = Math.max(0, Math.min(1, (cy - canvasRect.top) / canvasRect.height));
+    }
+  }
+
+  state.zoom = normalized;
+
+  if (normalized === 'fit') {
+    els.canvasWrap.classList.remove('zoomed-canvas');
+    els.baseCanvas.style.removeProperty('--zoom-w');
+    els.baseCanvas.style.removeProperty('--zoom-h');
+  } else {
+    const w = Math.max(1, Math.round(els.baseCanvas.width * normalized));
+    const h = Math.max(1, Math.round(els.baseCanvas.height * normalized));
+    els.baseCanvas.style.setProperty('--zoom-w', `${w}px`);
+    els.baseCanvas.style.setProperty('--zoom-h', `${h}px`);
+    els.canvasWrap.classList.add('zoomed-canvas');
+  }
+
+  if (canPreserve) {
+    const stageRect = els.stage.getBoundingClientRect();
+    const nextCanvasRect = els.baseCanvas.getBoundingClientRect();
+    const canvasLeftInContent = nextCanvasRect.left - stageRect.left + els.stage.scrollLeft;
+    const canvasTopInContent = nextCanvasRect.top - stageRect.top + els.stage.scrollTop;
+    const targetScrollLeft = canvasLeftInContent + anchorRelX * nextCanvasRect.width - viewportOffsetX;
+    const targetScrollTop = canvasTopInContent + anchorRelY * nextCanvasRect.height - viewportOffsetY;
+    els.stage.scrollLeft = Math.max(0, Math.round(targetScrollLeft));
+    els.stage.scrollTop = Math.max(0, Math.round(targetScrollTop));
+  }
+
+  repositionActiveTextOverlay();
+  if (state.pendingCrop || state.pastedOverlay) {
+    renderActiveDragPreview();
+  }
+  updateZoomUi();
+  updatePreviewCursor();
+}
+
+function stepZoom(direction, anchorOpts = {}) {
+  if (!state.ready) return;
+  const current = getEffectiveZoomScale();
+  const maxZoom = getMaxZoomScale();
+  const eps = 0.02;
+  if (direction > 0) {
+    const next = ZOOM_STEPS.find((s) => s > current + eps && s <= maxZoom + 0.001) ?? maxZoom;
+    applyZoom(next, anchorOpts);
+  } else {
+    let next = ZOOM_STEPS[0];
+    for (let i = ZOOM_STEPS.length - 1; i >= 0; i -= 1) {
+      if (ZOOM_STEPS[i] < current - eps && ZOOM_STEPS[i] <= maxZoom + 0.001) {
+        next = ZOOM_STEPS[i];
+        break;
+      }
+    }
+    applyZoom(next, anchorOpts);
+  }
+}
+
+function toggleFitAndActualZoom() {
+  if (!state.ready) return;
+  applyZoom(state.zoom === 'fit' ? Math.min(1, getMaxZoomScale()) : 'fit');
 }
 
 function updateStyleControlsState() {
   const showPaste = Boolean(state.pastedOverlay);
   const dimAll =
+    !state.tool ||
     showPaste ||
     state.tool === 'crop' ||
     (state.tool === 'redact' && state.redactMode === 'solid');
@@ -323,6 +520,7 @@ function updateUiState() {
   els.undoBtn.disabled = !state.ready || state.saving || !hasUndoableAction;
   els.resetBtn.disabled = !state.ready || state.saving || state.isAtOriginalCapture;
   updateContextBar();
+  updateZoomUi();
 }
 
 function updateContextBar() {
@@ -349,10 +547,7 @@ function updateContextBar() {
     }
   }
 
-  els.previewCanvas.classList.toggle('text-cursor', !showPaste && state.tool === 'text');
-  if (!showPaste) {
-    els.previewCanvas.classList.remove('move-cursor', 'nwse-cursor');
-  }
+  updatePreviewCursor();
 }
 
 function syncPreviewCanvasSize() {
@@ -362,7 +557,13 @@ function syncPreviewCanvasSize() {
   const isTall =
     els.baseCanvas.width > 0 && els.baseCanvas.height > els.baseCanvas.width * 1.5;
   els.canvasWrap.classList.toggle('tall-canvas', isTall);
-  updateDimensionsLabel();
+  if (typeof state.zoom === 'number') {
+    applyZoom(state.zoom, { preserveCenter: false });
+    updateDimensionsLabel();
+  } else {
+    updateDimensionsLabel();
+    updatePreviewCursor();
+  }
 }
 
 function getDisplayScale() {
@@ -567,7 +768,8 @@ function cancelActiveText() {
 
 function openTextOverlayAt(coords) {
   const rect = els.baseCanvas.getBoundingClientRect();
-  const cssFontSize = FONT_SIZES[state.sizeKey] || FONT_SIZES.md;
+  const canvasFontSize = getEffectiveFontSize();
+  const cssFontSize = computeTextOverlayCssFontSize(canvasFontSize);
   const minTextHeight = Math.max(34, Math.ceil(cssFontSize * 1.4));
   const clampedCssX = Math.max(4, Math.min(Math.max(4, rect.width - 120), coords.cssX));
   const clampedCssY = Math.max(
@@ -579,7 +781,7 @@ function openTextOverlayAt(coords) {
     x: (clampedCssX / Math.max(1, rect.width)) * els.baseCanvas.width,
     y: (clampedCssY / Math.max(1, rect.height)) * els.baseCanvas.height,
     color: state.color,
-    fontSize: getEffectiveFontSize(),
+    fontSize: canvasFontSize,
     textStyle: state.textStyle,
   };
 
@@ -716,31 +918,33 @@ function applyPendingCrop() {
   });
 }
 
-async function setTool(nextTool) {
+function setTool(nextTool) {
+  const normalized = nextTool || null;
   if (state.activeDrag) {
     state.activeDrag = null;
     cancelPreviewRender();
     previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
   }
-  await commitPendingEditsIfNeeded();
+  state.activePan = null;
+  commitPendingEditsIfNeeded();
   closeCaptionForm();
-  if (nextTool === 'crop' && state.tool && state.tool !== 'crop') {
+  if (normalized === 'crop' && state.tool !== 'crop') {
     state.previousTool = state.tool;
   }
-  state.tool = nextTool;
+  state.tool = normalized;
 
-  if (nextTool !== 'text' && state.sizeKey === 'xl') {
+  if (normalized !== 'text' && state.sizeKey === 'xl') {
     setSizeKey('lg');
   }
 
   for (const btn of document.querySelectorAll('[data-tool]')) {
-    const isActive = btn.dataset.tool === nextTool;
+    const isActive = Boolean(normalized) && btn.dataset.tool === normalized;
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-pressed', String(isActive));
   }
 
   if (
-    nextTool === 'highlighter' &&
+    normalized === 'highlighter' &&
     !state.userPickedColor &&
     !state.highlighterAutoColored &&
     state.color === '#ef4444'
@@ -749,7 +953,7 @@ async function setTool(nextTool) {
     setColor('#f59e0b', { isCustom: false });
   }
 
-  if (nextTool === 'redact' || nextTool === 'crop') {
+  if (!normalized || normalized === 'redact' || normalized === 'crop') {
     closeHexPopover();
   }
   updateUiState();
@@ -797,7 +1001,7 @@ function setSizeKey(nextSize, { refocusText = false } = {}) {
     state.activeTextAnchor.fontSize = getEffectiveFontSize();
     els.textOverlayInput.style.setProperty(
       '--tsize',
-      `${FONT_SIZES[nextSize] || FONT_SIZES.md}px`
+      `${computeTextOverlayCssFontSize(state.activeTextAnchor.fontSize)}px`
     );
     if (refocusText) {
       els.textOverlayInput.focus();
@@ -1065,13 +1269,13 @@ function computeHighlighterPoints(drag, shiftKey) {
 
 els.previewCanvas.addEventListener('pointerdown', (event) => {
   if (!state.ready || state.saving || event.button !== 0) return;
-  event.preventDefault();
   closeHexPopover();
 
   const coords = getCanvasCoordinates(event);
 
   // Interactive drag/resize for pasted reaction image overlay
   if (state.pastedOverlay) {
+    event.preventDefault();
     const ov = state.pastedOverlay;
     if (isOnPasteResizeHandle(ov, coords.x, coords.y)) {
       ov.dragMode = 'resize';
@@ -1101,6 +1305,29 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
   }
 
   commitActiveTextIfNeeded();
+
+  // Safe browse/pan mode when no drawing tool is selected
+  if (!state.tool) {
+    if (isStagePannable()) {
+      event.preventDefault();
+      state.activePan = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startScrollLeft: els.stage.scrollLeft,
+        startScrollTop: els.stage.scrollTop,
+      };
+      try {
+        els.previewCanvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic pointer events in tests
+      }
+      updatePreviewCursor();
+    }
+    return;
+  }
+
+  event.preventDefault();
 
   if (state.tool === 'text') {
     openTextOverlayAt(coords);
@@ -1139,6 +1366,19 @@ els.previewCanvas.addEventListener('pointerdown', (event) => {
 });
 
 els.previewCanvas.addEventListener('pointermove', (event) => {
+  if (state.activePan && event.pointerId === state.activePan.pointerId) {
+    event.preventDefault();
+    els.stage.scrollLeft = Math.max(
+      0,
+      Math.round(state.activePan.startScrollLeft - (event.clientX - state.activePan.startX))
+    );
+    els.stage.scrollTop = Math.max(
+      0,
+      Math.round(state.activePan.startScrollTop - (event.clientY - state.activePan.startY))
+    );
+    return;
+  }
+
   if (state.pastedOverlay) {
     const ov = state.pastedOverlay;
     const coords = getCanvasCoordinates(event);
@@ -1189,6 +1429,13 @@ els.previewCanvas.addEventListener('pointermove', (event) => {
 });
 
 function finishPointerDrag(event) {
+  if (state.activePan && event.pointerId === state.activePan.pointerId) {
+    event.preventDefault();
+    state.activePan = null;
+    updatePreviewCursor();
+    return;
+  }
+
   if (state.pastedOverlay?.dragMode && event.pointerId === state.pastedOverlay.pointerId) {
     event.preventDefault();
     state.pastedOverlay.dragMode = null;
@@ -1261,6 +1508,11 @@ function finishPointerDrag(event) {
 
 els.previewCanvas.addEventListener('pointerup', finishPointerDrag);
 els.previewCanvas.addEventListener('pointercancel', (event) => {
+  if (state.activePan && event.pointerId === state.activePan.pointerId) {
+    state.activePan = null;
+    updatePreviewCursor();
+    return;
+  }
   if (state.pastedOverlay?.dragMode && event.pointerId === state.pastedOverlay.pointerId) {
     state.pastedOverlay.dragMode = null;
     state.pastedOverlay.pointerId = null;
@@ -1406,8 +1658,97 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// Clicking outside the canvas and editing controls unselects the active tool
+document.addEventListener('pointerdown', (event) => {
+  if (!state.ready || state.saving || event.button !== 0 || els.confirmReplaceDialog.open) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  // Ignore clicks inside the stage's native scrollbar gutters so dragging scrollbars keeps tool/crop intact
+  if (target === els.stage) {
+    const stageRect = els.stage.getBoundingClientRect();
+    const onVerticalScrollbar = event.clientX >= stageRect.left + els.stage.clientWidth;
+    const onHorizontalScrollbar = event.clientY >= stageRect.top + els.stage.clientHeight;
+    if (onVerticalScrollbar || onHorizontalScrollbar) {
+      return;
+    }
+  }
+  if (
+    els.canvasWrap.contains(target) ||
+    els.editorDock.contains(target) ||
+    els.contextBar.contains(target) ||
+    els.hexPopover.contains(target) ||
+    els.zoomControl.contains(target) ||
+    els.filenameReadonly.contains(target) ||
+    els.filenameEditing.contains(target) ||
+    target.closest('button, a, input, textarea, select, label, dialog')
+  ) {
+    return;
+  }
+  if (state.tool !== null || state.pastedOverlay || !els.textOverlayInput.hidden) {
+    setTool(null);
+  }
+});
+
+function refocusTextOverlayIfOpen() {
+  if (!els.textOverlayInput.hidden) {
+    els.textOverlayInput.focus();
+  }
+}
+
+els.zoomOutBtn.addEventListener('click', () => {
+  stepZoom(-1);
+  refocusTextOverlayIfOpen();
+});
+els.zoomResetBtn.addEventListener('click', () => {
+  toggleFitAndActualZoom();
+  refocusTextOverlayIfOpen();
+});
+els.zoomInBtn.addEventListener('click', () => {
+  stepZoom(1);
+  refocusTextOverlayIfOpen();
+});
+
+let wheelDeltaAccum = 0;
+let wheelAccumTimer = null;
+
+els.stage.addEventListener(
+  'wheel',
+  (event) => {
+    if (!state.ready || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    if (event.deltaY === 0) return;
+    if (wheelAccumTimer) clearTimeout(wheelAccumTimer);
+    wheelAccumTimer = setTimeout(() => {
+      wheelDeltaAccum = 0;
+      wheelAccumTimer = null;
+    }, 180);
+    wheelDeltaAccum += event.deltaY;
+    if (Math.abs(wheelDeltaAccum) < 40) return;
+    const dir = wheelDeltaAccum < 0 ? 1 : -1;
+    wheelDeltaAccum = 0;
+    stepZoom(dir, {
+      anchorClientX: event.clientX,
+      anchorClientY: event.clientY,
+    });
+  },
+  { passive: false }
+);
+
+window.addEventListener('resize', () => {
+  if (!state.ready) return;
+  repositionActiveTextOverlay();
+  if (state.pendingCrop || state.pastedOverlay) {
+    renderActiveDragPreview();
+  }
+  updateZoomUi();
+  updatePreviewCursor();
+});
+
 for (const btn of document.querySelectorAll('[data-tool]')) {
-  btn.addEventListener('click', () => setTool(btn.dataset.tool));
+  btn.addEventListener('click', () => {
+    const targetTool = btn.dataset.tool;
+    setTool(state.tool === targetTool ? null : targetTool);
+  });
 }
 
 for (const swatch of els.colorSwatches.querySelectorAll('[data-color]')) {
@@ -1471,7 +1812,7 @@ els.cancelCropBtn.addEventListener('click', () => {
   if (state.pendingCrop) {
     clearPendingCrop();
   } else if (state.tool === 'crop') {
-    setTool(state.previousTool || 'arrow');
+    setTool(state.previousTool || null);
   }
 });
 
@@ -2127,6 +2468,11 @@ window.addEventListener('keydown', (event) => {
       closeCaptionForm({ restoreFocus: true });
       return;
     }
+    if (!els.textOverlayInput.hidden) {
+      event.preventDefault();
+      cancelActiveText();
+      return;
+    }
     if (state.pastedOverlay) {
       event.preventDefault();
       cancelPastedOverlay();
@@ -2137,9 +2483,9 @@ window.addEventListener('keydown', (event) => {
       clearPendingCrop();
       return;
     }
-    if (state.tool === 'crop') {
+    if (state.tool !== null) {
       event.preventDefault();
-      setTool(state.previousTool || 'arrow');
+      setTool(null);
       return;
     }
   }
@@ -2178,7 +2524,30 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  // Zoom shortcuts (+, =, -, 0 work plain or with Ctrl/Cmd; 1 works plain so Ctrl+1 stays browser tab switch)
+  if (!event.altKey && (event.key === '+' || event.key === '=')) {
+    event.preventDefault();
+    stepZoom(1);
+    return;
+  }
+  if (!event.altKey && (event.key === '-' || event.key === '_')) {
+    event.preventDefault();
+    stepZoom(-1);
+    return;
+  }
+  if (!event.altKey && event.key === '0') {
+    event.preventDefault();
+    applyZoom('fit');
+    return;
+  }
+
   if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+  if (event.key === '1') {
+    event.preventDefault();
+    applyZoom(Math.min(1, getMaxZoomScale()));
+    return;
+  }
 
   const keyMap = {
     a: 'arrow',
@@ -2292,6 +2661,7 @@ async function initEditor() {
     state.ready = true;
     els.stageMessage.hidden = true;
     els.canvasWrap.hidden = false;
+    updateDimensionsLabel();
     updateUiState();
 
     if (pendingUploadUpdate && pendingUploadUpdate.sessionId === state.sessionId) {

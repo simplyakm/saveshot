@@ -700,9 +700,13 @@ async function resolveTargetTab(tabId) {
   return tab || null;
 }
 
-async function captureVisibleTabSafe(windowId) {
+async function waitForCaptureVisibleTabSlot() {
   const elapsed = Date.now() - lastCaptureTimestamp;
   if (elapsed < 520) await sleep(520 - elapsed);
+}
+
+async function captureVisibleTabSafe(windowId) {
+  await waitForCaptureVisibleTabSlot();
 
   try {
     const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
@@ -1347,6 +1351,11 @@ async function captureFullPageFlow({
         );
       };
 
+      const sendFullPagePill = (payload) =>
+        chrome.tabs
+          .sendMessage(targetTab.id, { type: 'FULLPAGE_PILL', ...payload })
+          .catch(() => {});
+
       for (let sliceIndex = 0; sliceIndex < FULLPAGE_LIMITS.MAX_SLICES; sliceIndex += 1) {
         if (isAbortedBySignOut()) {
           return { aborted: true };
@@ -1369,19 +1378,70 @@ async function captureFullPageFlow({
 
         const stepH = Math.max(1, Number(metrics.scrollStepHeight || metrics.viewportHeight) || 1);
         const estimatedTotal = Math.max(
-          1,
+          sliceIndex + 1,
           Math.min(
             FULLPAGE_LIMITS.MAX_SLICES,
             Math.ceil(Math.max(1, metrics.totalHeight) / stepH)
           )
         );
-        if (estimatedTotal > 1) {
+        const currentYBefore = Number(metrics.actualY) || 0;
+        const totalHBefore = Math.max(stepH, Number(metrics.totalHeight) || stepH);
+        const isLikelyLast =
+          currentYBefore + stepH >= totalHBefore - 2 ||
+          sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES;
+        const showProgressPill = estimatedTotal > 1;
+        const needsRateLimitWait = Date.now() - lastCaptureTimestamp < 520;
+        const shouldShowPillNow =
+          showProgressPill && (sliceIndex > 0 || needsRateLimitWait);
+
+        if (showProgressPill && !isAbortedBySignOut()) {
           setBadge(`${sliceIndex + 1}/${estimatedTotal}`, '#1a73e8');
+        }
+        if (shouldShowPillNow) {
+          await sendFullPagePill({
+            hidden: false,
+            progressText: `Capturing ${sliceIndex + 1}/${estimatedTotal} .. Press ESC to stop`,
+          });
+        }
+
+        // Wait for Chrome's captureVisibleTab rate-limit slot WHILE the progress pill remains steadily visible
+        await waitForCaptureVisibleTabSlot();
+
+        if (isAbortedBySignOut()) {
+          return { aborted: true };
+        }
+        if (runState.cancelled) {
+          stoppedEarly = true;
+          break;
+        }
+        if (!(await isTabStillValid())) {
+          if (slices.length > 0) {
+            stoppedEarly = true;
+            break;
+          }
+          throw new SaveShotError({
+            code: 'TAB_SWITCHED',
+            userMessage: 'The tab changed before capture finished. Stay on the tab and try again.',
+          });
+        }
+
+        // Briefly hide pill for the single compositor capture frame so it never burns into the PNG
+        if (shouldShowPillNow) {
+          await sendFullPagePill({ hidden: true });
         }
 
         const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
 
-        // Re-check after captureVisibleTabSafe (which may have slept for Chrome's rate-limit gap)
+        // Immediately restore pill with next slice label while decoding/scrolling (skip on final slice)
+        if (showProgressPill && !isLikelyLast && !runState.cancelled && !isAbortedBySignOut()) {
+          const nextNum = Math.min(estimatedTotal, sliceIndex + 2);
+          sendFullPagePill({
+            hidden: false,
+            progressText: `Capturing ${nextNum}/${estimatedTotal} .. Press ESC to stop`,
+          });
+        }
+
+        // Re-check after captureVisibleTabSafe
         if (isAbortedBySignOut()) {
           return { aborted: true };
         }
@@ -1500,8 +1560,7 @@ async function captureFullPageFlow({
           type: 'FULLPAGE_STEP',
           targetY: nextTargetY,
           hideFixed: true,
-          progressText: `Capturing ${sliceIndex + 2}/${estimatedTotal}... \u00b7 Press Esc to stop`,
-          holdPillMs: 360,
+          progressText: `Capturing ${sliceIndex + 2}/${estimatedTotal} .. Press ESC to stop`,
         });
 
         if (isAbortedBySignOut()) {
@@ -1525,11 +1584,15 @@ async function captureFullPageFlow({
       }
 
       if (slices.length === 0) {
+        if (stoppedEarly) {
+          if (inflightUploadsBySessionId.size === 0) {
+            setBadge('', '');
+          }
+          return { ok: true, cancelled: true };
+        }
         throw new SaveShotError({
-          code: stoppedEarly ? 'FULLPAGE_CANCELLED' : 'EMPTY_CAPTURE',
-          userMessage: stoppedEarly
-            ? 'Full-page capture was cancelled.'
-            : 'Could not capture full page. Try "Visible Tab" instead.',
+          code: 'EMPTY_CAPTURE',
+          userMessage: 'Could not capture full page. Try "Visible Tab" instead.',
         });
       }
 
@@ -1621,6 +1684,9 @@ async function captureFullPageFlow({
         } catch {
           // Ignore already closed bitmaps
         }
+      }
+      if (isAbortedBySignOut() && inflightUploadsBySessionId.size === 0) {
+        setBadge('', '');
       }
       await chrome.tabs
         .sendMessage(targetTab.id, { type: 'FULLPAGE_RESTORE' })
@@ -2067,6 +2133,7 @@ export function registerServiceWorkerListeners() {
                 ok: true,
                 started: Boolean(result.started),
                 aborted: Boolean(result.aborted),
+                cancelled: Boolean(result.cancelled),
                 openedEditor: Boolean(result.openedEditor),
                 uploadingInBackground: Boolean(result.uploadingInBackground),
                 sessionId: result.sessionId || '',

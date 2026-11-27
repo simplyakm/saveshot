@@ -414,6 +414,11 @@ svg {
   color: var(--ss-text);
 }
 
+.ss-icon-btn:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
 .ss-icon-btn.copied {
   color: var(--ss-green);
 }
