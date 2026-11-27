@@ -1,10 +1,14 @@
 import {
   blobToDataUrl,
   dataUrlToBlob,
+  putBlobInTransferCache,
   sanitizeScreenshotFilename,
+  takeBlobFromTransferCache,
 } from '../lib/capture.js';
 import {
   addCaptionBarToCanvas,
+  applyPixelateRect,
+  computeAnnotationBounds,
   computePastedImageBox,
   cropSourceToCanvas,
   FONT_SIZES,
@@ -102,8 +106,76 @@ const els = {
   confirmReplaceBtn: document.getElementById('confirm-replace-btn'),
 };
 
-const baseCtx = els.baseCanvas.getContext('2d', { willReadFrequently: true });
+const baseCtx = els.baseCanvas.getContext('2d');
 const previewCtx = els.previewCanvas.getContext('2d');
+
+let pixelateScratchCanvas = null;
+let pixelateScratchCtx = null;
+let lastPreviewDirtyRect = null; // null | 'full' | { x, y, width, height }
+
+function releasePixelateScratch() {
+  if (pixelateScratchCanvas) {
+    pixelateScratchCanvas.width = 0;
+    pixelateScratchCanvas.height = 0;
+    pixelateScratchCanvas = null;
+    pixelateScratchCtx = null;
+  }
+}
+
+function renderPixelateViaScratch(targetCtx, rect, blockSize) {
+  if (!rect || rect.width < 2 || rect.height < 2) return false;
+  if (!pixelateScratchCanvas) {
+    pixelateScratchCanvas = document.createElement('canvas');
+    pixelateScratchCtx = pixelateScratchCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (!pixelateScratchCtx) return false;
+  if (
+    pixelateScratchCanvas.width !== rect.width ||
+    pixelateScratchCanvas.height !== rect.height
+  ) {
+    pixelateScratchCanvas.width = rect.width;
+    pixelateScratchCanvas.height = rect.height;
+  }
+  pixelateScratchCtx.clearRect(0, 0, rect.width, rect.height);
+  pixelateScratchCtx.drawImage(
+    els.baseCanvas,
+    rect.x,
+    rect.y,
+    rect.width,
+    rect.height,
+    0,
+    0,
+    rect.width,
+    rect.height
+  );
+  const ok = applyPixelateRect(
+    pixelateScratchCtx,
+    { x: 0, y: 0, width: rect.width, height: rect.height },
+    { blockSize }
+  );
+  if (!ok) return false;
+  targetCtx.save();
+  targetCtx.globalAlpha = 1;
+  targetCtx.globalCompositeOperation = 'source-over';
+  targetCtx.drawImage(pixelateScratchCanvas, rect.x, rect.y);
+  targetCtx.restore();
+  return true;
+}
+
+function clearPreviewCanvas() {
+  if (!lastPreviewDirtyRect) return;
+  if (lastPreviewDirtyRect === 'full') {
+    previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  } else {
+    previewCtx.clearRect(
+      lastPreviewDirtyRect.x,
+      lastPreviewDirtyRect.y,
+      lastPreviewDirtyRect.width,
+      lastPreviewDirtyRect.height
+    );
+  }
+  lastPreviewDirtyRect = null;
+}
 
 const state = {
   sessionId: '',
@@ -143,7 +215,7 @@ const state = {
   isAtOriginalCapture: true,
   driveMatchesInitial: false,
   imageModifiedSinceSave: false,
-  initialBitmap: null,
+  initialBlob: null,
   undoStack: [],
   undoBytes: 0,
   activeDrag: null,
@@ -559,7 +631,7 @@ function updateContextBar() {
 function syncPreviewCanvasSize() {
   els.previewCanvas.width = els.baseCanvas.width;
   els.previewCanvas.height = els.baseCanvas.height;
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  lastPreviewDirtyRect = null;
   const isTall =
     els.baseCanvas.width > 0 && els.baseCanvas.height > els.baseCanvas.width * 1.5;
   els.canvasWrap.classList.toggle('tall-canvas', isTall);
@@ -613,10 +685,37 @@ function popUnusedUndoSnapshot() {
   popped.bitmap?.close?.();
 }
 
-async function pushUndoSnapshot() {
-  const snapshot = await createImageBitmap(els.baseCanvas);
+async function pushUndoSnapshot(dirtyRect = null) {
+  const cw = els.baseCanvas.width;
+  const ch = els.baseCanvas.height;
+  let usePatch = false;
+  let rx = 0;
+  let ry = 0;
+  let rw = cw;
+  let rh = ch;
+
+  if (dirtyRect && cw > 0 && ch > 0) {
+    rx = Math.max(0, Math.floor(dirtyRect.x));
+    ry = Math.max(0, Math.floor(dirtyRect.y));
+    const rx2 = Math.min(cw, Math.ceil(dirtyRect.x + dirtyRect.width));
+    const ry2 = Math.min(ch, Math.ceil(dirtyRect.y + dirtyRect.height));
+    rw = Math.max(0, rx2 - rx);
+    rh = Math.max(0, ry2 - ry);
+    if (rw > 0 && rh > 0 && rw * rh < cw * ch * 0.65) {
+      usePatch = true;
+    }
+  }
+
+  const snapshot = usePatch
+    ? await createImageBitmap(els.baseCanvas, rx, ry, rw, rh)
+    : await createImageBitmap(els.baseCanvas);
   const bytes = Math.max(0, snapshot.width * snapshot.height * 4);
   state.undoStack.push({
+    kind: usePatch ? 'patch' : 'full',
+    x: usePatch ? rx : 0,
+    y: usePatch ? ry : 0,
+    width: snapshot.width,
+    height: snapshot.height,
     bitmap: snapshot,
     bytes,
     isAtOriginalCapture: state.isAtOriginalCapture,
@@ -653,7 +752,7 @@ function clearPendingCrop() {
   if (!state.pendingCrop) return;
   state.pendingCrop = null;
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
   updateUiState();
 }
 
@@ -674,7 +773,7 @@ function cancelPastedOverlay() {
   state.pastedOverlay = null;
   ov.bitmap?.close?.();
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
   updateUiState();
 }
 
@@ -683,22 +782,20 @@ function commitPastedOverlayIfNeeded() {
   const ov = state.pastedOverlay;
   state.pastedOverlay = null;
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
   updateUiState();
 
   return enqueueCanvasMutation(async () => {
     try {
-      await pushUndoSnapshot();
+      const dx = Math.round(ov.x);
+      const dy = Math.round(ov.y);
+      const dw = Math.max(1, Math.round(ov.width));
+      const dh = Math.max(1, Math.round(ov.height));
+      await pushUndoSnapshot({ x: dx - 2, y: dy - 2, width: dw + 4, height: dh + 4 });
       baseCtx.save();
       baseCtx.globalAlpha = 1;
       baseCtx.globalCompositeOperation = 'source-over';
-      baseCtx.drawImage(
-        ov.bitmap,
-        Math.round(ov.x),
-        Math.round(ov.y),
-        Math.max(1, Math.round(ov.width)),
-        Math.max(1, Math.round(ov.height))
-      );
+      baseCtx.drawImage(ov.bitmap, dx, dy, dw, dh);
       baseCtx.restore();
       state.isAtOriginalCapture = false;
       state.imageModifiedSinceSave = true;
@@ -729,18 +826,25 @@ function commitActiveTextIfNeeded() {
   }
 
   return enqueueCanvasMutation(async () => {
-    await pushUndoSnapshot();
+    const op = {
+      tool: 'text',
+      text,
+      textStyle: anchor.textStyle || 'clean',
+      x: anchor.x,
+      y: anchor.y,
+      color: anchor.color,
+      fontSize: anchor.fontSize,
+    };
+    const bounds = computeAnnotationBounds(
+      op,
+      els.baseCanvas.width,
+      els.baseCanvas.height,
+      baseCtx
+    );
+    await pushUndoSnapshot(bounds);
     const drew = renderAnnotation(
       baseCtx,
-      {
-        tool: 'text',
-        text,
-        textStyle: anchor.textStyle || 'clean',
-        x: anchor.x,
-        y: anchor.y,
-        color: anchor.color,
-        fontSize: anchor.fontSize,
-      },
+      op,
       els.baseCanvas.width,
       els.baseCanvas.height
     );
@@ -929,8 +1033,9 @@ function setTool(nextTool) {
   if (state.activeDrag) {
     state.activeDrag = null;
     cancelPreviewRender();
-    previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+    clearPreviewCanvas();
   }
+  releasePixelateScratch();
   state.activePan = null;
   commitPendingEditsIfNeeded();
   closeCaptionForm();
@@ -1024,7 +1129,7 @@ function applyTransform(kind) {
     state.activeDrag = null;
   }
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
 
   return enqueueCanvasMutation(async () => {
     await pushUndoSnapshot();
@@ -1058,11 +1163,16 @@ function undoLastChange() {
     state.undoBytes = Math.max(0, state.undoBytes - (prev.bytes || 0));
 
     try {
-      els.baseCanvas.width = prev.bitmap.width;
-      els.baseCanvas.height = prev.bitmap.height;
-      baseCtx.clearRect(0, 0, els.baseCanvas.width, els.baseCanvas.height);
-      baseCtx.drawImage(prev.bitmap, 0, 0);
-      syncPreviewCanvasSize();
+      if (prev.kind === 'patch') {
+        baseCtx.clearRect(prev.x, prev.y, prev.width, prev.height);
+        baseCtx.drawImage(prev.bitmap, prev.x, prev.y);
+      } else {
+        els.baseCanvas.width = prev.bitmap.width;
+        els.baseCanvas.height = prev.bitmap.height;
+        baseCtx.clearRect(0, 0, els.baseCanvas.width, els.baseCanvas.height);
+        baseCtx.drawImage(prev.bitmap, 0, 0);
+        syncPreviewCanvasSize();
+      }
       state.isAtOriginalCapture = prev.isAtOriginalCapture;
       state.imageModifiedSinceSave = prev.imageModifiedSinceSave;
     } finally {
@@ -1074,29 +1184,34 @@ function undoLastChange() {
 }
 
 function resetToOriginal() {
-  if (!state.ready || state.saving || state.isAtOriginalCapture || !state.initialBitmap) {
+  if (!state.ready || state.saving || state.isAtOriginalCapture || !state.initialBlob) {
     return mutationQueue;
   }
   cancelActiveText();
   cancelPastedOverlay();
   clearPendingCrop();
   return enqueueCanvasMutation(async () => {
-    await pushUndoSnapshot();
+    const initialBitmap = await createImageBitmap(state.initialBlob);
+    try {
+      await pushUndoSnapshot();
 
-    els.baseCanvas.width = state.initialBitmap.width;
-    els.baseCanvas.height = state.initialBitmap.height;
-    baseCtx.clearRect(0, 0, els.baseCanvas.width, els.baseCanvas.height);
-    baseCtx.drawImage(state.initialBitmap, 0, 0);
-    syncPreviewCanvasSize();
+      els.baseCanvas.width = initialBitmap.width;
+      els.baseCanvas.height = initialBitmap.height;
+      baseCtx.clearRect(0, 0, els.baseCanvas.width, els.baseCanvas.height);
+      baseCtx.drawImage(initialBitmap, 0, 0);
+      syncPreviewCanvasSize();
 
-    state.isAtOriginalCapture = true;
-    state.imageModifiedSinceSave = state.mode === 'existing' ? !state.driveMatchesInitial : false;
-    clearStatusPillIfIdle();
-    updateUiState();
+      state.isAtOriginalCapture = true;
+      state.imageModifiedSinceSave = state.mode === 'existing' ? !state.driveMatchesInitial : false;
+      clearStatusPillIfIdle();
+      updateUiState();
+    } finally {
+      initialBitmap.close();
+    }
   });
 }
 
-function buildDragOp(drag, { forPreview = false } = {}) {
+function buildDragOp(drag) {
   const op = {
     tool: drag.tool,
     color: drag.color,
@@ -1110,9 +1225,6 @@ function buildDragOp(drag, { forPreview = false } = {}) {
   if (drag.tool === 'redact') {
     op.redactMode = drag.redactMode || 'solid';
     op.blockSize = drag.blockSize || PIXELATE_BLOCK_SIZES.md;
-    if (forPreview && op.redactMode === 'pixelate') {
-      op.sourceCtx = baseCtx;
-    }
   }
   return op;
 }
@@ -1195,10 +1307,18 @@ function renderPastedOverlayPreview(ov) {
 
 function renderActiveDragPreview() {
   previewRafId = 0;
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
 
   if (state.pastedOverlay) {
-    renderPastedOverlayPreview(state.pastedOverlay);
+    const ov = state.pastedOverlay;
+    renderPastedOverlayPreview(ov);
+    const pad = Math.ceil(getPasteResizeHandleRadius() + 8 * getDisplayScale());
+    lastPreviewDirtyRect = {
+      x: Math.max(0, Math.floor(ov.x - pad)),
+      y: Math.max(0, Math.floor(ov.y - pad)),
+      width: Math.min(els.previewCanvas.width, Math.ceil(ov.width + pad * 2)),
+      height: Math.min(els.previewCanvas.height, Math.ceil(ov.height + pad * 2)),
+    };
     return;
   }
 
@@ -1213,6 +1333,7 @@ function renderActiveDragPreview() {
       { snapOutward: true }
     );
     renderCropOverlay(rect);
+    lastPreviewDirtyRect = 'full';
     if (rect.width >= 4 && rect.height >= 4) {
       els.cropDimLabel.textContent = `Crop ${rect.width} \u00d7 ${rect.height}`;
     }
@@ -1221,18 +1342,12 @@ function renderActiveDragPreview() {
 
   if (state.pendingCrop) {
     renderCropOverlay(state.pendingCrop);
+    lastPreviewDirtyRect = 'full';
     return;
   }
 
   if (!state.activeDrag) return;
   const op = buildDragOp(state.activeDrag, { forPreview: true });
-  renderAnnotation(
-    previewCtx,
-    op,
-    els.previewCanvas.width,
-    els.previewCanvas.height
-  );
-
   if (op.tool === 'redact' && op.redactMode === 'pixelate') {
     const rect = normalizeRect(
       op.x1,
@@ -1244,14 +1359,34 @@ function renderActiveDragPreview() {
       { snapOutward: true }
     );
     if (rect.width >= 2 && rect.height >= 2) {
+      renderPixelateViaScratch(previewCtx, rect, op.blockSize);
       const ds = getDisplayScale();
+      const borderPad = Math.max(4, Math.ceil(3 * ds));
       previewCtx.save();
       previewCtx.strokeStyle = '#1a73e8';
       previewCtx.lineWidth = Math.max(1.5, Math.round(1.5 * ds));
       previewCtx.setLineDash([Math.max(4, Math.round(4 * ds)), Math.max(3, Math.round(3 * ds))]);
       previewCtx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
       previewCtx.restore();
+      lastPreviewDirtyRect = {
+        x: Math.max(0, rect.x - borderPad),
+        y: Math.max(0, rect.y - borderPad),
+        width: Math.min(els.previewCanvas.width, rect.width + borderPad * 2),
+        height: Math.min(els.previewCanvas.height, rect.height + borderPad * 2),
+      };
     }
+    return;
+  }
+
+  const drew = renderAnnotation(
+    previewCtx,
+    op,
+    els.previewCanvas.width,
+    els.previewCanvas.height
+  );
+  if (drew) {
+    lastPreviewDirtyRect =
+      computeAnnotationBounds(op, els.previewCanvas.width, els.previewCanvas.height) || 'full';
   }
 }
 
@@ -1473,7 +1608,7 @@ function finishPointerDrag(event) {
       renderActiveDragPreview();
     } else {
       state.pendingCrop = null;
-      previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+      clearPreviewCanvas();
     }
     updateUiState();
     return;
@@ -1490,16 +1625,40 @@ function finishPointerDrag(event) {
   const finishedDrag = state.activeDrag;
   state.activeDrag = null;
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
 
   enqueueCanvasMutation(async () => {
-    await pushUndoSnapshot();
-    const drew = renderAnnotation(
-      baseCtx,
-      buildDragOp(finishedDrag),
+    const op = buildDragOp(finishedDrag);
+    const bounds = computeAnnotationBounds(
+      op,
       els.baseCanvas.width,
       els.baseCanvas.height
     );
+    await pushUndoSnapshot(bounds);
+    let drew = false;
+    if (op.tool === 'redact' && op.redactMode === 'pixelate') {
+      const rect = normalizeRect(
+        op.x1,
+        op.y1,
+        op.x2,
+        op.y2,
+        els.baseCanvas.width,
+        els.baseCanvas.height,
+        { snapOutward: true }
+      );
+      try {
+        drew = renderPixelateViaScratch(baseCtx, rect, op.blockSize);
+      } finally {
+        releasePixelateScratch();
+      }
+    } else {
+      drew = renderAnnotation(
+        baseCtx,
+        op,
+        els.baseCanvas.width,
+        els.baseCanvas.height
+      );
+    }
 
     if (drew) {
       state.isAtOriginalCapture = false;
@@ -1527,7 +1686,8 @@ els.previewCanvas.addEventListener('pointercancel', (event) => {
   if (state.activeDrag && event.pointerId !== state.activeDrag.pointerId) return;
   state.activeDrag = null;
   cancelPreviewRender();
-  previewCtx.clearRect(0, 0, els.previewCanvas.width, els.previewCanvas.height);
+  clearPreviewCanvas();
+  releasePixelateScratch();
   if (state.pendingCrop) {
     renderActiveDragPreview();
   }
@@ -1740,14 +1900,20 @@ els.stage.addEventListener(
   { passive: false }
 );
 
+let resizeRafId = 0;
+
 window.addEventListener('resize', () => {
-  if (!state.ready) return;
-  repositionActiveTextOverlay();
-  if (state.pendingCrop || state.pastedOverlay) {
-    renderActiveDragPreview();
-  }
-  updateZoomUi();
-  updatePreviewCursor();
+  if (!state.ready || resizeRafId) return;
+  resizeRafId = requestAnimationFrame(() => {
+    resizeRafId = 0;
+    if (!state.ready) return;
+    repositionActiveTextOverlay();
+    if (state.pendingCrop || state.pastedOverlay) {
+      renderActiveDragPreview();
+    }
+    updateZoomUi();
+    updatePreviewCursor();
+  });
 });
 
 for (const btn of document.querySelectorAll('[data-tool]')) {
@@ -1857,6 +2023,13 @@ function flashCopyImageButton() {
   }, 1600);
 }
 
+async function exportCurrentPngBlob() {
+  if (state.isAtOriginalCapture && state.initialBlob) {
+    return state.initialBlob;
+  }
+  return canvasToPngBlob(els.baseCanvas);
+}
+
 async function copyCanvasImageToClipboard() {
   if (!state.ready) return false;
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
@@ -1866,7 +2039,7 @@ async function copyCanvasImageToClipboard() {
   try {
     const pngBlobPromise = (async () => {
       await commitPendingEditsIfNeeded();
-      return canvasToPngBlob(els.baseCanvas);
+      return exportCurrentPngBlob();
     })();
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlobPromise })]);
     flashCopyImageButton();
@@ -1908,16 +2081,15 @@ els.downloadBtn.addEventListener('click', async () => {
   if (!state.ready) return;
   await commitPendingEditsIfNeeded();
   const filename = getDesiredFilename();
-  els.baseCanvas.toBlob((blob) => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showStatusPill('ok', `Downloaded ${filename}`, 3000);
-  }, 'image/png');
+  const blob = await exportCurrentPngBlob().catch(() => null);
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showStatusPill('ok', `Downloaded ${filename}`, 3000);
 });
 
 let copyLinkTimer = null;
@@ -1938,9 +2110,15 @@ els.copyLinkBtn.addEventListener('click', async () => {
   }
 });
 
-async function exportCanvasDataUrl() {
-  const blob = await canvasToPngBlob(els.baseCanvas);
-  return blobToDataUrl(blob);
+async function exportEditedPayloadForWorker() {
+  const blob = await exportCurrentPngBlob();
+  if (!state.incognito) {
+    const blobCacheUrl = await putBlobInTransferCache(blob);
+    if (blobCacheUrl) {
+      return { blobCacheUrl, dataUrl: '' };
+    }
+  }
+  return { blobCacheUrl: '', dataUrl: await blobToDataUrl(blob) };
 }
 
 let pendingUploadUpdate = null;
@@ -2217,12 +2395,15 @@ async function performSave(saveMode) {
         : 'Uploading to Google Drive...'
     );
 
-    const dataUrl = needImagePayload ? await exportCanvasDataUrl() : '';
+    const payload = needImagePayload
+      ? await exportEditedPayloadForWorker()
+      : { blobCacheUrl: '', dataUrl: '' };
     const res = await sendRuntimeMessage({
       type: 'SAVE_EDITED_SCREENSHOT',
       sessionId: state.sessionId,
       filename: desiredFilename,
-      dataUrl,
+      dataUrl: payload.dataUrl,
+      blobCacheUrl: payload.blobCacheUrl,
       imageModified: sendImageModified,
       saveMode: effectiveSaveMode,
       sessionContext: {
@@ -2605,8 +2786,12 @@ window.addEventListener('pagehide', () => {
     state.pastedOverlay.bitmap?.close?.();
     state.pastedOverlay = null;
   }
-  state.initialBitmap?.close?.();
-  state.initialBitmap = null;
+  state.initialBlob = null;
+  releasePixelateScratch();
+  els.baseCanvas.width = 0;
+  els.baseCanvas.height = 0;
+  els.previewCanvas.width = 0;
+  els.previewCanvas.height = 0;
 });
 
 async function initEditor() {
@@ -2625,48 +2810,62 @@ async function initEditor() {
     const res = await sendRuntimeMessage({
       type: 'GET_EDITOR_SESSION',
       sessionId,
+      acceptBlobCache: typeof globalThis.caches?.open === 'function',
     });
-    if (!res.ok || !res.dataUrl) {
+    if (!res.ok || (!res.blobCacheUrl && !res.dataUrl)) {
       throw new Error(res.error || 'Could not load screenshot session.');
     }
 
-    const blob = await dataUrlToBlob(res.dataUrl);
+    let blob = null;
+    if (res.blobCacheUrl) {
+      blob = await takeBlobFromTransferCache(res.blobCacheUrl);
+    }
+    if (!blob && res.dataUrl) {
+      blob = await dataUrlToBlob(res.dataUrl);
+    }
+    if (!blob) {
+      throw new Error('Screenshot data is no longer available.');
+    }
+
     const bitmap = await createImageBitmap(blob);
+    try {
+      state.initialBlob = blob;
+      state.signedIn = Boolean(res.session.signedIn);
+      state.mode = res.session.mode === 'new' ? 'new' : 'existing';
+      state.driveMatchesInitial = state.signedIn && state.mode === 'existing';
+      state.fileId = res.session.fileId || null;
+      state.savedFilename = sanitizeScreenshotFilename(
+        res.session.filename || 'Screenshot.png'
+      );
+      state.folderName = res.session.folderName || 'Chrome_SaveShot_ScreenShots';
+      state.webViewLink = res.session.webViewLink || '';
+      state.captureMode = res.session.captureMode || 'visible';
+      state.pageUrl = res.session.pageUrl || '';
+      state.pageTitle = res.session.pageTitle || '';
+      state.incognito = Boolean(res.session.incognito);
+      state.autoCopyMode =
+        res.session.autoCopyMode === 'link' ||
+        res.session.autoCopyMode === 'off' ||
+        res.session.autoCopyMode === 'image'
+          ? res.session.autoCopyMode
+          : res.session.autoCopyLink
+          ? 'link'
+          : 'image';
+      state.captureNotice = res.session.captureNotice || '';
+      state.uploadState = res.session.uploadState || 'idle';
+      state.uploadError = res.session.uploadError || '';
+      state.uploadErrorCode = res.session.uploadErrorCode || '';
+      state.uploadRequiresReauth = Boolean(res.session.uploadRequiresReauth);
 
-    state.initialBitmap = bitmap;
-    state.signedIn = Boolean(res.session.signedIn);
-    state.mode = res.session.mode === 'new' ? 'new' : 'existing';
-    state.driveMatchesInitial = state.signedIn && state.mode === 'existing';
-    state.fileId = res.session.fileId || null;
-    state.savedFilename = sanitizeScreenshotFilename(
-      res.session.filename || 'Screenshot.png'
-    );
-    state.folderName = res.session.folderName || 'Chrome_SaveShot_ScreenShots';
-    state.webViewLink = res.session.webViewLink || '';
-    state.captureMode = res.session.captureMode || 'visible';
-    state.pageUrl = res.session.pageUrl || '';
-    state.pageTitle = res.session.pageTitle || '';
-    state.incognito = Boolean(res.session.incognito);
-    state.autoCopyMode =
-      res.session.autoCopyMode === 'link' ||
-      res.session.autoCopyMode === 'off' ||
-      res.session.autoCopyMode === 'image'
-        ? res.session.autoCopyMode
-        : res.session.autoCopyLink
-        ? 'link'
-        : 'image';
-    state.captureNotice = res.session.captureNotice || '';
-    state.uploadState = res.session.uploadState || 'idle';
-    state.uploadError = res.session.uploadError || '';
-    state.uploadErrorCode = res.session.uploadErrorCode || '';
-    state.uploadRequiresReauth = Boolean(res.session.uploadRequiresReauth);
+      syncFilenameDisplay(state.savedFilename);
 
-    syncFilenameDisplay(state.savedFilename);
-
-    els.baseCanvas.width = bitmap.width;
-    els.baseCanvas.height = bitmap.height;
-    baseCtx.drawImage(bitmap, 0, 0);
-    syncPreviewCanvasSize();
+      els.baseCanvas.width = bitmap.width;
+      els.baseCanvas.height = bitmap.height;
+      baseCtx.drawImage(bitmap, 0, 0);
+      syncPreviewCanvasSize();
+    } finally {
+      bitmap.close();
+    }
 
     // Paint and activate the editor immediately so Chromium's clipboard PNG encoder
     // never blocks first paint, dimensions/zoom layout, or drawing controls

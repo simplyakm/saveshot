@@ -8,16 +8,21 @@ import {
 import {
   blobToDataUrl,
   buildScreenshotFilename,
+  clearBlobTransferCache,
   createThumbnailDataUrl,
   cropPngDataUrl,
   dataUrlToBlob,
+  deleteBlobFromTransferCache,
   FULLPAGE_LIMITS,
   isCapturableUrl,
   isSameDocumentCaptureUrl,
   planFullPageSlice,
+  putBlobInTransferCache,
   sanitizeScreenshotFilename,
+  takeBlobFromTransferCache,
 } from '../lib/capture.js';
 import {
+  clearDriveFolderVerifyCache,
   downloadScreenshotFromDrive,
   ensureDriveFolder,
   updateScreenshotInDrive,
@@ -650,6 +655,8 @@ export function resetInMemoryWorkerStateForTests() {
     fallbackExpiryTimer = null;
   }
   lastFailedCapture = null;
+  clearDriveFolderVerifyCache();
+  clearBlobTransferCache().catch(() => {});
 }
 
 export async function waitForInflightUploadForTests(sessionId) {
@@ -775,6 +782,26 @@ async function sendMessageToContentScript(tabId, message) {
   }
 }
 
+async function ensureFullPageScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/fullpage.js'],
+    });
+  } catch (err) {
+    throw classifyCaptureError(err);
+  }
+}
+
+async function sendMessageToFullPageScript(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    await ensureFullPageScript(tabId);
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
 async function hidePageUiBeforeCapture(tabId) {
   if (!tabId) return;
   try {
@@ -833,6 +860,7 @@ async function uploadCapturedBlob({
             folderName: settings.folderName,
             cachedFolderId: accountCache.folderId,
             accountKey: email,
+            verifyTtlMs: 60_000,
           });
 
           if (shouldAbort?.()) {
@@ -859,15 +887,52 @@ async function uploadCapturedBlob({
             return null;
           }
 
-          const file = await uploadScreenshotToDrive(token, {
-            filename,
-            pngBlob,
-            folderId: folder.id,
-            pageUrl: tab?.url || '',
-            incognito,
-          });
+          const runUploadForFolder = (targetFolder) =>
+            uploadScreenshotToDrive(token, {
+              filename,
+              pngBlob,
+              folderId: targetFolder.id,
+              pageUrl: tab?.url || '',
+              incognito,
+            });
 
-          return { file, folder };
+          try {
+            const file = await runUploadForFolder(folder);
+            return { file, folder };
+          } catch (uploadAttemptErr) {
+            const isStaleFolderErr =
+              uploadAttemptErr?.status === 404 ||
+              uploadAttemptErr?.code === 'DRIVE_FILE_FORBIDDEN';
+            if (isStaleFolderErr) {
+              clearDriveFolderVerifyCache();
+            }
+            if (accountCache.folderId && isStaleFolderErr) {
+              const healedFolder = await ensureDriveFolder(token, {
+                folderName: settings.folderName,
+                cachedFolderId: accountCache.folderId,
+                accountKey: email,
+                verifyTtlMs: 0,
+              });
+              if (shouldAbort?.()) {
+                return null;
+              }
+              if (
+                healedFolder.id !== folder.id ||
+                healedFolder.webViewLink !== folder.webViewLink
+              ) {
+                latestSettings = await saveAccountFolderCache(email, {
+                  folderName: settings.folderName,
+                  folderId: healedFolder.id,
+                  folderWebViewLink: healedFolder.webViewLink,
+                });
+              }
+              if (healedFolder.id !== folder.id) {
+                const retriedFile = await runUploadForFolder(healedFolder);
+                return { file: retriedFile, folder: healedFolder };
+              }
+            }
+            throw uploadAttemptErr;
+          }
         },
         { interactive: interactiveAuth }
       ),
@@ -1342,7 +1407,7 @@ async function captureFullPageFlow({
 
   let prep;
   try {
-    prep = await sendMessageToContentScript(targetTab.id, {
+    prep = await sendMessageToFullPageScript(targetTab.id, {
       type: 'FULLPAGE_PREPARE',
     });
     if (!prep || prep.ok === false) {
@@ -1454,7 +1519,8 @@ async function captureFullPageFlow({
           break;
         }
 
-        if (!(await isTabStillValid())) {
+        const waitedForSlot = Date.now() - lastCaptureTimestamp < 520;
+        if (waitedForSlot && !(await isTabStillValid())) {
           if (slices.length > 0) {
             stoppedEarly = true;
             break;
@@ -1473,7 +1539,6 @@ async function captureFullPageFlow({
         }
 
         // Wait for Chrome's captureVisibleTab rate-limit slot WHILE the static progress pill stays visible
-        const waitedForSlot = Date.now() - lastCaptureTimestamp < 520;
         await waitForCaptureVisibleTabSlot();
 
         if (isAbortedBySignOut()) {
@@ -1547,6 +1612,7 @@ async function captureFullPageFlow({
 
         // Immediately mount (after Slice 0) or update counter text (on Slice 1+) in parallel with bitmap decode
         let pillUpdatePromise = null;
+        let sentProgressText = '';
         if (
           (showProgressPill || estimatedTotal > 1) &&
           !isLikelyLast &&
@@ -1554,9 +1620,10 @@ async function captureFullPageFlow({
           !isAbortedBySignOut()
         ) {
           const nextNum = Math.min(estimatedTotal, sliceIndex + 2);
+          sentProgressText = `Capturing ${nextNum}/${estimatedTotal} .. Press ESC to stop`;
           pillUpdatePromise = sendFullPagePill({
             hidden: false,
-            progressText: `Capturing ${nextNum}/${estimatedTotal} .. Press ESC to stop`,
+            progressText: sentProgressText,
           });
         } else if (didHidePillForSlice && isLikelyLast) {
           pillUpdatePromise = null;
@@ -1616,26 +1683,36 @@ async function captureFullPageFlow({
           canvasWidth = canvasWidth || plan.canvasWidth;
           totalPhysicalHeight = plan.nextPhysicalHeight;
 
-          // Crop slice immediately and close full-viewport bitmap to minimize live GPU RAM
+          // Crop slice immediately and close full-viewport bitmap to minimize live GPU RAM;
+          // reuse fullBitmap directly when the slice uses the entire viewport frame (e.g. Slice 0)
           let croppedBitmap = null;
           let drawSx = plan.sx;
           let drawSy = plan.sy;
           if (fullBitmap) {
-            try {
-              croppedBitmap = await createImageBitmap(
-                fullBitmap,
-                plan.sx,
-                plan.sy,
-                plan.sw,
-                plan.sh
-              );
-              fullBitmap.close?.();
+            const isFullFrame =
+              plan.sx === 0 && plan.sy === 0 && plan.sw === bmpW && plan.sh === bmpH;
+            if (isFullFrame) {
+              croppedBitmap = fullBitmap;
               fullBitmap = null;
               drawSx = 0;
               drawSy = 0;
-            } catch {
-              croppedBitmap = fullBitmap;
-              fullBitmap = null;
+            } else {
+              try {
+                croppedBitmap = await createImageBitmap(
+                  fullBitmap,
+                  plan.sx,
+                  plan.sy,
+                  plan.sw,
+                  plan.sh
+                );
+                fullBitmap.close?.();
+                fullBitmap = null;
+                drawSx = 0;
+                drawSy = 0;
+              } catch {
+                croppedBitmap = fullBitmap;
+                fullBitmap = null;
+              }
             }
           }
 
@@ -1688,13 +1765,14 @@ async function captureFullPageFlow({
         const stepAdvance = Math.max(1, stepH - overlapCss);
         const nextEstimatedTotal = estimateTotalSlices(metrics, sliceIndex);
         const nextTargetY = currentY + stepAdvance;
+        const stepProgressText = `Capturing ${Math.min(nextEstimatedTotal, sliceIndex + 2)}/${nextEstimatedTotal} .. Press ESC to stop`;
         const stepRes = await chrome.tabs
           .sendMessage(targetTab.id, {
             type: 'FULLPAGE_STEP',
             targetY: nextTargetY,
             hideFixed: true,
             sessionToken: runSessionToken,
-            progressText: `Capturing ${Math.min(nextEstimatedTotal, sliceIndex + 2)}/${nextEstimatedTotal} .. Press ESC to stop`,
+            progressText: stepProgressText === sentProgressText ? '' : stepProgressText,
           })
           .catch(() => null);
 
@@ -1865,15 +1943,54 @@ async function parseEditedPngDataUrl(dataUrl) {
   return dataUrlToBlob(dataUrl);
 }
 
+const MAX_EDITED_PNG_BYTES = 36 * 1024 * 1024;
+
+async function resolveEditedPngBlob(message) {
+  if (typeof message?.blobCacheUrl === 'string' && message.blobCacheUrl.length > 0) {
+    const cachedBlob = await takeBlobFromTransferCache(message.blobCacheUrl);
+    if (!cachedBlob || cachedBlob.size <= 0 || cachedBlob.size > MAX_EDITED_PNG_BYTES) {
+      throw new SaveShotError({
+        code: 'INVALID_IMAGE_DATA',
+        userMessage: 'Edited image data is invalid or exceeds the maximum supported size.',
+      });
+    }
+    const sig = new Uint8Array(await cachedBlob.slice(0, 8).arrayBuffer());
+    const isPng =
+      sig.length === 8 &&
+      sig[0] === 0x89 &&
+      sig[1] === 0x50 &&
+      sig[2] === 0x4e &&
+      sig[3] === 0x47 &&
+      sig[4] === 0x0d &&
+      sig[5] === 0x0a &&
+      sig[6] === 0x1a &&
+      sig[7] === 0x0a;
+    if (!isPng) {
+      throw new SaveShotError({
+        code: 'INVALID_IMAGE_DATA',
+        userMessage: 'Edited image data is invalid or exceeds the maximum supported size.',
+      });
+    }
+    return cachedBlob;
+  }
+  return parseEditedPngDataUrl(message?.dataUrl);
+}
+
 async function handleSaveEditedScreenshot(message) {
   const sessionKey = typeof message.sessionId === 'string' ? message.sessionId : '';
   const prevSave = sessionKey ? inflightSavesBySessionId.get(sessionKey) : null;
 
   const currentSave = (async () => {
-    if (prevSave) {
-      await prevSave;
+    try {
+      if (prevSave) {
+        await prevSave;
+      }
+      return await executeSaveEditedScreenshot(message);
+    } finally {
+      if (typeof message?.blobCacheUrl === 'string' && message.blobCacheUrl) {
+        deleteBlobFromTransferCache(message.blobCacheUrl).catch(() => {});
+      }
     }
-    return executeSaveEditedScreenshot(message);
   })();
 
   const settledSave = currentSave.then(
@@ -1927,7 +2044,7 @@ async function executeSaveEditedScreenshot(message) {
   // Branch 1: Replace existing Google Drive file in-place (preserving share link)
   if (session.mode === 'existing' && saveMode === 'replace' && session.fileId) {
     const pngBlob = imageModified
-      ? await parseEditedPngDataUrl(message.dataUrl)
+      ? await resolveEditedPngBlob(message)
       : null;
 
     let updatedFile;
@@ -2011,7 +2128,7 @@ async function executeSaveEditedScreenshot(message) {
   // Branch 2: Upload as a brand-new screenshot file in Google Drive
   const uploadBlob =
     imageModified || !session.pngBlob
-      ? await parseEditedPngDataUrl(message.dataUrl)
+      ? await resolveEditedPngBlob(message)
       : session.pngBlob;
 
   const authSession = await getSilentAuthSession();
@@ -2120,7 +2237,11 @@ async function triggerBackgroundRegionCapture(targetTab) {
 export function registerServiceWorkerListeners() {
   if (chrome?.runtime?.onInstalled) {
     chrome.runtime.onInstalled.addListener(async (details) => {
-      await Promise.all([syncContextMenus(), pruneStorage().catch(() => {})]);
+      await Promise.all([
+        syncContextMenus(),
+        pruneStorage().catch(() => {}),
+        clearBlobTransferCache().catch(() => {}),
+      ]);
       if (details?.reason === 'install') {
         chrome.tabs.create({ url: chrome.runtime.getURL('pages/welcome.html') });
       }
@@ -2130,6 +2251,7 @@ export function registerServiceWorkerListeners() {
   if (chrome?.runtime?.onStartup) {
     chrome.runtime.onStartup.addListener(() => {
       syncContextMenus();
+      clearBlobTransferCache().catch(() => {});
     });
   }
 
@@ -2260,6 +2382,7 @@ export function registerServiceWorkerListeners() {
               clearFallbackCapture();
               clearRecentCaptureCache();
               clearAllEditorSessions();
+              clearDriveFolderVerifyCache();
               pendingRegionTabIds.clear();
               for (const run of activeFullPageTabs.values()) {
                 run.cancelled = true;
@@ -2270,12 +2393,19 @@ export function registerServiceWorkerListeners() {
               sessionMetaWriteChain = sessionMetaWriteChain
                 .catch(() => {})
                 .then(() => clearSessionStorageArea());
-              await Promise.all([sessionMetaWriteChain, signOut()]);
+              await Promise.all([
+                sessionMetaWriteChain,
+                clearBlobTransferCache(),
+                signOut(),
+              ]);
               sendResponse({ ok: true });
               return;
             }
 
             case 'UPDATE_SETTINGS': {
+              if (message.patch && message.patch.folderName !== undefined) {
+                clearDriveFolderVerifyCache();
+              }
               const settings = await updateSettings(message.patch || {});
               sendResponse({ ok: true, settings });
               return;
@@ -2509,16 +2639,31 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_EDITOR_SESSION': {
+              const startEpoch = workerSessionEpoch;
+              const assertEpochStillActive = async (writtenCacheUrl = '') => {
+                if (workerSessionEpoch !== startEpoch) {
+                  if (writtenCacheUrl) {
+                    await deleteBlobFromTransferCache(writtenCacheUrl).catch(() => {});
+                  }
+                  throw new SaveShotError({
+                    code: 'EDITOR_SESSION_EXPIRED',
+                    userMessage: 'This editor session is no longer available.',
+                  });
+                }
+              };
+
               const [session, settings, authSession] = await Promise.all([
                 resolveEditorSession(message.sessionId),
                 getSettings(),
                 getSilentAuthSession({ allowStaleWhileRevalidate: true }),
               ]);
+              await assertEpochStillActive();
 
               const wasLoaded = Boolean(session.editorLoaded);
               const stateBeforeLoad = normalizeUploadState(session.uploadState);
 
               await reconcileInterruptedUpload(session);
+              await assertEpochStillActive();
 
               if (!session.pngBlob) {
                 if (!session.fileId) {
@@ -2527,22 +2672,37 @@ export function registerServiceWorkerListeners() {
                     userMessage: 'Screenshot data is no longer available.',
                   });
                 }
-                session.pngBlob = await withAuthToken(
+                const downloadedBlob = await withAuthToken(
                   (token) => downloadScreenshotFromDrive(token, session.fileId),
                   { interactive: false }
                 );
+                await assertEpochStillActive();
+                session.pngBlob = downloadedBlob;
                 session.pngDataUrl = '';
               }
 
+              await assertEpochStillActive();
+
               let dataUrl = '';
-              if (
-                typeof session.pngDataUrl === 'string' &&
-                session.pngDataUrl.startsWith('data:image/')
-              ) {
-                dataUrl = session.pngDataUrl;
-                session.pngDataUrl = '';
-              } else {
-                dataUrl = await blobToDataUrl(session.pngBlob);
+              let blobCacheUrl = '';
+              if (message.acceptBlobCache && !session.incognito && session.pngBlob) {
+                blobCacheUrl = await putBlobInTransferCache(session.pngBlob);
+                await assertEpochStillActive(blobCacheUrl);
+                if (blobCacheUrl) {
+                  session.pngDataUrl = '';
+                }
+              }
+              if (!blobCacheUrl) {
+                if (
+                  typeof session.pngDataUrl === 'string' &&
+                  session.pngDataUrl.startsWith('data:image/')
+                ) {
+                  dataUrl = session.pngDataUrl;
+                  session.pngDataUrl = '';
+                } else {
+                  dataUrl = await blobToDataUrl(session.pngBlob);
+                }
+                await assertEpochStillActive();
               }
 
               const currentUploadState = normalizeUploadState(session.uploadState);
@@ -2588,13 +2748,15 @@ export function registerServiceWorkerListeners() {
               };
 
               if (justUploaded || isFreshCapture || Boolean(captureNotice) || !wasLoaded) {
-                await persistEditorSessionMeta(session);
+                await persistEditorSessionMeta(session, { expectedEpoch: startEpoch });
               }
+              await assertEpochStillActive(blobCacheUrl);
 
               sendResponse({
                 ok: true,
                 session: sessionSnapshot,
                 dataUrl,
+                blobCacheUrl,
               });
               return;
             }

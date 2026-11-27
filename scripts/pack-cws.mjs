@@ -12,6 +12,7 @@ const EXTENSION_FILES = [
   'NOTICE',
   'styles/tokens.css',
   'background/service-worker.js',
+  'content/fullpage.js',
   'content/selector.js',
   'lib/auth.js',
   'lib/capture.js',
