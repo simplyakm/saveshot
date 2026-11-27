@@ -216,7 +216,14 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         <html>
         <head>
           <style>
-            html, body { margin: 0; padding: 0; }
+            html, body { margin: 0; padding: 0; background: rgb(255, 255, 255); }
+            #bg-wallpaper {
+              position: fixed;
+              inset: 0;
+              pointer-events: none;
+              z-index: -1;
+              background: rgb(248, 250, 252);
+            }
             #fixed-hdr {
               position: fixed;
               top: 0;
@@ -233,11 +240,13 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               width: 120px;
               height: calc(100vh - 48px);
               background: rgb(234, 179, 8);
+              transition: opacity 400ms linear;
               z-index: 900;
             }
             .x-layout {
               display: flex;
               margin-left: 120px;
+              margin-right: 84px;
             }
             .x-feed {
               flex: 1;
@@ -247,11 +256,17 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               width: 140px;
               flex-shrink: 0;
               position: sticky;
-              top: 48px;
+              top: -300px;
               align-self: flex-start;
-              height: calc(100vh - 48px);
-              background: rgb(236, 72, 153);
               z-index: 100;
+            }
+            .right-rail-top {
+              height: 920px;
+              background: rgb(236, 72, 153);
+            }
+            #right-rail-footer {
+              height: 460px;
+              background: rgb(20, 184, 166);
             }
             .band-top { height: 1100px; background: rgb(14, 165, 233); }
             #sticky-hdr {
@@ -263,9 +278,56 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
             }
             .band-mid { height: 1100px; background: rgb(34, 197, 94); }
             .band-bot { height: 1000px; background: rgb(249, 115, 22); }
+            #layers {
+              position: fixed;
+              bottom: 0;
+              right: 0;
+              width: 0;
+              height: 0;
+              pointer-events: none;
+              z-index: 9500;
+            }
+            #x-grok-chat-fab {
+              position: absolute;
+              bottom: 16px;
+              right: 16px;
+              width: 48px;
+              height: 112px;
+              background: rgb(15, 23, 42);
+              pointer-events: auto;
+            }
+            #portal-overlay {
+              position: fixed;
+              inset: 0;
+              pointer-events: none;
+              z-index: 9400;
+            }
+            #portal-bl-fab {
+              position: absolute;
+              bottom: 16px;
+              left: 140px;
+              width: 52px;
+              height: 52px;
+              background: rgb(139, 92, 246);
+              pointer-events: auto;
+            }
+            #back-to-top {
+              display: none;
+              position: fixed;
+              bottom: 16px;
+              left: 50%;
+              transform: translateX(-50%);
+              width: 88px;
+              height: 36px;
+              border: 0;
+              background: rgb(185, 28, 28);
+              color: #fff;
+              z-index: 9600;
+            }
           </style>
         </head>
         <body>
+          <div id="bg-wallpaper"></div>
           <header id="fixed-hdr">Fixed Top Nav</header>
           <aside id="fixed-left-rail">Fixed Left Rail</aside>
           <div class="x-layout">
@@ -275,8 +337,42 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               <div class="band-mid"></div>
               <div class="band-bot"></div>
             </main>
-            <aside id="sticky-right-rail">Sticky Right Rail</aside>
+            <aside id="sticky-right-rail">
+              <div class="right-rail-top">Top Sidebar Cards</div>
+              <div id="right-rail-footer">Who to follow + X Footer</div>
+            </aside>
           </div>
+          <div id="layers">
+            <div id="x-grok-chat-fab">Grok + Chat</div>
+          </div>
+          <div id="portal-overlay">
+            <div id="portal-bl-fab">Portal FAB</div>
+          </div>
+          <button id="back-to-top" type="button">Back to top</button>
+          <script>
+            // Closed Shadow DOM extension-style floating dock mounted as a sibling of <body> on <html>
+            const extHost = document.createElement('div');
+            extHost.id = 'ext-closed-shadow';
+            const closedRoot = extHost.attachShadow({ mode: 'closed' });
+            const dock = document.createElement('div');
+            dock.style.cssText = 'position:fixed;right:10px;top:50%;transform:translateY(-50%);width:36px;height:76px;background:rgb(190,24,93);z-index:9700;';
+            closedRoot.appendChild(dock);
+            document.documentElement.appendChild(extHost);
+
+            // Simulate hostile JS scroll listeners: Back-to-top appearing + clobbering inline opacity,
+            // plus X.com-like sidebar JS attempting to reset position on scroll.
+            window.addEventListener('scroll', () => {
+              const btn = document.getElementById('back-to-top');
+              if (window.scrollY > 300) {
+                btn.style.display = 'block';
+                btn.style.opacity = '1';
+                document.getElementById('sticky-right-rail').style.position = 'fixed';
+              } else {
+                btn.style.display = 'none';
+                document.getElementById('sticky-right-rail').style.position = '';
+              }
+            });
+          </script>
         </body>
         </html>`);
       return;
@@ -3097,15 +3193,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       swSession,
       `(async () => {
         const tab = await chrome.tabs.create({ url: '${baseUrl}/fullpage', active: true });
-        await new Promise((resolve) => {
-          const onUpdated = (id, info) => {
-            if (id === tab.id && info.status === 'complete') {
-              chrome.tabs.onUpdated.removeListener(onUpdated);
-              resolve();
-            }
-          };
-          chrome.tabs.onUpdated.addListener(onUpdated);
-        });
+        if (tab.status !== 'complete') {
+          await new Promise((resolve) => {
+            const onUpdated = (id, info) => {
+              if (id === tab.id && info.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(onUpdated);
+                resolve();
+              }
+            };
+            chrome.tabs.onUpdated.addListener(onUpdated);
+            chrome.tabs.get(tab.id, (cur) => {
+              if (cur && cur.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(onUpdated);
+                resolve();
+              }
+            });
+          });
+        }
         return { tabId: tab.id, windowId: tab.windowId };
       })()`
     );
@@ -3153,6 +3257,19 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     const fullPageCase = await openEditorForTab(fpTabInfo.tabId, { type: 'CAPTURE_FULLPAGE' });
     assert.equal(fullPageCase.res.ok, true, `Full-page capture failed: ${JSON.stringify(fullPageCase.res)}`);
 
+    // Attach to /fullpage tab so we know exact viewport CSS dimensions & can verify full DOM restoration
+    const fpTargets = (await cdp.send('Target.getTargets')).targetInfos;
+    const fpPageTarget = fpTargets.find((t) => t.type === 'page' && t.url.endsWith('/fullpage'));
+    assert.ok(fpPageTarget);
+    const { sessionId: fpPageSess } = await cdp.send('Target.attachToTarget', {
+      targetId: fpPageTarget.targetId,
+      flatten: true,
+    });
+    const fpMetrics = await evalIn(
+      fpPageSess,
+      `(() => ({ vpW: window.innerWidth, vpH: window.innerHeight }))()`
+    );
+
     const fpAudit = await evalIn(
       fullPageCase.edSess,
       `(() => {
@@ -3160,40 +3277,74 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const ctx = canvas.getContext('2d');
         const wrap = document.getElementById('canvas-wrap');
         const rect = canvas.getBoundingClientRect();
-        const midX = Math.floor(canvas.width / 2);
-        const leftRailX = Math.min(canvas.width - 1, Math.max(10, Math.floor(canvas.width * 0.04)));
-        const rightRailX = Math.max(0, Math.floor(canvas.width * 0.96));
+        const scale = canvas.width / Math.max(1, ${fpMetrics.vpW});
+        const vpHPx = Math.round(${fpMetrics.vpH} * scale);
+        const clampX = (cssX) => Math.max(0, Math.min(canvas.width - 1, Math.round(cssX * scale)));
+        const midX = clampX(Math.round(${fpMetrics.vpW} * 0.45));
+        const centerBtnX = clampX(Math.round(${fpMetrics.vpW} * 0.5));
+        const leftRailX = clampX(50);
+        const rightRailX = clampX(${fpMetrics.vpW} - 150);
+        const grokFabX = clampX(${fpMetrics.vpW} - 36);
+        const closedDockX = clampX(${fpMetrics.vpW} - 24);
+        const portalFabX = clampX(166);
+
         const sampleAt = (x, fracY) => {
           const y = Math.min(canvas.height - 1, Math.max(0, Math.floor(canvas.height * fracY)));
           const d = ctx.getImageData(x, y, 1, 1).data;
           return [d[0], d[1], d[2]];
         };
         const sample = (fracY) => sampleAt(midX, fracY);
-        // Find purple sticky band (r>110, g<90, b>180) and verify red fixed header is NOT repeated below y=200
-        let foundStickyPurple = false;
-        let repeatedFixedRedBelowFold = false;
-        for (let y = 0; y < canvas.height; y += 8) {
-          const d = ctx.getImageData(midX, y, 1, 1).data;
-          if (d[0] > 110 && d[1] < 90 && d[2] > 180) foundStickyPurple = true;
-          if (y > 200 && d[0] > 190 && d[1] < 65 && d[2] < 65) repeatedFixedRedBelowFold = true;
-        }
+
+        const scanColumn = (x, predicate, minY = 0, maxY = canvas.height) => {
+          let hits = 0;
+          for (let y = Math.max(0, minY); y < Math.min(canvas.height, maxY); y += 6) {
+            const d = ctx.getImageData(x, y, 1, 1).data;
+            if (predicate(d[0], d[1], d[2])) hits += 1;
+          }
+          return hits;
+        };
+
+        const isRedHdr = (r, g, b) => r > 190 && g < 65 && b < 65;
+        const isStickyPurple = (r, g, b) => r > 110 && g < 90 && b > 180;
+        const isYellowLeft = (r, g, b) => r > 200 && g > 150 && b < 50;
+        const isPinkRightTop = (r, g, b) => r > 200 && g < 110 && b > 120;
+        const isTealRightFooter = (r, g, b) => r < 60 && g > 150 && b > 140;
+        const isGrokDarkFab = (r, g, b) => r < 40 && g < 45 && b < 70;
+        const isPortalVioletFab = (r, g, b) => r > 110 && r < 170 && g > 60 && g < 125 && b > 215;
+        const isClosedShadowRose = (r, g, b) => r > 160 && g < 55 && b > 65 && b < 130;
+        const isBackToTopRed = (r, g, b) => r > 155 && r < 215 && g < 55 && b < 55;
+
         return {
           width: canvas.width,
           height: canvas.height,
+          vpHPx,
           hasTallClass: wrap.classList.contains('tall-canvas'),
           renderedWidth: Math.round(rect.width),
           topHeaderRgb: sample(0.005),
           bandTopRgb: sample(0.18),
           bandMidRgb: sample(0.55),
           bandBotRgb: sample(0.92),
-          leftRailTopRgb: sampleAt(leftRailX, 0.05),
-          leftRailMidRgb: sampleAt(leftRailX, 0.55),
-          leftRailBotRgb: sampleAt(leftRailX, 0.92),
-          rightRailTopRgb: sampleAt(rightRailX, 0.05),
-          rightRailMidRgb: sampleAt(rightRailX, 0.55),
-          rightRailBotRgb: sampleAt(rightRailX, 0.92),
-          foundStickyPurple,
-          repeatedFixedRedBelowFold,
+          foundStickyPurple: scanColumn(midX, isStickyPurple) > 0,
+          repeatedFixedRedBelowFold: scanColumn(midX, isRedHdr, Math.round(200 * scale)) > 0,
+          leftRailSlice0Hits: scanColumn(leftRailX, isYellowLeft, Math.round(60 * scale), vpHPx),
+          leftRailBelowFoldHits: scanColumn(leftRailX, isYellowLeft, vpHPx + Math.round(20 * scale)),
+          rightRailTopSlice0Hits: scanColumn(rightRailX, isPinkRightTop, Math.round(60 * scale), vpHPx),
+          rightRailFooterUnclippedHits: scanColumn(
+            rightRailX,
+            isTealRightFooter,
+            Math.round(920 * scale),
+            Math.round(1400 * scale)
+          ),
+          rightRailRepeatFarDownHits:
+            scanColumn(rightRailX, isPinkRightTop, Math.round(1600 * scale)) +
+            scanColumn(rightRailX, isTealRightFooter, Math.round(1600 * scale)),
+          grokFabSlice0Hits: scanColumn(grokFabX, isGrokDarkFab, 0, vpHPx),
+          grokFabBelowFoldHits: scanColumn(grokFabX, isGrokDarkFab, vpHPx + Math.round(20 * scale)),
+          portalFabSlice0Hits: scanColumn(portalFabX, isPortalVioletFab, 0, vpHPx),
+          portalFabBelowFoldHits: scanColumn(portalFabX, isPortalVioletFab, vpHPx + Math.round(20 * scale)),
+          closedDockSlice0Hits: scanColumn(closedDockX, isClosedShadowRose, 0, vpHPx),
+          closedDockBelowFoldHits: scanColumn(closedDockX, isClosedShadowRose, vpHPx + Math.round(20 * scale)),
+          backToTopBelowFoldHits: scanColumn(centerBtnX, isBackToTopRed, Math.round(200 * scale)),
         };
       })()`
     );
@@ -3204,71 +3355,83 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       fpAudit.topHeaderRgb[0] > 180 && fpAudit.topHeaderRgb[1] < 80,
       `Top fixed header should appear once at top (got rgb=${fpAudit.topHeaderRgb})`
     );
+    assert.equal(fpAudit.repeatedFixedRedBelowFold, false, 'Fixed header must NOT repeat on scrolled slices');
+    assert.equal(fpAudit.foundStickyPurple, true, 'Below-the-fold position: sticky header must stay visible in-flow');
+    assert.ok(fpAudit.leftRailSlice0Hits > 0, 'Left fixed sidebar must appear in slice 0');
     assert.equal(
-      fpAudit.repeatedFixedRedBelowFold,
-      false,
-      'Fixed header must NOT repeat on scrolled slices'
+      fpAudit.leftRailBelowFoldHits,
+      0,
+      `Left fixed sidebar (even with 400ms opacity transition) must NOT ghost or repeat below fold (hits=${fpAudit.leftRailBelowFoldHits})`
+    );
+    assert.ok(fpAudit.rightRailTopSlice0Hits > 0, 'Tall sticky right sidebar top must appear in slice 0');
+    assert.ok(
+      fpAudit.rightRailFooterUnclippedHits > 10,
+      `Tall sticky right sidebar footer (Who to follow + X footer below fold) must continue unclipped into slice 1 (hits=${fpAudit.rightRailFooterUnclippedHits})`
     );
     assert.equal(
-      fpAudit.foundStickyPurple,
-      true,
-      'Below-the-fold position: sticky header must stay visible in-flow'
+      fpAudit.rightRailRepeatFarDownHits,
+      0,
+      `Tall sticky right sidebar must NOT repeat on lower slices even when scroll JS tries to set position:fixed (hits=${fpAudit.rightRailRepeatFarDownHits})`
     );
-    assert.ok(
-      fpAudit.leftRailTopRgb[0] > 200 && fpAudit.leftRailTopRgb[1] > 150 && fpAudit.leftRailTopRgb[2] < 50,
-      `Left fixed sidebar should appear once in slice 0 (got rgb=${fpAudit.leftRailTopRgb})`
+    assert.ok(fpAudit.grokFabSlice0Hits > 0, 'X.com #layers bottom-right FAB should appear once in slice 0');
+    assert.equal(
+      fpAudit.grokFabBelowFoldHits,
+      0,
+      `Zero-box #layers bottom-right FAB must NOT repeat on lower slices (hits=${fpAudit.grokFabBelowFoldHits})`
     );
-    assert.ok(
-      !(fpAudit.leftRailMidRgb[0] > 200 && fpAudit.leftRailMidRgb[1] > 150 && fpAudit.leftRailMidRgb[2] < 50),
-      `Left fixed sidebar must NOT repeat on mid slice (got rgb=${fpAudit.leftRailMidRgb})`
+    assert.ok(fpAudit.portalFabSlice0Hits > 0, 'Full-viewport transparent portal FAB should appear once in slice 0');
+    assert.equal(
+      fpAudit.portalFabBelowFoldHits,
+      0,
+      `Full-viewport transparent portal FAB must NOT repeat on lower slices (hits=${fpAudit.portalFabBelowFoldHits})`
     );
-    assert.ok(
-      !(fpAudit.leftRailBotRgb[0] > 200 && fpAudit.leftRailBotRgb[1] > 150 && fpAudit.leftRailBotRgb[2] < 50),
-      `Left fixed sidebar must NOT repeat on bottom slice (got rgb=${fpAudit.leftRailBotRgb})`
+    assert.ok(fpAudit.closedDockSlice0Hits > 0, 'Closed Shadow DOM html-sibling dock should appear once in slice 0');
+    assert.equal(
+      fpAudit.closedDockBelowFoldHits,
+      0,
+      `Closed Shadow DOM html-sibling dock must NOT repeat on lower slices (hits=${fpAudit.closedDockBelowFoldHits})`
     );
-    assert.ok(
-      fpAudit.rightRailTopRgb[0] > 200 && fpAudit.rightRailTopRgb[1] < 110 && fpAudit.rightRailTopRgb[2] > 120,
-      `Right tall sticky sidebar should appear once in slice 0 (got rgb=${fpAudit.rightRailTopRgb})`
-    );
-    assert.ok(
-      !(fpAudit.rightRailMidRgb[0] > 200 && fpAudit.rightRailMidRgb[1] < 110 && fpAudit.rightRailMidRgb[2] > 120),
-      `Right tall sticky sidebar must NOT repeat on mid slice (got rgb=${fpAudit.rightRailMidRgb})`
-    );
-    assert.ok(
-      !(fpAudit.rightRailBotRgb[0] > 200 && fpAudit.rightRailBotRgb[1] < 110 && fpAudit.rightRailBotRgb[2] > 120),
-      `Right tall sticky sidebar must NOT repeat on bottom slice (got rgb=${fpAudit.rightRailBotRgb})`
+    assert.equal(
+      fpAudit.backToTopBelowFoldHits,
+      0,
+      `Scroll-triggered Back-to-top button (even clobbering inline opacity) must NOT appear on lower slices (hits=${fpAudit.backToTopBelowFoldHits})`
     );
     assert.ok(fpAudit.bandTopRgb[2] > 180, `Top cyan band expected (got ${fpAudit.bandTopRgb})`);
     assert.ok(fpAudit.bandMidRgb[1] > 150, `Mid green band expected (got ${fpAudit.bandMidRgb})`);
     assert.ok(fpAudit.bandBotRgb[0] > 200 && fpAudit.bandBotRgb[1] > 80, `Bottom orange band expected (got ${fpAudit.bandBotRgb})`);
 
-    // Verify original /fullpage tab scroll & DOM styles were cleanly restored
-    const fpTargets = (await cdp.send('Target.getTargets')).targetInfos;
-    const fpPageTarget = fpTargets.find((t) => t.type === 'page' && t.url.endsWith('/fullpage'));
-    assert.ok(fpPageTarget);
-    const { sessionId: fpPageSess } = await cdp.send('Target.attachToTarget', {
-      targetId: fpPageTarget.targetId,
-      flatten: true,
-    });
+    // Verify original /fullpage tab scroll, styles, transition-duration, and attributes were cleanly restored
     const fpRestored = await evalIn(
       fpPageSess,
       `(() => ({
         scrollY: window.scrollY,
+        bgOpacity: getComputedStyle(document.getElementById('bg-wallpaper')).opacity,
         fixedOpacity: getComputedStyle(document.getElementById('fixed-hdr')).opacity,
         leftRailOpacity: getComputedStyle(document.getElementById('fixed-left-rail')).opacity,
+        leftRailTransitionDuration: getComputedStyle(document.getElementById('fixed-left-rail')).transitionDuration,
         rightRailOpacity: getComputedStyle(document.getElementById('sticky-right-rail')).opacity,
         rightRailPosition: getComputedStyle(document.getElementById('sticky-right-rail')).position,
         stickyPosition: getComputedStyle(document.getElementById('sticky-hdr')).position,
+        layersOpacity: getComputedStyle(document.getElementById('layers')).opacity,
+        portalOpacity: getComputedStyle(document.getElementById('portal-overlay')).opacity,
+        extClosedOpacity: getComputedStyle(document.getElementById('ext-closed-shadow')).opacity,
+        leftoverDataAttrs: document.querySelectorAll('[data-saveshot-unstick], [data-saveshot-hide]').length,
         pillRemoved: !document.getElementById('__saveshot-fullpage-pill-host'),
         styleRemoved: !document.getElementById('__saveshot-fullpage-style'),
       }))()`
     );
     assert.equal(fpRestored.scrollY, 0, 'Original window scrollY must be restored');
+    assert.equal(fpRestored.bgOpacity, '1', 'Fixed negative-z background wallpaper must remain intact');
     assert.equal(fpRestored.fixedOpacity, '1', 'Fixed header opacity must be restored');
     assert.equal(fpRestored.leftRailOpacity, '1', 'Fixed left rail opacity must be restored');
+    assert.equal(fpRestored.leftRailTransitionDuration, '0.4s', 'Original transition-duration must be preserved after restore');
     assert.equal(fpRestored.rightRailOpacity, '1', 'Sticky right rail opacity must be restored');
     assert.equal(fpRestored.rightRailPosition, 'sticky', 'Sticky right rail position must be restored');
     assert.equal(fpRestored.stickyPosition, 'sticky', 'Sticky header position must be restored');
+    assert.equal(fpRestored.layersOpacity, '1', '#layers opacity must be restored');
+    assert.equal(fpRestored.portalOpacity, '1', '#portal-overlay opacity must be restored');
+    assert.equal(fpRestored.extClosedOpacity, '1', 'Closed Shadow DOM host opacity must be restored');
+    assert.equal(fpRestored.leftoverDataAttrs, 0, 'Zero temporary data-saveshot-* attributes may remain after restore');
     assert.equal(fpRestored.pillRemoved, true, 'Progress pill shadow host must be removed after restore');
     assert.equal(fpRestored.styleRemoved, true, 'Full-page helper style must be removed after restore');
     await cdp.send('Target.closeTarget', { targetId: fullPageCase.targetId });

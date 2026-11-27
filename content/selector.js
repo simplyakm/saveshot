@@ -1119,107 +1119,595 @@
     };
   }
 
-  function walkDomElements(root, visit, { maxNodes = 20000, skipSubtreeSet = null } = {}) {
+  const FULLPAGE_SKIP_TAGS = new Set([
+    'HEAD',
+    'SCRIPT',
+    'STYLE',
+    'NOSCRIPT',
+    'TEMPLATE',
+    'LINK',
+    'META',
+    'TITLE',
+    'BASE',
+  ]);
+  const FULLPAGE_MAX_TRACKED = 2000;
+
+  function isSaveShotHost(node) {
+    return Boolean(
+      node &&
+        (node.id === OVERLAY_HOST_ID ||
+          node.id === TOAST_HOST_ID ||
+          node.id === FULLPAGE_PILL_HOST_ID)
+    );
+  }
+
+  function isScrollContainerOrAncestor(session, el) {
+    if (!el) return true;
+    if (el === document.documentElement || el === document.body) return true;
+    return el === session.element || Boolean(session.element && el.contains(session.element));
+  }
+
+  function isTransparentBackground(cs) {
+    if (!cs) return false;
+    if (cs.backgroundImage && cs.backgroundImage !== 'none') return false;
+    const bg = String(cs.backgroundColor || '').trim().toLowerCase();
+    if (!bg || bg === 'transparent') return true;
+    return /(?:,\s*0(?:\.0+)?\s*\)|\/\s*0(?:\.0+)?%?\s*\))$/.test(bg);
+  }
+
+  function walkDomElementsBfs(root, visit, { maxNodes = 20000, skipSubtreeSet = null } = {}) {
     if (!root) return;
-    const stack = [root];
+    const queue = [root];
+    let head = 0;
     let visited = 0;
 
-    while (stack.length > 0 && visited < maxNodes) {
-      const currentRoot = stack.pop();
-      if (!currentRoot) continue;
-      let walker;
-      try {
-        walker = document.createTreeWalker(currentRoot, NodeFilter.SHOW_ELEMENT, {
-          acceptNode(node) {
-            if (
-              node.namespaceURI === 'http://www.w3.org/2000/svg' ||
-              node.tagName === 'SVG' ||
-              node.tagName === 'svg'
-            ) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            if (
-              node.id === OVERLAY_HOST_ID ||
-              node.id === TOAST_HOST_ID ||
-              node.id === FULLPAGE_PILL_HOST_ID
-            ) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            if (skipSubtreeSet && skipSubtreeSet.has(node)) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            if (!(node instanceof HTMLElement)) {
-              return NodeFilter.FILTER_SKIP;
-            }
-            return NodeFilter.FILTER_ACCEPT;
-          },
-        });
-      } catch {
-        continue;
+    while (head < queue.length && visited < maxNodes) {
+      const node = queue[head++];
+      if (!node) continue;
+
+      if (node instanceof Element) {
+        if (
+          node.namespaceURI === 'http://www.w3.org/2000/svg' ||
+          node.tagName === 'SVG' ||
+          node.tagName === 'svg' ||
+          FULLPAGE_SKIP_TAGS.has(node.tagName) ||
+          isSaveShotHost(node) ||
+          (skipSubtreeSet && skipSubtreeSet.has(node))
+        ) {
+          continue;
+        }
+        if (node instanceof HTMLElement) {
+          visited += 1;
+          visit(node);
+          if (skipSubtreeSet && skipSubtreeSet.has(node)) {
+            continue;
+          }
+        }
+        if (node.shadowRoot) {
+          queue.push(node.shadowRoot);
+        }
       }
 
-      let el = walker.nextNode();
-      while (el && visited < maxNodes) {
-        visited += 1;
-        visit(el);
-        if (el.shadowRoot) {
-          stack.push(el.shadowRoot);
-        }
-        el = walker.nextNode();
+      let child = node.firstElementChild;
+      while (child) {
+        queue.push(child);
+        child = child.nextElementSibling;
       }
     }
   }
 
-  function snapshotSlice0StickyElements(session) {
-    if (!session) return;
-    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
-    const root = document.body || document.documentElement;
-    if (!root) return;
-    try {
-      walkDomElements(root, (el) => {
-        const pos = getComputedStyle(el).position;
-        if (pos === 'sticky' || pos === '-webkit-sticky') {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < vpH) {
-            session.slice0VisibleSet.add(el);
-          }
-        }
+  function saveAndSetInlineImportant(session, el, prop, val) {
+    if (!el || !el.style) return;
+    let propMap = session.inlineRestoreMap.get(el);
+    if (!propMap) {
+      if (session.inlineRestoreMap.size >= FULLPAGE_MAX_TRACKED) return;
+      propMap = new Map();
+      session.inlineRestoreMap.set(el, propMap);
+    }
+    if (!propMap.has(prop)) {
+      propMap.set(prop, {
+        value: el.style.getPropertyValue(prop),
+        priority: el.style.getPropertyPriority(prop),
       });
+    }
+    el.style.setProperty(prop, val, 'important');
+  }
+
+  function applyUnstickBatch(session, items) {
+    if (!items.length) return false;
+    let changed = false;
+    const applied = [];
+
+    // Pass 1: apply stylesheet attribute tags cleanly in batch
+    for (const item of items) {
+      const el = item.el;
+      if (!el || !el.isConnected) continue;
+      if (session.attrTrackedSet.size >= FULLPAGE_MAX_TRACKED && !session.attrTrackedSet.has(el)) {
+        continue;
+      }
+      const mode = item.preserveTopPx !== null ? 'preserve-top' : '1';
+      try {
+        if (el.getAttribute('data-saveshot-unstick') !== mode) {
+          el.setAttribute('data-saveshot-unstick', mode);
+          changed = true;
+        }
+        if (item.preserveTopPx !== null) {
+          saveAndSetInlineImportant(session, el, 'top', `${item.preserveTopPx}px`);
+          changed = true;
+        }
+        session.attrTrackedSet.add(el);
+        session.unstuckSet.add(el);
+        applied.push(item);
+      } catch {
+        // Ignore read-only/detached targets
+      }
+    }
+
+    // Pass 2: verify and apply inline !important fallback only for Shadow DOM or page inline !important
+    const needFallback = [];
+    for (const item of applied) {
+      try {
+        const inShadow = item.el.getRootNode() instanceof ShadowRoot;
+        if (inShadow || getComputedStyle(item.el).position !== 'relative') {
+          needFallback.push(item);
+        }
+      } catch {
+        // Ignore hostile getters
+      }
+    }
+    for (const item of needFallback) {
+      try {
+        saveAndSetInlineImportant(session, item.el, 'position', 'relative');
+        if (item.preserveTopPx === null) {
+          saveAndSetInlineImportant(session, item.el, 'top', 'auto');
+        }
+        saveAndSetInlineImportant(session, item.el, 'bottom', 'auto');
+        saveAndSetInlineImportant(session, item.el, 'left', 'auto');
+        saveAndSetInlineImportant(session, item.el, 'right', 'auto');
+        saveAndSetInlineImportant(session, item.el, 'isolation', 'isolate');
+        session.inlineEnforcedUnstick.add(item.el);
+        changed = true;
+      } catch {
+        // Ignore style errors
+      }
+    }
+
+    return changed;
+  }
+
+  function applyHideBatch(session, elements) {
+    if (!elements.length) return false;
+    let changed = false;
+    const applied = [];
+
+    // Pass 1: apply stylesheet attribute tags cleanly in batch
+    for (const el of elements) {
+      if (!el || !el.isConnected) continue;
+      // Never hide an un-stuck in-flow sticky element (e.g. X.com right sidebar)
+      if (session.unstuckSet.has(el)) continue;
+      if (session.attrTrackedSet.size >= FULLPAGE_MAX_TRACKED && !session.attrTrackedSet.has(el)) {
+        continue;
+      }
+      try {
+        if (el.getAttribute('data-saveshot-hide') !== '1') {
+          el.setAttribute('data-saveshot-hide', '1');
+          changed = true;
+        }
+        session.attrTrackedSet.add(el);
+        session.opacityHiddenSet.add(el);
+        applied.push(el);
+      } catch {
+        // Ignore read-only/detached targets
+      }
+    }
+
+    // Pass 2: verify and apply inline !important fallback only for Shadow DOM or page inline !important
+    const needFallback = [];
+    for (const el of applied) {
+      try {
+        const inShadow = el.getRootNode() instanceof ShadowRoot;
+        if (inShadow || getComputedStyle(el).opacity !== '0') {
+          needFallback.push(el);
+        }
+      } catch {
+        // Ignore hostile getters
+      }
+    }
+    for (const el of needFallback) {
+      try {
+        saveAndSetInlineImportant(session, el, 'opacity', '0');
+        saveAndSetInlineImportant(session, el, 'transition-property', 'none');
+        session.inlineEnforcedHide.add(el);
+        changed = true;
+      } catch {
+        // Ignore style errors
+      }
+    }
+
+    return changed;
+  }
+
+  function shouldSkipUnstickSticky(session, el, cs) {
+    if (isScrollContainerOrAncestor(session, el)) return true;
+    if (cs.display === 'none' || cs.display === 'contents') return true;
+    // Skip horizontal-only sticky (e.g. frozen table columns) during vertical capture
+    if (cs.top === 'auto' && cs.bottom === 'auto') return true;
+
+    // Walk ancestors up to scroll container to skip sticky inside fixed rails or inner scrollers
+    let anc = getComposedParent(el);
+    let hops = 0;
+    while (anc && anc !== document.documentElement && anc !== session.element && hops < 24) {
+      hops += 1;
+      const acs = getComputedStyle(anc);
+      if (acs.position === 'fixed') {
+        return true;
+      }
+      if (
+        (acs.overflowY === 'auto' || acs.overflowY === 'scroll' || acs.overflowY === 'overlay') &&
+        anc.scrollHeight > anc.clientHeight + 2
+      ) {
+        return true;
+      }
+      anc = getComposedParent(anc);
+    }
+    return false;
+  }
+
+  function unstickStickyElementsBeforeSlice0(session) {
+    if (!session) return false;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
+    const root = document.documentElement;
+    if (!root) return false;
+
+    const candidates = [];
+    const candidateSet = new Set();
+
+    try {
+      walkDomElementsBfs(
+        root,
+        (el) => {
+          const cs = getComputedStyle(el);
+          if (cs.position !== 'sticky' && cs.position !== '-webkit-sticky') return;
+          if (shouldSkipUnstickSticky(session, el, cs)) return;
+
+          let hasStickyAncestor = false;
+          let p = getComposedParent(el);
+          while (p && p !== document.documentElement) {
+            if (candidateSet.has(p)) {
+              hasStickyAncestor = true;
+              break;
+            }
+            p = getComposedParent(p);
+          }
+
+          let rectBeforeTop = null;
+          if (!hasStickyAncestor && cs.top !== 'auto') {
+            const rect = el.getBoundingClientRect();
+            if (rect.height > 0 && rect.bottom > 0 && rect.top < vpH) {
+              rectBeforeTop = rect.top;
+            }
+          }
+
+          candidateSet.add(el);
+          candidates.push({ el, preserveTopPx: null, rectBeforeTop });
+        },
+        { maxNodes: 20000 }
+      );
     } catch {
       // Never abort capture on hostile DOM getters
+    }
+
+    if (!candidates.length) return false;
+    applyUnstickBatch(session, candidates);
+
+    // Check top-level top-sticky elements that were actively pushed down by a fixed header at y=0
+    const preserveItems = [];
+    const maxClearance = Math.round(vpH * 0.35);
+    for (const item of candidates) {
+      if (item.rectBeforeTop === null) continue;
+      try {
+        const afterTop = item.el.getBoundingClientRect().top;
+        const delta = Math.round(item.rectBeforeTop - afterTop);
+        if (delta >= 2 && delta <= maxClearance) {
+          preserveItems.push({ el: item.el, preserveTopPx: delta });
+        }
+      } catch {
+        // Ignore layout read errors
+      }
+    }
+    if (preserveItems.length) {
+      applyUnstickBatch(session, preserveItems);
+    }
+    return true;
+  }
+
+  function classifyFullViewportFixed(session, el, cs, vpW, vpH) {
+    // Protect interactive full-viewport iframes (e.g. Figma/Storybook/enterprise embeds)
+    if (el.tagName === 'IFRAME' && cs.pointerEvents !== 'none') {
+      return { action: 'skip', floatingChildren: [] };
+    }
+    // Protect misdetected full-viewport scrollable app shells
+    if (
+      (cs.overflowY === 'auto' || cs.overflowY === 'scroll' || cs.overflowY === 'overlay') &&
+      el.scrollHeight > el.clientHeight + 20
+    ) {
+      return { action: 'skip', floatingChildren: [] };
+    }
+    // Protect negative-z fixed background wallpapers and direct media backdrops
+    const zNum = cs.zIndex !== 'auto' ? Number(cs.zIndex) : 0;
+    if (Number.isFinite(zNum) && zNum < 0) {
+      return { action: 'skip', floatingChildren: [] };
+    }
+    if (el.tagName === 'CANVAS' || el.tagName === 'IMG' || el.tagName === 'VIDEO') {
+      return { action: 'skip', floatingChildren: [] };
+    }
+
+    const transparent = isTransparentBackground(cs);
+    if (!transparent && cs.pointerEvents !== 'none') {
+      return { action: 'skip', floatingChildren: [] };
+    }
+
+    // Inspect shallow children to distinguish Tailwind/Framer/Vercel fixed background wrappers
+    // from transparent portal layers (e.g. X.com #layers, Radix/MUI/Intercom overlay roots).
+    let hasFullBgChild = false;
+    const floatingChildren = [];
+    const queue = [];
+    let head = 0;
+    let c = el.firstElementChild;
+    while (c) {
+      queue.push(c);
+      c = c.nextElementSibling;
+    }
+    let checked = 0;
+    while (head < queue.length && checked < 60) {
+      const child = queue[head++];
+      checked += 1;
+      if (!(child instanceof Element) || isSaveShotHost(child) || FULLPAGE_SKIP_TAGS.has(child.tagName)) {
+        continue;
+      }
+      const cRect = child.getBoundingClientRect();
+      const cFull = cRect.width >= vpW * 0.85 && cRect.height >= vpH * 0.85;
+      const cStyle = getComputedStyle(child);
+      if (cStyle.display === 'none') continue;
+      if (cFull) {
+        const cZ = cStyle.zIndex !== 'auto' ? Number(cStyle.zIndex) : 0;
+        const isVisualBg =
+          child.tagName === 'CANVAS' ||
+          child.tagName === 'IMG' ||
+          child.tagName === 'VIDEO' ||
+          child.tagName === 'SVG' ||
+          child.namespaceURI === 'http://www.w3.org/2000/svg' ||
+          !isTransparentBackground(cStyle);
+        if (isVisualBg && (!Number.isFinite(cZ) || cZ <= 0)) {
+          hasFullBgChild = true;
+        } else if (child instanceof HTMLElement && child.firstElementChild) {
+          let gc = child.firstElementChild;
+          while (gc) {
+            queue.push(gc);
+            gc = gc.nextElementSibling;
+          }
+        }
+      } else if (
+        child instanceof HTMLElement &&
+        cRect.width > 0 &&
+        cRect.height > 0 &&
+        !isScrollContainerOrAncestor(session, child) &&
+        !session.unstuckSet.has(child)
+      ) {
+        floatingChildren.push(child);
+      }
+    }
+
+    if (hasFullBgChild) {
+      return { action: 'children-only', floatingChildren };
+    }
+    if (transparent) {
+      return { action: 'hide-self', floatingChildren: [] };
+    }
+    return { action: 'skip', floatingChildren: [] };
+  }
+
+  function getProbePoints(session, vpW, vpH) {
+    let L = 0;
+    let T = 0;
+    let W = vpW;
+    let H = vpH;
+    if (!session.isWindow && session.element) {
+      const r = session.element.getBoundingClientRect();
+      L = Math.max(0, r.left);
+      T = Math.max(0, r.top);
+      W = Math.max(1, Math.min(vpW - L, r.width));
+      H = Math.max(1, Math.min(vpH - T, r.height));
+    }
+    const R = L + W;
+    const B = T + H;
+    const clampX = (x) => Math.max(L + 4, Math.min(R - 4, Math.round(x)));
+    const clampY = (y) => Math.max(T + 4, Math.min(B - 4, Math.round(y)));
+
+    return [
+      // Bottom-right cluster (catches stacked X.com Grok + Chat FABs & chat launchers)
+      [clampX(R - 24), clampY(B - 24)],
+      [clampX(R - 36), clampY(B - 84)],
+      [clampX(R - 36), clampY(B - 144)],
+      [clampX(R - 96), clampY(B - 24)],
+      // Bottom-left & bottom-center
+      [clampX(L + 24), clampY(B - 24)],
+      [clampX(L + 24), clampY(B - 84)],
+      [clampX(L + W / 2), clampY(B - 24)],
+      // Top edge
+      [clampX(L + 24), clampY(T + 24)],
+      [clampX(L + W / 2), clampY(T + 20)],
+      [clampX(R - 24), clampY(T + 24)],
+      // Mid-right & mid-left edges (feedback tabs / floating extension side docks)
+      [clampX(R - 16), clampY(T + H * 0.5)],
+      [clampX(R - 16), clampY(T + H * 0.72)],
+      [clampX(L + 16), clampY(T + H * 0.5)],
+      [clampX(L + 16), clampY(T + H * 0.72)],
+    ];
+  }
+
+  function collectElementsAtPoint(x, y) {
+    const out = [];
+    const seen = new Set();
+    const drill = (root, depth) => {
+      if (!root || depth > 5 || typeof root.elementsFromPoint !== 'function') return;
+      let hits;
+      try {
+        hits = root.elementsFromPoint(x, y);
+      } catch {
+        return;
+      }
+      for (const el of hits) {
+        if (!el || seen.has(el) || isSaveShotHost(el)) continue;
+        seen.add(el);
+        out.push(el);
+        if (el.shadowRoot && typeof el.shadowRoot.elementsFromPoint === 'function') {
+          drill(el.shadowRoot, depth + 1);
+        }
+      }
+    };
+    drill(document, 0);
+    return out;
+  }
+
+  function getComposedParent(el) {
+    if (!el) return null;
+    if (el.parentElement) return el.parentElement;
+    const root = el.getRootNode?.();
+    if (root instanceof ShadowRoot && root.host instanceof HTMLElement) {
+      return root.host;
+    }
+    return null;
+  }
+
+  function probePerimeterOverlays(session, { hidePinned = false, inspectElement = null, toHide = null } = {}) {
+    if (!session) return;
+    const vpW = window.innerWidth || document.documentElement.clientWidth || 1;
+    const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
+    const currentY = readScrollMetrics(session).actualY;
+    const points = getProbePoints(session, vpW, vpH);
+
+    for (const [x, y] of points) {
+      const hits = collectElementsAtPoint(x, y);
+      for (const hit of hits) {
+        if (!(hit instanceof HTMLElement) || isScrollContainerOrAncestor(session, hit)) continue;
+        if (session.opacityHiddenSet.has(hit) || session.unstuckSet.has(hit)) continue;
+
+        if (hidePinned && inspectElement) {
+          let anc = hit;
+          let hops = 0;
+          let hiddenByAncestor = false;
+          while (anc && hops < 12) {
+            if (isScrollContainerOrAncestor(session, anc) || isSaveShotHost(anc)) break;
+            if (session.opacityHiddenSet.has(anc)) {
+              hiddenByAncestor = true;
+              break;
+            }
+            inspectElement(anc);
+            if (session.opacityHiddenSet.has(anc)) {
+              hiddenByAncestor = true;
+              break;
+            }
+            anc = getComposedParent(anc);
+            hops += 1;
+          }
+          if (hiddenByAncestor || session.opacityHiddenSet.has(hit) || session.unstuckSet.has(hit)) {
+            continue;
+          }
+        }
+
+        const rect = hit.getBoundingClientRect();
+        const prev = session.probeSeenMap.get(hit);
+        if (!prev) {
+          session.probeSeenMap.set(hit, {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            scrollY: currentY,
+          });
+          continue;
+        }
+
+        if (!hidePinned || !toHide || Math.abs(currentY - prev.scrollY) < 150) {
+          continue;
+        }
+
+        // Case A: Closed Shadow DOM floating host (hit point outside host's own rect & no light children)
+        const hitOutsideRect =
+          x < rect.left - 2 || x > rect.right + 2 || y < rect.top - 2 || y > rect.bottom + 2;
+        if (hitOutsideRect && hit.childElementCount === 0) {
+          toHide.push(hit);
+          continue;
+        }
+
+        // Case B: Viewport-pinned element by geometry (JS scroll-synced widget, absolute child of portal, iframe FAB)
+        const isSubViewport = rect.width > 0 && rect.height > 0 && (rect.width < vpW * 0.85 || rect.height < vpH * 0.85);
+        const stayedPinned =
+          Math.abs(rect.top - prev.top) <= 6 && Math.abs(rect.left - prev.left) <= 6;
+        if (isSubViewport && stayedPinned) {
+          // Climb to highest viewport-pinned <85% ancestor so we hide the full widget container, not just a leaf icon
+          let best = hit;
+          let anc = getComposedParent(hit);
+          let hops = 0;
+          while (anc && hops < 10) {
+            if (
+              isScrollContainerOrAncestor(session, anc) ||
+              isSaveShotHost(anc) ||
+              session.unstuckSet.has(anc)
+            ) {
+              break;
+            }
+            const aRect = anc.getBoundingClientRect();
+            const aSubVp =
+              aRect.width > 0 &&
+              aRect.height > 0 &&
+              (aRect.width < vpW * 0.85 || aRect.height < vpH * 0.85);
+            const aPrev = session.probeSeenMap.get(anc);
+            const aPinned =
+              aPrev &&
+              Math.abs(currentY - aPrev.scrollY) >= 150 &&
+              Math.abs(aRect.top - aPrev.top) <= 6 &&
+              Math.abs(aRect.left - aPrev.left) <= 6;
+            if (aSubVp && aPinned) {
+              best = anc;
+            } else {
+              break;
+            }
+            anc = getComposedParent(anc);
+            hops += 1;
+          }
+          toHide.push(best);
+        }
+      }
     }
   }
 
   function attachFullPageMutationObserver(session) {
     if (!session || typeof MutationObserver !== 'function') return;
-    const root = document.body || document.documentElement;
+    const root = document.documentElement;
     if (!root) return;
     const MAX_DIRTY = 2000;
-    const recordDirty = (node) => {
+    const recordDirty = (node, allowHiddenStyleCheck = false) => {
       if (!node || session.dirtyNodes.size >= MAX_DIRTY) return;
-      if (
-        node.id === OVERLAY_HOST_ID ||
-        node.id === TOAST_HOST_ID ||
-        node.id === FULLPAGE_PILL_HOST_ID
-      ) {
-        return;
-      }
-      if (node instanceof HTMLElement) {
-        session.dirtyNodes.add(node);
-      }
+      if (!(node instanceof HTMLElement)) return;
+      if (FULLPAGE_SKIP_TAGS.has(node.tagName) || isSaveShotHost(node)) return;
+      if (!allowHiddenStyleCheck && session.opacityHiddenSet.has(node)) return;
+      session.dirtyNodes.add(node);
     };
     try {
       const observer = new MutationObserver((mutations) => {
         if (!session || session.cancelled || session.dirtyNodes.size >= MAX_DIRTY) return;
         for (const m of mutations) {
           if (m.type === 'attributes') {
-            recordDirty(m.target);
+            recordDirty(m.target, m.attributeName === 'style');
           } else if (m.type === 'childList' && m.addedNodes?.length) {
             for (const added of m.addedNodes) {
               if (!(added instanceof HTMLElement)) continue;
+              if (FULLPAGE_SKIP_TAGS.has(added.tagName) || isSaveShotHost(added)) continue;
               recordDirty(added);
               if (session.dirtyNodes.size < MAX_DIRTY && added.childElementCount > 0) {
-                walkDomElements(
+                walkDomElementsBfs(
                   added,
                   (child) => recordDirty(child),
                   { maxNodes: Math.max(0, MAX_DIRTY - session.dirtyNodes.size) }
@@ -1242,23 +1730,62 @@
   }
 
   function hideFixedAndStickyElements(session) {
-    if (!session) return;
+    if (!session) return false;
     const vpW = window.innerWidth || document.documentElement.clientWidth || 1;
     const vpH = window.innerHeight || document.documentElement.clientHeight || 1;
-    const root = document.body || document.documentElement;
-    if (!root) return;
+    const root = document.documentElement;
+    if (!root) return false;
 
-    const toMutate = [];
+    const toHide = [];
+    const toUnstick = [];
+    const toReEnforceUnstick = [];
+    const toReEnforceHide = [];
     const MAX_ZERO_RECT = 500;
 
     const inspectElement = (el) => {
       if (!(el instanceof HTMLElement) || !el.isConnected) return;
-      if (session.handledSet.has(el)) return;
-      const pos = getComputedStyle(el).position;
+      if (isSaveShotHost(el) || isScrollContainerOrAncestor(session, el)) return;
+
+      // Preserve precedence for already-unstuck sticky elements (never reclassify as opacity: 0)
+      if (session.unstuckSet.has(el)) {
+        if (getComputedStyle(el).position !== 'relative') {
+          toReEnforceUnstick.push(el);
+        }
+        return;
+      }
+      if (session.opacityHiddenSet.has(el)) {
+        if (getComputedStyle(el).opacity !== '0') {
+          toReEnforceHide.push(el);
+        }
+        return;
+      }
+
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.display === 'contents') return;
+
+      const pos = cs.position;
       if (pos !== 'fixed' && pos !== 'sticky' && pos !== '-webkit-sticky') return;
 
+      // Un-stick any newly mounted/scrolled sticky elements back into natural document flow
+      if (pos === 'sticky' || pos === '-webkit-sticky') {
+        if (!shouldSkipUnstickSticky(session, el, cs)) {
+          toUnstick.push({ el, preserveTopPx: null });
+        }
+        return;
+      }
+
+      // position: fixed handling
       const rect = el.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) {
+        const clippedOnZeroAxis =
+          (rect.width <= 0 && (cs.overflowX === 'hidden' || cs.overflowX === 'clip')) ||
+          (rect.height <= 0 && (cs.overflowY === 'hidden' || cs.overflowY === 'clip'));
+        // Zero-box fixed portal anchor (e.g. X.com #layers height: 0 with overflowing absolute FABs)
+        if (el.childElementCount > 0 && !clippedOnZeroAxis) {
+          toHide.push(el);
+          session.zeroRectNodes.delete(el);
+          return;
+        }
         if (session.zeroRectNodes.size < MAX_ZERO_RECT) {
           session.zeroRectNodes.add(el);
         }
@@ -1266,36 +1793,38 @@
       }
       session.zeroRectNodes.delete(el);
 
-      const isScrollContainerOrAncestor =
-        el === session.element || (session.element && el.contains(session.element));
-      // Only skip true full-viewport SPA root wrappers covering BOTH width and height
-      const isFullViewportWrapper =
-        rect.width >= vpW * 0.85 && rect.height >= vpH * 0.85;
-      if (isScrollContainerOrAncestor || isFullViewportWrapper) return;
-
-      const isSticky = pos === 'sticky' || pos === '-webkit-sticky';
-      // Hide fixed overlays and slice-0-visible sticky chrome (e.g. X.com sidebars, top navbars)
-      // via opacity: 0 (zero flex reflow and cannot be undone by descendant visibility: visible).
-      // Convert below-the-fold sticky elements to position: static so they appear once in flow.
-      const hideViaOpacity = !isSticky || session.slice0VisibleSet.has(el);
-      const prop = hideViaOpacity ? 'opacity' : 'position';
-      const val = hideViaOpacity ? '0' : 'static';
-      toMutate.push({
-        el,
-        prop,
-        val,
-        prevValue: el.style.getPropertyValue(prop),
-        prevPriority: el.style.getPropertyPriority(prop),
-      });
-      session.handledSet.add(el);
-      if (hideViaOpacity) {
-        session.opacityHiddenSet.add(el);
+      const isFullViewportWrapper = rect.width >= vpW * 0.85 && rect.height >= vpH * 0.85;
+      if (isFullViewportWrapper) {
+        const decision = classifyFullViewportFixed(session, el, cs, vpW, vpH);
+        if (decision.action === 'hide-self') {
+          toHide.push(el);
+        } else if (decision.action === 'children-only') {
+          for (const child of decision.floatingChildren) {
+            toHide.push(child);
+          }
+        }
+        return;
       }
+
+      toHide.push(el);
     };
 
     try {
+      // 1. Re-verify any inline-enforced nodes in case JS scroll handlers clobbered inline !important
+      for (const el of session.inlineEnforcedUnstick) {
+        if (el.isConnected && getComputedStyle(el).position !== 'relative') {
+          toReEnforceUnstick.push(el);
+        }
+      }
+      for (const el of session.inlineEnforcedHide) {
+        if (el.isConnected && getComputedStyle(el).opacity !== '0') {
+          toReEnforceHide.push(el);
+        }
+      }
+
+      // 2. Full BFS on slice 1; incremental dirty + zero-rect pass on slice 2+
       if (!session.fullWalkDone) {
-        walkDomElements(root, inspectElement, {
+        walkDomElementsBfs(root, inspectElement, {
           maxNodes: 20000,
           skipSubtreeSet: session.opacityHiddenSet,
         });
@@ -1320,18 +1849,65 @@
           inspectElement(el);
         }
       }
+
+      // 3. CSS Top Layer elements (:popover-open, dialog:modal) ignore ancestor opacity: 0
+      try {
+        const topLayers = document.querySelectorAll(':popover-open, dialog:modal');
+        for (const tl of topLayers) {
+          if (
+            tl instanceof HTMLElement &&
+            !isSaveShotHost(tl) &&
+            !isScrollContainerOrAncestor(session, tl) &&
+            !session.opacityHiddenSet.has(tl)
+          ) {
+            toHide.push(tl);
+          }
+        }
+      } catch {
+        // Older engines without :popover-open selector support
+      }
+
+      // 4. Perimeter scroll-invariance probe (catches JS-synced widgets, deep portals, closed Shadow DOM hosts)
+      probePerimeterOverlays(session, { hidePinned: true, inspectElement, toHide });
     } catch {
       // Never abort capture on hostile DOM getters
     }
 
-    for (const item of toMutate) {
+    let mutated = false;
+    if (toUnstick.length) {
+      if (applyUnstickBatch(session, toUnstick)) mutated = true;
+    }
+    if (toHide.length) {
+      if (applyHideBatch(session, toHide)) mutated = true;
+    }
+    for (const el of toReEnforceUnstick) {
       try {
-        session.hiddenElements.push(item);
-        item.el.style.setProperty(item.prop, item.val, 'important');
+        saveAndSetInlineImportant(session, el, 'position', 'relative');
+        if (el.getAttribute('data-saveshot-unstick') !== 'preserve-top') {
+          saveAndSetInlineImportant(session, el, 'top', 'auto');
+        }
+        saveAndSetInlineImportant(session, el, 'bottom', 'auto');
+        saveAndSetInlineImportant(session, el, 'left', 'auto');
+        saveAndSetInlineImportant(session, el, 'right', 'auto');
+        saveAndSetInlineImportant(session, el, 'isolation', 'isolate');
+        session.inlineEnforcedUnstick.add(el);
+        mutated = true;
       } catch {
-        // Ignore detached or read-only style targets
+        // Ignore style errors
       }
     }
+    for (const el of toReEnforceHide) {
+      try {
+        saveAndSetInlineImportant(session, el, 'opacity', '0');
+        saveAndSetInlineImportant(session, el, 'transition-property', 'none');
+        session.inlineEnforcedHide.add(el);
+        mutated = true;
+      } catch {
+        // Ignore style errors
+      }
+    }
+
+    return mutated;
   }
 
   function ensureFullPageProgressPill(session) {
@@ -1377,7 +1953,11 @@
     return { host, pill };
   }
 
-  async function setFullPagePillState({ hidden = false, progressText = '' } = {}) {
+  async function setFullPagePillState({
+    hidden = false,
+    progressText = '',
+    postSettleHide = false,
+  } = {}) {
     const session = fullPageSession;
     if (!session || session.cancelled) return { ok: true };
     const safeText = typeof progressText === 'string' ? progressText.slice(0, 120) : '';
@@ -1387,28 +1967,40 @@
         refs.pill.textContent = safeText;
       }
     }
+
+    let didMutateDom = false;
+    if (postSettleHide && !session.cancelled) {
+      didMutateDom = hideFixedAndStickyElements(session);
+    }
+
     const host = session.pillHost;
-    if (!host || !host.isConnected) return { ok: true };
-    if (hidden) {
-      try {
-        if (typeof host.hidePopover === 'function') {
-          host.hidePopover();
+    let didHidePill = false;
+    if (host && host.isConnected) {
+      if (hidden) {
+        try {
+          if (typeof host.hidePopover === 'function') {
+            host.hidePopover();
+          }
+        } catch {
+          // Ignore if not an open popover
         }
-      } catch {
-        // Ignore if not an open popover
+        host.style.setProperty('display', 'none', 'important');
+        didHidePill = true;
+      } else {
+        host.style.setProperty('display', 'block', 'important');
+        try {
+          if (typeof host.showPopover === 'function' && !host.matches(':popover-open')) {
+            host.showPopover();
+          }
+        } catch {
+          // Fallback fixed positioning already active
+        }
       }
-      host.style.setProperty('display', 'none', 'important');
-      // Wait for compositor repaint with document.hidden + timeout guard so pill never burns into PNG
+    }
+
+    // Flush a single compositor paint whenever either the pill was hidden or overlays were updated
+    if (didHidePill || didMutateDom) {
       await waitNextPaint(0);
-    } else {
-      host.style.setProperty('display', 'block', 'important');
-      try {
-        if (typeof host.showPopover === 'function' && !host.matches(':popover-open')) {
-          host.showPopover();
-        }
-      } catch {
-        // Fallback fixed positioning already active
-      }
     }
     return { ok: true };
   }
@@ -1418,9 +2010,11 @@
     fullPageSession = null;
     removeHostElement(FULLPAGE_PILL_HOST_ID);
     const existingStyle = document.getElementById(FULLPAGE_STYLE_ID);
-    if (existingStyle) existingStyle.remove();
 
-    if (!session) return;
+    if (!session) {
+      if (existingStyle) existingStyle.remove();
+      return;
+    }
     session.pillHost = null;
     session.pillTextEl = null;
     try {
@@ -1431,20 +2025,50 @@
     session.mutationObserver = null;
     session.dirtyNodes?.clear?.();
     session.zeroRectNodes?.clear?.();
+    session.inlineEnforcedUnstick?.clear?.();
+    session.inlineEnforcedHide?.clear?.();
     if (session.onKeyDown) {
       window.removeEventListener('keydown', session.onKeyDown, true);
     }
 
-    for (const entry of session.hiddenElements) {
-      try {
-        if (entry.prevValue) {
-          entry.el.style.setProperty(entry.prop, entry.prevValue, entry.prevPriority);
-        } else {
-          entry.el.style.removeProperty(entry.prop);
+    // Suppress transitions across the single restore flush so elements with transition: opacity
+    // snap back to opacity: 1 immediately instead of starting a fade-in from 0.
+    if (existingStyle) {
+      existingStyle.textContent = '*, *::before, *::after { transition-property: none !important; }';
+    }
+
+    if (session.attrTrackedSet) {
+      for (const el of session.attrTrackedSet) {
+        try {
+          el.removeAttribute('data-saveshot-unstick');
+          el.removeAttribute('data-saveshot-hide');
+        } catch {
+          // Ignore detached elements
         }
-      } catch {
-        // Ignore detached elements
       }
+      session.attrTrackedSet.clear();
+    }
+
+    if (session.inlineRestoreMap) {
+      for (const [el, propMap] of session.inlineRestoreMap.entries()) {
+        for (const [prop, orig] of propMap.entries()) {
+          try {
+            if (orig.value) {
+              el.style.setProperty(prop, orig.value, orig.priority);
+            } else {
+              el.style.removeProperty(prop);
+            }
+          } catch {
+            // Ignore detached elements
+          }
+        }
+      }
+      session.inlineRestoreMap.clear();
+    }
+
+    if (existingStyle) {
+      void document.documentElement?.offsetHeight;
+      existingStyle.remove();
     }
 
     if (session.containerScrollbarPatched && session.element) {
@@ -1464,6 +2088,12 @@
     }
 
     scrollTargetInstant(session, session.origScrollX, session.origScrollY);
+    try {
+      const target = session.isWindow ? window : session.element;
+      target?.dispatchEvent?.(new Event('scroll'));
+    } catch {
+      // Ignore synthetic scroll event errors
+    }
   }
 
   async function prepareFullPageCapture() {
@@ -1502,6 +2132,25 @@
       html, body {
         scrollbar-width: none !important;
       }
+      [data-saveshot-unstick="1"] {
+        position: relative !important;
+        top: auto !important;
+        bottom: auto !important;
+        left: auto !important;
+        right: auto !important;
+        isolation: isolate !important;
+      }
+      [data-saveshot-unstick="preserve-top"] {
+        position: relative !important;
+        bottom: auto !important;
+        left: auto !important;
+        right: auto !important;
+        isolation: isolate !important;
+      }
+      [data-saveshot-hide="1"] {
+        opacity: 0 !important;
+        transition-property: none !important;
+      }
     `;
     (document.head || document.documentElement).appendChild(style);
 
@@ -1510,10 +2159,13 @@
       isWindow: target.isWindow,
       origScrollX,
       origScrollY,
-      hiddenElements: [],
-      handledSet: new WeakSet(),
+      attrTrackedSet: new Set(),
+      inlineRestoreMap: new Map(),
+      unstuckSet: new WeakSet(),
       opacityHiddenSet: new WeakSet(),
-      slice0VisibleSet: new WeakSet(),
+      inlineEnforcedUnstick: new Set(),
+      inlineEnforcedHide: new Set(),
+      probeSeenMap: new WeakMap(),
       dirtyNodes: new Set(),
       zeroRectNodes: new Set(),
       fullWalkDone: false,
@@ -1557,10 +2209,15 @@
     window.addEventListener('keydown', session.onKeyDown, true);
     fullPageSession = session;
 
-    // Scroll to top cleanly for slice 0
+    // Scroll to top cleanly for slice 0, un-stick sticky elements into natural flow,
+    // and capture baseline perimeter probe before slice 0 is snapped.
     scrollTargetInstant(session, origScrollX, 0);
     await waitNextPaint(40);
-    snapshotSlice0StickyElements(session);
+    const unstuckAny = unstickStickyElementsBeforeSlice0(session);
+    if (unstuckAny) {
+      await waitNextPaint(0);
+    }
+    probePerimeterOverlays(session, { hidePinned: false });
     attachFullPageMutationObserver(session);
 
     return {

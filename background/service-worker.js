@@ -1425,9 +1425,12 @@ async function captureFullPageFlow({
           });
         }
 
-        // Briefly hide pill for the single compositor capture frame so it never burns into the PNG
-        if (shouldShowPillNow) {
-          await sendFullPagePill({ hidden: true });
+        // Briefly hide pill and run post-settle overlay enforcement right before capture
+        if (shouldShowPillNow || sliceIndex > 0) {
+          await sendFullPagePill({
+            hidden: shouldShowPillNow,
+            postSettleHide: sliceIndex > 0,
+          });
         }
 
         const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
