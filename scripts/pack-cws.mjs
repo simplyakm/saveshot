@@ -20,6 +20,7 @@ const EXTENSION_FILES = [
   'lib/errors.js',
   'lib/feedback.js',
   'lib/storage.js',
+  'lib/theme-boot.js',
   'lib/ui.js',
   'popup/popup.css',
   'popup/popup.html',

@@ -1,4 +1,5 @@
 import {
+  getAuthEpoch,
   getSilentAuthSession,
   signIn,
   signOut,
@@ -29,6 +30,7 @@ import {
   clearRecentUploads,
   getAccountFolderCache,
   getAuthState,
+  getExtensionStateSnapshot,
   getRecentUploads,
   getSettings,
   pruneStorage,
@@ -52,6 +54,7 @@ const MAX_PERSISTED_EDITOR_SESSIONS = 12;
 const FALLBACK_SESSION_TTL_MS = 10 * 60 * 1000;
 const REGION_SESSION_TTL_MS = 2 * 60 * 1000;
 const MAX_EDITED_DATA_URL_LENGTH = 48 * 1024 * 1024;
+const MAX_SESSION_PREUPLOAD_PNG_BYTES = 7_200_000;
 const EDITOR_SESSION_ID_PATTERN = /^[a-zA-Z0-9-]{8,64}$/;
 const DISALLOWED_SESSION_KEYS = new Set([
   '__proto__',
@@ -357,7 +360,11 @@ async function reconcileInterruptedUpload(session) {
 
 function persistEditorSessionMeta(
   session,
-  { storePreUploadBlob = false, expectedEpoch = workerSessionEpoch } = {}
+  {
+    storePreUploadBlob = false,
+    expectedEpoch = workerSessionEpoch,
+    initialPngDataUrl = '',
+  } = {}
 ) {
   const writeEpoch = expectedEpoch;
   const runWrite = async () => {
@@ -387,7 +394,12 @@ function persistEditorSessionMeta(
     if (writeEpoch !== workerSessionEpoch) return;
     await sessionStoreSet({ [SESSION_META_MAP_KEY]: existingMap });
 
-    if (storePreUploadBlob && session.mode === 'new' && session.pngBlob) {
+    if (
+      storePreUploadBlob &&
+      session.mode === 'new' &&
+      session.pngBlob &&
+      (session.pngBlob.size || 0) <= MAX_SESSION_PREUPLOAD_PNG_BYTES
+    ) {
       try {
         // Keep at most 2 pre-upload PNGs in chrome.storage.session, preferring to evict
         // already-loaded non-uploading sessions before unloaded or actively uploading ones
@@ -407,13 +419,19 @@ function persistEditorSessionMeta(
           const dropIds = orderedForEviction.slice(0, otherNewIds.length - 1);
           await sessionStoreRemove(dropIds.map((id) => `${PREUPLOAD_PNG_PREFIX}${id}`));
         }
-        const dataUrl =
-          typeof session.pngDataUrl === 'string' &&
-          session.pngDataUrl.startsWith('data:image/png;base64,')
+        const cachedDataUrl =
+          typeof initialPngDataUrl === 'string' &&
+          initialPngDataUrl.startsWith('data:image/png;base64,')
+            ? initialPngDataUrl
+            : typeof session.pngDataUrl === 'string' &&
+              session.pngDataUrl.startsWith('data:image/png;base64,')
             ? session.pngDataUrl
-            : await blobToDataUrl(session.pngBlob);
+            : '';
+        const dataUrl = cachedDataUrl || (await blobToDataUrl(session.pngBlob));
         if (writeEpoch !== workerSessionEpoch) return;
-        session.pngDataUrl = dataUrl;
+        if (!session.editorLoaded) {
+          session.pngDataUrl = dataUrl;
+        }
         await sessionStoreSet({
           [`${PREUPLOAD_PNG_PREFIX}${session.sessionId}`]: dataUrl,
         });
@@ -427,9 +445,10 @@ function persistEditorSessionMeta(
   return sessionMetaWriteChain;
 }
 
-async function createEditorSession(data) {
+function createEditorSessionSync(data) {
   const sessionId = crypto.randomUUID();
   const isIncognito = Boolean(data.incognito);
+  const initialPngDataUrl = typeof data.pngDataUrl === 'string' ? data.pngDataUrl : '';
   const session = {
     sessionId,
     mode: data.mode === 'new' ? 'new' : 'existing',
@@ -438,7 +457,7 @@ async function createEditorSession(data) {
     folderName: data.folderName || 'Chrome_SaveShot_ScreenShots',
     webViewLink: data.webViewLink || '',
     pngBlob: data.pngBlob || null,
-    pngDataUrl: typeof data.pngDataUrl === 'string' ? data.pngDataUrl : '',
+    pngDataUrl: initialPngDataUrl,
     pageUrl: isIncognito ? '' : data.pageUrl || '',
     pageTitle: isIncognito ? '' : data.pageTitle || '',
     captureMode: normalizeCaptureMode(data.captureMode),
@@ -454,9 +473,16 @@ async function createEditorSession(data) {
   };
 
   putRamEditorSession(session);
-  await persistEditorSessionMeta(session, {
+  const persistPromise = persistEditorSessionMeta(session, {
     storePreUploadBlob: session.mode === 'new',
+    initialPngDataUrl,
   });
+  return { session, persistPromise };
+}
+
+async function createEditorSession(data) {
+  const { session, persistPromise } = createEditorSessionSync(data);
+  await persistPromise;
   return session;
 }
 
@@ -783,6 +809,7 @@ async function uploadCapturedBlob({
   customFilename = '',
   initialSettings = null,
   shouldAbort = null,
+  skipThumbnail = false,
 }) {
   clearFallbackCapture();
   const incognito = Boolean(tab?.incognito);
@@ -798,7 +825,7 @@ async function uploadCapturedBlob({
 
   try {
     [thumbnailDataUrl, uploadResult] = await Promise.all([
-      createThumbnailDataUrl(pngBlob).catch(() => ''),
+      skipThumbnail ? Promise.resolve('') : createThumbnailDataUrl(pngBlob).catch(() => ''),
       withAuthToken(
         async (token, email) => {
           const accountCache = getAccountFolderCache(settings, email);
@@ -930,6 +957,7 @@ function startBackgroundUploadForSession({
         customFilename: customFilename || session.filename,
         initialSettings: settings,
         shouldAbort,
+        skipThumbnail: Boolean(tab?.incognito) && !showPageToast,
       });
 
       if (shouldAbort() || result?.aborted) {
@@ -1077,7 +1105,7 @@ async function captureVisibleTabFlow({
     const [pngBlob, settings, authSession] = await Promise.all([
       dataUrlToBlob(dataUrl),
       getSettings(),
-      getSilentAuthSession(),
+      getSilentAuthSession({ allowStaleWhileRevalidate: true }),
     ]);
 
     const incognito = Boolean(targetTab?.incognito);
@@ -1086,7 +1114,7 @@ async function captureVisibleTabFlow({
     });
     const shouldAutoUpload = Boolean(authSession.signedIn) && !settings.editBeforeUpload;
 
-    const session = await createEditorSession({
+    const { session, persistPromise } = createEditorSessionSync({
       mode: 'new',
       fileId: null,
       filename,
@@ -1117,7 +1145,10 @@ async function captureVisibleTabFlow({
       setBadge('', '');
     }
 
-    await openEditorTab(session.sessionId, targetTab?.windowId);
+    await Promise.all([
+      openEditorTab(session.sessionId, targetTab?.windowId),
+      persistPromise,
+    ]);
     return {
       openedEditor: true,
       uploadingInBackground: shouldAutoUpload,
@@ -1192,7 +1223,7 @@ async function handleRegionSelected(selection, senderTab) {
     const [croppedBlob, settings, authSession] = await Promise.all([
       cropPngDataUrl(dataUrl, selection),
       getSettings(),
-      getSilentAuthSession(),
+      getSilentAuthSession({ allowStaleWhileRevalidate: true }),
     ]);
 
     const incognito = Boolean(liveTab?.incognito);
@@ -1201,7 +1232,7 @@ async function handleRegionSelected(selection, senderTab) {
     });
     const shouldAutoUpload = Boolean(authSession.signedIn) && !settings.editBeforeUpload;
 
-    const session = await createEditorSession({
+    const { session, persistPromise } = createEditorSessionSync({
       mode: 'new',
       fileId: null,
       filename,
@@ -1231,7 +1262,10 @@ async function handleRegionSelected(selection, senderTab) {
       setBadge('', '');
     }
 
-    await openEditorTab(session.sessionId, liveTab?.windowId);
+    await Promise.all([
+      openEditorTab(session.sessionId, liveTab?.windowId),
+      persistPromise,
+    ]);
   } catch (err) {
     const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
     lastErrorCode = normalized.code || 'CAPTURE_ERROR';
@@ -1705,7 +1739,7 @@ async function captureFullPageFlow({
       const [stitchedBlob, settings, authSession] = await Promise.all([
         stitchFullPageSlices(slices, canvasWidth, totalPhysicalHeight),
         getSettings(),
-        getSilentAuthSession(),
+        getSilentAuthSession({ allowStaleWhileRevalidate: true }),
       ]);
 
       if (isAbortedBySignOut()) {
@@ -1723,7 +1757,7 @@ async function captureFullPageFlow({
         ? `Stopped early \u00b7 Captured ${slices.length} ${slices.length === 1 ? 'screen' : 'screens'}`
         : '';
 
-      const session = await createEditorSession({
+      const { session, persistPromise } = createEditorSessionSync({
         mode: 'new',
         fileId: null,
         filename,
@@ -1740,6 +1774,7 @@ async function captureFullPageFlow({
       });
 
       if (isAbortedBySignOut()) {
+        await persistPromise;
         return { aborted: true };
       }
 
@@ -1758,7 +1793,10 @@ async function captureFullPageFlow({
         setBadge('', '');
       }
 
-      await openEditorTab(session.sessionId, targetTab?.windowId);
+      await Promise.all([
+        openEditorTab(session.sessionId, targetTab?.windowId),
+        persistPromise,
+      ]);
       return {
         openedEditor: true,
         uploadingInBackground: shouldAutoUpload,
@@ -2115,19 +2153,54 @@ export function registerServiceWorkerListeners() {
 
           switch (message.type) {
             case 'GET_STATE': {
-              const tabCheckPromise = resolveTargetTab(message.tabId).then(
-                async (tab) => ({
-                  activeTab: tab,
-                  capturable: await checkTabCapturable(tab),
-                })
-              );
-              const [session, settings, recentUploads, { activeTab, capturable }] =
-                await Promise.all([
-                  getSilentAuthSession(),
-                  getSettings(),
-                  getRecentUploads(),
-                  tabCheckPromise,
-                ]);
+              const includeTab = message.includeTab !== false;
+              const includeRecent = message.includeRecent !== false;
+              const hasTrustedTabMeta =
+                includeTab &&
+                typeof message.tabUrl === 'string' &&
+                message.tabUrl.length > 0;
+              const tabCheckPromise = !includeTab
+                ? Promise.resolve({
+                    activeTab: null,
+                    capturable: {
+                      ok: true,
+                      canCaptureVisible: true,
+                      canCaptureRegion: true,
+                    },
+                  })
+                : hasTrustedTabMeta
+                ? (async () => {
+                    const activeTab = {
+                      id: typeof message.tabId === 'number' ? message.tabId : undefined,
+                      url: message.tabUrl,
+                      incognito: Boolean(message.tabIncognito),
+                    };
+                    return {
+                      activeTab,
+                      capturable: await checkTabCapturable(activeTab),
+                    };
+                  })()
+                : resolveTargetTab(message.tabId).then(async (tab) => ({
+                    activeTab: tab,
+                    capturable: await checkTabCapturable(tab),
+                  }));
+
+              const snapshotEpoch = getAuthEpoch();
+              const stateAndAuthPromise = getExtensionStateSnapshot().then(async (snapshot) => {
+                const session = await getSilentAuthSession({
+                  allowStaleWhileRevalidate: true,
+                  authState: snapshot.authState,
+                  snapshotEpoch,
+                });
+                return { snapshot, session };
+              });
+
+              const [{ snapshot, session }, { activeTab, capturable }] = await Promise.all([
+                stateAndAuthPromise,
+                tabCheckPromise,
+              ]);
+              const settings = snapshot.settings;
+              const recentUploads = includeRecent ? snapshot.recentUploads : [];
               if (session?.signedIn && !settings?.folderWebViewLink) {
                 resolveDriveFolderLink({ prewarmOnly: true }).catch(() => {});
               }
@@ -2439,7 +2512,7 @@ export function registerServiceWorkerListeners() {
               const [session, settings, authSession] = await Promise.all([
                 resolveEditorSession(message.sessionId),
                 getSettings(),
-                getSilentAuthSession(),
+                getSilentAuthSession({ allowStaleWhileRevalidate: true }),
               ]);
 
               const wasLoaded = Boolean(session.editorLoaded);
@@ -2527,11 +2600,12 @@ export function registerServiceWorkerListeners() {
             }
 
             case 'GET_EDITOR_UPLOAD_STATUS': {
-              const [session, settings, authSession] = await Promise.all([
+              const [session, authState] = await Promise.all([
                 resolveEditorSession(message.sessionId),
-                getSettings(),
-                getSilentAuthSession(),
+                getAuthState(),
               ]);
+              const folderName =
+                session.folderName || (await getSettings()).folderName;
 
               await reconcileInterruptedUpload(session);
 
@@ -2539,10 +2613,12 @@ export function registerServiceWorkerListeners() {
                 ok: true,
                 sessionId: session.sessionId,
                 mode: session.mode,
-                signedIn: Boolean(authSession?.signedIn),
+                signedIn:
+                  !authState.signedOut &&
+                  Boolean(authState.userProfile?.email || authState.userProfile?.name),
                 fileId: session.fileId,
                 filename: session.filename,
-                folderName: session.folderName || settings.folderName,
+                folderName,
                 webViewLink: session.webViewLink || '',
                 uploadState: normalizeUploadState(session.uploadState),
                 uploadError: session.uploadError || '',

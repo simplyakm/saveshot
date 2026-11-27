@@ -4,6 +4,7 @@ import {
   getEnvironmentSummary,
 } from '../lib/feedback.js';
 import {
+  didAuthProfileVisiblyChange,
   formatShortcutDisplay,
   initThemeSync,
   safeHttpsUrl,
@@ -119,7 +120,11 @@ async function loadStatus() {
   }
 
   try {
-    const res = await sendRuntimeMessage({ type: 'GET_STATE' });
+    const res = await sendRuntimeMessage({
+      type: 'GET_STATE',
+      includeTab: false,
+      includeRecent: false,
+    });
     if (res.lastErrorCode && !lastErrorCode) {
       lastErrorCode = res.lastErrorCode;
     }
@@ -229,7 +234,13 @@ document.addEventListener('visibilitychange', () => {
 
 if (chrome?.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && (changes.signedOut || changes.userProfile || changes.settings)) {
+    if (areaName !== 'local') return;
+    const folderChanged =
+      Boolean(changes.settings) &&
+      (changes.settings.oldValue?.folderName !== changes.settings.newValue?.folderName ||
+        changes.settings.oldValue?.folderWebViewLink !==
+          changes.settings.newValue?.folderWebViewLink);
+    if (didAuthProfileVisiblyChange(changes) || folderChanged) {
       loadStatus();
     }
   });
