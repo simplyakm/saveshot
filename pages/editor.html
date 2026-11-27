@@ -15,7 +15,7 @@
         <div class="topbar-left">
           <div class="editor-brand" id="editor-brand">
             <img src="../icons/icon32.png" alt="SaveShot" width="20" height="20" class="brand-icon" />
-            <span class="ss-title-sm">SaveShot</span>
+            <span class="ss-title-sm brand-title">SaveShot</span>
             <span class="brand-sep" aria-hidden="true">/</span>
             <span class="ss-body-regular brand-sub">Editor</span>
           </div>
@@ -106,7 +106,6 @@
               </svg>
             </button>
           </div>
-          <span class="status-pill" id="status-pill" role="status" aria-live="polite" hidden></span>
           <span class="unsaved-pill" id="unsaved-pill" role="status" aria-live="polite" hidden>
             <span class="unsaved-dot" aria-hidden="true"></span>
             <span>Unsaved changes &middot; Click Save</span>
@@ -120,12 +119,35 @@
           <button type="button" class="ss-btn ss-btn-secondary" id="copy-image-btn" title="Copy PNG to clipboard (Ctrl+C)">
             Copy image
           </button>
-          <button type="button" class="ss-btn ss-btn-secondary" id="download-btn" title="Download PNG to your computer">
-            Download
-          </button>
           <button type="button" class="ss-btn ss-btn-secondary" id="copy-link-btn" hidden>
             Copy link
           </button>
+          <div class="download-dropdown" id="download-dropdown">
+            <button
+              type="button"
+              class="ss-btn ss-btn-secondary download-btn"
+              id="download-btn"
+              title="Download screenshot as PNG or PDF"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="download-menu"
+            >
+              <span>Download</span>
+              <svg class="download-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div class="download-menu" id="download-menu" role="menu" aria-labelledby="download-btn" hidden>
+              <button type="button" class="download-menu-item" id="download-png-btn" role="menuitem">
+                <span class="download-menu-title">PNG image</span>
+                <span class="download-menu-meta">Lossless image</span>
+              </button>
+              <button type="button" class="download-menu-item" id="download-pdf-btn" role="menuitem">
+                <span class="download-menu-title">PDF document</span>
+                <span class="download-menu-meta" id="download-pdf-meta">Single page</span>
+              </button>
+            </div>
+          </div>
           <button type="button" class="ss-btn ss-btn-primary" id="save-drive-btn" disabled>
             Save
           </button>
@@ -378,6 +400,24 @@
           ></textarea>
         </div>
       </main>
+
+      <!-- Floating Bottom-Center Status & Warning Toast (never clips in topbar) -->
+      <div class="status-toast-wrap" id="status-toast-wrap">
+        <span class="status-pill" id="status-pill" role="status" aria-live="polite" hidden></span>
+        <button
+          type="button"
+          class="ss-icon-btn status-toast-close"
+          id="status-toast-close"
+          title="Dismiss message"
+          aria-label="Dismiss message"
+          hidden
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Decluttered Unified Replace Confirmation Dialog -->

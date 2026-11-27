@@ -273,6 +273,10 @@
             <span>Full tab</span>
             <kbd class="hud-kbd">Enter</kbd>
           </button>
+          <button type="button" class="hud-btn" id="full-page-btn" title="Capture full scrolling page (F)">
+            <span>Full page</span>
+            <kbd class="hud-kbd">F</kbd>
+          </button>
           <span class="sep" aria-hidden="true"></span>
           <kbd class="hud-kbd" title="Press Esc to cancel">Esc</kbd>
         </div>
@@ -284,6 +288,7 @@
     const backdrop = shadow.getElementById('backdrop');
     const hint = shadow.getElementById('hint');
     const fullTabBtn = shadow.getElementById('full-tab-btn');
+    const fullPageBtn = shadow.getElementById('full-page-btn');
     const selectionEl = shadow.getElementById('selection');
     const dimensionsEl = shadow.getElementById('dimensions');
 
@@ -400,9 +405,25 @@
       });
     }
 
+    function triggerFullPageCapture() {
+      cancelMoveRaf();
+      installTrailingClickShield();
+      clearActiveOverlay();
+      afterOverlayRepaint(35, () => {
+        chrome.runtime
+          .sendMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' })
+          .catch(() => {});
+      });
+    }
+
     fullTabBtn.addEventListener('click', (e) => {
       stopEvent(e);
       triggerFullTabCapture();
+    });
+
+    fullPageBtn.addEventListener('click', (e) => {
+      stopEvent(e);
+      triggerFullPageCapture();
     });
 
     function onPointerDown(e) {
@@ -483,7 +504,7 @@
         showToast({
           status: 'info',
           title: 'Selection cancelled',
-          message: 'Drag across an area or press Enter to capture the full tab.',
+          message: 'Drag across an area, press Enter for full tab, or press F for full page.',
         });
         return;
       }
@@ -507,7 +528,22 @@
       }
       if (e.key === 'Enter' && !isDragging) {
         stopEvent(e);
-        triggerFullTabCapture();
+        if (shadow.activeElement === fullPageBtn || e.composedPath().includes(fullPageBtn)) {
+          triggerFullPageCapture();
+        } else {
+          triggerFullTabCapture();
+        }
+        return;
+      }
+      if (
+        (e.key === 'f' || e.key === 'F') &&
+        !isDragging &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        stopEvent(e);
+        triggerFullPageCapture();
       }
     }
 

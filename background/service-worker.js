@@ -47,6 +47,7 @@ import {
 const CONTENT_SCRIPT_ALLOWED_TYPES = new Set([
   'REGION_SELECTED',
   'CAPTURE_VISIBLE_FROM_OVERLAY',
+  'CAPTURE_FULLPAGE_FROM_OVERLAY',
   'FULLPAGE_CANCEL',
   'GET_FALLBACK_PNG',
   'OPEN_LAST_CAPTURE_EDITOR',
@@ -602,40 +603,52 @@ async function resolveEditorSession(sessionId, fallbackContext = null) {
   });
 }
 
-async function registerPendingRegionTab(tabId) {
-  if (typeof tabId !== 'number') return;
-  const now = Date.now();
-  for (const [id, exp] of pendingRegionTabIds) {
-    if (exp <= now) pendingRegionTabIds.delete(id);
-  }
-  const expiresAt = now + REGION_SESSION_TTL_MS;
-  pendingRegionTabIds.set(tabId, expiresAt);
+let regionSessionQueue = Promise.resolve();
 
-  const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
-  const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
-  for (const [k, exp] of Object.entries(nextMap)) {
-    if (Number(exp) <= now) delete nextMap[k];
-  }
-  nextMap[String(tabId)] = expiresAt;
-  await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+function runRegionSessionOp(fn) {
+  const next = regionSessionQueue.catch(() => {}).then(fn);
+  regionSessionQueue = next.catch(() => {});
+  return next;
 }
 
-async function consumePendingRegionTab(tabId) {
-  if (typeof tabId !== 'number') return false;
-  const now = Date.now();
-  const ramExp = pendingRegionTabIds.get(tabId);
-  pendingRegionTabIds.delete(tabId);
+function registerPendingRegionTab(tabId) {
+  return runRegionSessionOp(async () => {
+    if (typeof tabId !== 'number') return;
+    const now = Date.now();
+    for (const [id, exp] of pendingRegionTabIds) {
+      if (exp <= now) pendingRegionTabIds.delete(id);
+    }
+    const expiresAt = now + REGION_SESSION_TTL_MS;
+    pendingRegionTabIds.set(tabId, expiresAt);
 
-  const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
-  const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
-  const storedExp = Number(nextMap[String(tabId)] || 0);
-  delete nextMap[String(tabId)];
-  for (const [k, exp] of Object.entries(nextMap)) {
-    if (Number(exp) <= now) delete nextMap[k];
-  }
-  await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+    const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
+    const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
+    for (const [k, exp] of Object.entries(nextMap)) {
+      if (Number(exp) <= now) delete nextMap[k];
+    }
+    nextMap[String(tabId)] = expiresAt;
+    await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+  });
+}
 
-  return (typeof ramExp === 'number' && ramExp > now) || storedExp > now;
+function consumePendingRegionTab(tabId) {
+  return runRegionSessionOp(async () => {
+    if (typeof tabId !== 'number') return false;
+    const now = Date.now();
+    const ramExp = pendingRegionTabIds.get(tabId);
+    pendingRegionTabIds.delete(tabId);
+
+    const stored = (await sessionStoreGet(PENDING_REGION_TABS_KEY))?.[PENDING_REGION_TABS_KEY];
+    const nextMap = stored && typeof stored === 'object' ? { ...stored } : {};
+    const storedExp = Number(nextMap[String(tabId)] || 0);
+    delete nextMap[String(tabId)];
+    for (const [k, exp] of Object.entries(nextMap)) {
+      if (Number(exp) <= now) delete nextMap[k];
+    }
+    await sessionStoreSet({ [PENDING_REGION_TABS_KEY]: nextMap });
+
+    return (typeof ramExp === 'number' && ramExp > now) || storedExp > now;
+  });
 }
 
 /**
@@ -2485,6 +2498,12 @@ export function registerServiceWorkerListeners() {
 
             case 'REGION_SELECTED': {
               const senderTabId = sender?.tab?.id;
+              if (sender?.frameId !== undefined && sender.frameId !== 0) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
               const allowed = await consumePendingRegionTab(senderTabId);
               if (!allowed) {
                 throw new SaveShotError({
@@ -2499,6 +2518,12 @@ export function registerServiceWorkerListeners() {
 
             case 'CAPTURE_VISIBLE_FROM_OVERLAY': {
               const senderTabId = sender?.tab?.id;
+              if (sender?.frameId !== undefined && sender.frameId !== 0) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
               const allowed = await consumePendingRegionTab(senderTabId);
               if (!allowed) {
                 throw new SaveShotError({
@@ -2531,6 +2556,65 @@ export function registerServiceWorkerListeners() {
                 uploadingInBackground: Boolean(result.uploadingInBackground),
                 sessionId: result.sessionId || '',
               });
+              return;
+            }
+
+            case 'CAPTURE_FULLPAGE_FROM_OVERLAY': {
+              const senderTabId = sender?.tab?.id;
+              if (sender?.frameId !== undefined && sender.frameId !== 0) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
+              const allowed = await consumePendingRegionTab(senderTabId);
+              if (!allowed) {
+                throw new SaveShotError({
+                  code: 'NO_ACTIVE_REGION_SESSION',
+                  userMessage: 'No active area selection on this tab.',
+                });
+              }
+              const liveTab = await chrome.tabs.get(senderTabId);
+              if (!liveTab || !liveTab.active) {
+                const switchedErr = new SaveShotError({
+                  code: 'TAB_SWITCHED',
+                  userMessage:
+                    'The tab changed before capture finished. Stay on the tab and try again.',
+                });
+                await sendTabToast(senderTabId, {
+                  status: 'error',
+                  title: 'Full-page capture failed',
+                  message: switchedErr.userMessage,
+                });
+                throw switchedErr;
+              }
+              try {
+                // showPageToast: false avoids duplicate toast; this catch block handles all error toasts once
+                const result = await captureFullPageFlow({
+                  tab: liveTab,
+                  showPageToast: false,
+                  interactiveAuth: false,
+                });
+                sendResponse({
+                  ok: true,
+                  aborted: Boolean(result.aborted),
+                  cancelled: Boolean(result.cancelled),
+                  openedEditor: Boolean(result.openedEditor),
+                  uploadingInBackground: Boolean(result.uploadingInBackground),
+                  sessionId: result.sessionId || '',
+                  sliceCount: result.sliceCount || 0,
+                  truncated: Boolean(result.truncated),
+                  stoppedEarly: Boolean(result.stoppedEarly),
+                });
+              } catch (err) {
+                const normalized = err instanceof SaveShotError ? err : classifyCaptureError(err);
+                await sendTabToast(senderTabId, {
+                  status: 'error',
+                  title: 'Full-page capture failed',
+                  message: normalized.userMessage,
+                });
+                throw normalized;
+              }
               return;
             }
 

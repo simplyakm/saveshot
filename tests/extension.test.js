@@ -18,9 +18,17 @@ import {
   isValidBlobTransferUrl,
   planFullPageSlice,
   putBlobInTransferCache,
+  sanitizePdfFilename,
   sanitizeScreenshotFilename,
   takeBlobFromTransferCache,
 } from '../lib/capture.js';
+import {
+  buildPdfParts,
+  extractRgbPngIdat,
+  findSmartPageBreak,
+  PDF_LIMITS,
+  planPdfPageSlices,
+} from '../lib/pdf.js';
 import {
   buildMultipartUploadBody,
   clearDriveFolderVerifyCache,
@@ -2413,8 +2421,16 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
     'Help button must appear before Copy image in editor topbar-right'
   );
   assert.ok(
-    topbarRightChunk.indexOf('id="copy-image-btn"') < topbarRightChunk.indexOf('id="download-btn"'),
-    'Copy image button must appear before Download in editor topbar-right'
+    topbarRightChunk.indexOf('id="copy-image-btn"') < topbarRightChunk.indexOf('id="copy-link-btn"'),
+    'Copy image button must appear before Copy link in editor topbar-right'
+  );
+  assert.ok(
+    topbarRightChunk.indexOf('id="copy-link-btn"') < topbarRightChunk.indexOf('id="download-btn"'),
+    'Copy link button must appear before Download in editor topbar-right'
+  );
+  assert.ok(
+    topbarRightChunk.indexOf('id="download-btn"') < topbarRightChunk.indexOf('id="save-drive-btn"'),
+    'Download button must appear before Save in editor topbar-right'
   );
   assert.ok(
     editorHtml.includes('data-tool="highlighter"'),
@@ -5956,6 +5972,320 @@ test('Pass 2 engine optimizations: computeAnnotationBounds, Drive verifyTtlMs ca
     clearDriveFolderVerifyCache();
   }
 });
+
+test('Zero-dependency PDF exporter (IHDR/IDAT passthrough, smart non-clipping page breaks, xref byte offsets, Incognito privacy), sanitizePdfFilename, and CAPTURE_FULLPAGE_FROM_OVERLAY security gate', async () => {
+  // 1. sanitizePdfFilename strips chained extensions, trailing dots, blocks dotted/spaced Windows reserved stems, and neutralizes bidi/XSS
+  assert.equal(sanitizePdfFilename('Report_2026.png'), 'Report_2026.pdf');
+  assert.equal(sanitizePdfFilename('Invoice.pdf.png'), 'Invoice.pdf');
+  assert.equal(sanitizePdfFilename('report.png.'), 'report.pdf');
+  assert.equal(sanitizeScreenshotFilename('report.png.'), 'report.png');
+  assert.equal(sanitizePdfFilename('con.backup.pdf', 'Fallback.pdf'), 'Fallback.pdf');
+  assert.equal(sanitizePdfFilename('CON .foo.pdf', 'Fallback.pdf'), 'Fallback.pdf');
+  assert.equal(sanitizePdfFilename('NUL.v2.png', 'Clean.pdf'), 'Clean.pdf');
+  assert.equal(sanitizePdfFilename('invoice\u202efdp.exe'), 'invoicefdp.exe.pdf');
+  assert.equal(sanitizePdfFilename('../secret/shot.png'), 'secret_shot.pdf');
+
+  // 2. extractRgbPngIdat parses multi-IDAT 8-bit RGB PNG and rejects RGBA/interlaced/tRNS/truncated PNGs
+  const makeChunk = (type, data) => {
+    const out = new Uint8Array(12 + data.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length, false);
+    for (let i = 0; i < 4; i += 1) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    return out;
+  };
+  const makeSyntheticPng = ({
+    w = 10,
+    h = 8,
+    bitDepth = 8,
+    colorType = 2,
+    interlace = 0,
+    extraChunks = [],
+    idats = [new Uint8Array([0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01])],
+  } = {}) => {
+    const sig = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdr = new Uint8Array(13);
+    const dv = new DataView(ihdr.buffer);
+    dv.setUint32(0, w, false);
+    dv.setUint32(4, h, false);
+    ihdr[8] = bitDepth;
+    ihdr[9] = colorType;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = interlace;
+    const chunks = [
+      sig,
+      makeChunk('IHDR', ihdr),
+      ...extraChunks,
+      ...idats.map((d) => makeChunk('IDAT', d)),
+      makeChunk('IEND', new Uint8Array(0)),
+    ];
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const full = new Uint8Array(total);
+    let p = 0;
+    for (const c of chunks) {
+      full.set(c, p);
+      p += c.length;
+    }
+    return full;
+  };
+
+  const multiIdatPng = makeSyntheticPng({
+    w: 64,
+    h: 40,
+    idats: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6, 7])],
+  });
+  const parsedRgb = extractRgbPngIdat(multiIdatPng);
+  assert.ok(parsedRgb);
+  assert.equal(parsedRgb.width, 64);
+  assert.equal(parsedRgb.height, 40);
+  assert.deepEqual(Array.from(parsedRgb.idatBytes), [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(extractRgbPngIdat(makeSyntheticPng({ colorType: 6 })), null, 'RGBA PNG must fall back');
+  assert.equal(extractRgbPngIdat(makeSyntheticPng({ interlace: 1 })), null, 'Interlaced PNG must fall back');
+  assert.equal(
+    extractRgbPngIdat(makeSyntheticPng({ extraChunks: [makeChunk('tRNS', new Uint8Array([0, 0, 0, 0, 0, 0]))] })),
+    null,
+    'RGB PNG with tRNS transparency chunk must fall back'
+  );
+  assert.equal(extractRgbPngIdat(multiIdatPng.subarray(0, 20)), null, 'Truncated PNG must return null');
+
+  // 3. findSmartPageBreak finds clean inter-line gaps on light mode, dark mode, and 2-col sidebar, and snaps back on photos
+  const makeBand = (w, h, bgRgb, painter) => {
+    const buf = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i += 1) {
+      buf[i * 4] = bgRgb[0];
+      buf[i * 4 + 1] = bgRgb[1];
+      buf[i * 4 + 2] = bgRgb[2];
+      buf[i * 4 + 3] = 255;
+    }
+    painter(buf, w, h);
+    return buf;
+  };
+  const drawTextRow = (buf, w, y, x0, x1, fgRgb) => {
+    for (let x = x0; x < x1; x += 1) {
+      if ((x % 4) < 2) {
+        const idx = (y * w + x) * 4;
+        buf[idx] = fgRgb[0];
+        buf[idx + 1] = fgRgb[1];
+        buf[idx + 2] = fgRgb[2];
+      }
+    }
+  };
+
+  // Light mode: text rows at y=0..45 and y=60..99, clean whitespace gutter at y=46..59, targetY=72 (inside text!)
+  const lightBand = makeBand(200, 100, [255, 255, 255], (buf, w) => {
+    for (let y = 0; y <= 45; y += 1) drawTextRow(buf, w, y, 20, 175, [20, 20, 24]);
+    for (let y = 60; y < 100; y += 1) drawTextRow(buf, w, y, 20, 175, [20, 20, 24]);
+  });
+  const lightBreak = findSmartPageBreak(lightBand, 200, 100, 72);
+  assert.ok(lightBreak >= 47 && lightBreak <= 58, `Light-mode break must land in clean gutter 47..58 (got ${lightBreak})`);
+
+  // Dark mode with vertical 1px sidebar border + main column gap at y=38..52, targetY=68
+  const darkBand = makeBand(200, 100, [18, 20, 24], (buf, w, h) => {
+    // 1px vertical sidebar divider at x=36 on EVERY row
+    for (let y = 0; y < h; y += 1) {
+      const idx = (y * w + 36) * 4;
+      buf[idx] = 70;
+      buf[idx + 1] = 75;
+      buf[idx + 2] = 85;
+    }
+    // Misaligned sidebar text spanning y=35..55
+    for (let y = 35; y <= 55; y += 1) drawTextRow(buf, w, y, 6, 30, [180, 185, 195]);
+    // Main column prose with clean gap at y=38..52
+    for (let y = 0; y <= 37; y += 1) drawTextRow(buf, w, y, 48, 180, [235, 240, 248]);
+    for (let y = 53; y < 100; y += 1) drawTextRow(buf, w, y, 48, 180, [235, 240, 248]);
+  });
+  const darkBreak = findSmartPageBreak(darkBand, 200, 100, 68);
+  assert.ok(darkBreak >= 39 && darkBreak <= 51, `Dark-mode 2-col break must land in main-column gutter 39..51 (got ${darkBreak})`);
+
+  // Full-bleed photo/noise across entire window: snaps cleanly back to targetY=80
+  const photoBand = makeBand(160, 100, [100, 100, 100], (buf, w, h) => {
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const idx = (y * w + x) * 4;
+        const v = ((x * 53 + y * 97 + ((x ^ y) * 31)) & 255);
+        buf[idx] = v;
+        buf[idx + 1] = (v * 3) & 255;
+        buf[idx + 2] = (v * 7) & 255;
+      }
+    }
+  });
+  const photoBreak = findSmartPageBreak(photoBand, 160, 100, 80);
+  assert.equal(photoBreak, 80, 'Uniformly noisy full-bleed photo must snap cleanly to targetY');
+
+  // 4. planPdfPageSlices handles normal single-page, narrow-crop no-upscale, sliver balancing, and 14400pt clamp
+  const singleLandscape = planPdfPageSlices(1920, 1080);
+  assert.equal(singleLandscape.length, 1);
+  assert.ok(singleLandscape[0].pageW > singleLandscape[0].pageH, '16:9 shot must produce landscape single page');
+
+  const narrowTall = planPdfPageSlices(120, 4000);
+  assert.ok(narrowTall.length <= 5, `Narrow 120x4000 crop must not upscale into dozens of pages (got ${narrowTall.length})`);
+  assert.ok(narrowTall[0].drawW <= 120 * PDF_LIMITS.MAX_PT_PER_PX + 0.1, 'Must never upscale narrow crop past 0.75 pt/px');
+
+  const mildOverflow = planPdfPageSlices(1000, 1550); // H/W = 1.55 -> single page
+  assert.equal(mildOverflow.length, 1);
+
+  const slightTallA4 = planPdfPageSlices(1000, 1600); // H/W = 1.60 > 1.55, but <= 1.12 * idealPagePx (1450) -> 1 A4 page
+  assert.equal(slightTallA4.length, 1);
+
+  const balancedTwoPage = planPdfPageSlices(1000, 1720); // ~1.19x A4 -> rebalanced ~55%/45% instead of 100%/19%
+  assert.equal(balancedTwoPage.length, 2);
+  assert.ok(
+    balancedTwoPage[1].height > 500,
+    `Trailing sliver rebalancing must avoid tiny stub page (got page2 height=${balancedTwoPage[1].height})`
+  );
+
+  const rotatedPanorama = planPdfPageSlices(16200, 1920);
+  assert.equal(rotatedPanorama.length, 1);
+  assert.ok(rotatedPanorama[0].pageW <= PDF_LIMITS.MAX_PAGE_PT);
+  assert.ok(rotatedPanorama[0].pageH <= PDF_LIMITS.MAX_PAGE_PT);
+
+  // 5. buildPdfParts produces valid PDF 1.4 with byte-exact 20-byte xref offsets and zero metadata leak
+  const pdfParts = buildPdfParts([
+    {
+      imgBytes: new Uint8Array([0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]),
+      imgWidth: 100,
+      imgHeight: 80,
+      encoding: 'flate-rgb',
+      pageW: 595.28,
+      pageH: 841.89,
+      drawX: 24,
+      drawY: 400,
+      drawW: 547.28,
+      drawH: 417.89,
+    },
+    {
+      imgBytes: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      imgWidth: 100,
+      imgHeight: 60,
+      encoding: 'jpeg',
+      pageW: 595.28,
+      pageH: 841.89,
+      drawX: 24,
+      drawY: 500,
+      drawW: 547.28,
+      drawH: 317.89,
+    },
+  ]);
+  const fullPdfLen = pdfParts.reduce((s, p) => s + p.byteLength, 0);
+  const fullPdf = new Uint8Array(fullPdfLen);
+  let pos = 0;
+  for (const part of pdfParts) {
+    fullPdf.set(part, pos);
+    pos += part.byteLength;
+  }
+  const pdfLatin1 = Buffer.from(fullPdf).toString('latin1');
+  assert.ok(pdfLatin1.startsWith('%PDF-1.4\n'), 'Must start with %PDF-1.4 header');
+  assert.ok(pdfLatin1.includes('/Producer (SaveShot) /Creator (SaveShot)'));
+  assert.ok(pdfLatin1.includes('/Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 100'));
+  assert.ok(pdfLatin1.includes('/Filter /DCTDecode'));
+  assert.ok(!pdfLatin1.includes('CreationDate'), 'Must not leak local timestamps/timezone');
+  assert.ok(pdfLatin1.trimEnd().endsWith('%%EOF'));
+
+  const startxrefMatch = pdfLatin1.match(/startxref\n(\d+)\n%%EOF/);
+  assert.ok(startxrefMatch, 'Must contain valid startxref');
+  const xrefPos = Number(startxrefMatch[1]);
+  assert.equal(pdfLatin1.slice(xrefPos, xrefPos + 5), 'xref\n', 'startxref must point to exact xref byte offset');
+  const xrefBlock = pdfLatin1.slice(xrefPos).split('trailer\n')[0];
+  const xrefLines = xrefBlock.split('\n').slice(2, -1); // 0..9 (10 entries: 0 + 3 base + 2*3 page objs)
+  assert.equal(xrefLines.length, 10);
+  assert.equal(`${xrefLines[0]}\n`.length, 20, 'Object 0 xref entry must be strictly 20 bytes');
+  for (let objId = 1; objId < xrefLines.length; objId += 1) {
+    const line = `${xrefLines[objId]}\n`;
+    assert.equal(line.length, 20, `Object ${objId} xref entry must be strictly 20 bytes`);
+    const objOff = Number(line.slice(0, 10));
+    assert.equal(
+      pdfLatin1.slice(objOff, objOff + `${objId} 0 obj\n`.length),
+      `${objId} 0 obj\n`,
+      `Object ${objId} xref offset ${objOff} must land directly on "${objId} 0 obj"`
+    );
+  }
+
+  // 6. CAPTURE_FULLPAGE_FROM_OVERLAY security gate: blocks uninitiated/cross-tab/subframe/concurrent-TOCTOU/replayed, survives SW restart
+  const injected = [];
+  const mock = installChromeMock({
+    tabs: [
+      { id: 811, active: true, windowId: 1, url: 'https://example.com/article', title: 'Article', incognito: false },
+      { id: 812, active: false, windowId: 1, url: 'https://evil.example/', title: 'Evil', incognito: false },
+    ],
+    initialStore: {
+      signedOut: true,
+      userProfile: null,
+      settings: { folderName: 'Shots', editBeforeUpload: true },
+    },
+    onTabSendMessage: async (_tabId, msg) => {
+      if (msg.type === 'START_REGION_SELECT') return { ok: true };
+      if (msg.type === 'HIDE_UI_FOR_CAPTURE') return { ok: true, removed: false };
+      if (msg.type === 'FULLPAGE_PREPARE') {
+        if (!injected.includes('content/fullpage.js')) {
+          throw new Error('Receiving end does not exist');
+        }
+        return {
+          ok: true,
+          sessionToken: 'tok-overlay-fp',
+          viewportWidth: 400,
+          viewportHeight: 300,
+          scrollStepHeight: 300,
+          actualY: 0,
+          totalHeight: 300,
+          devicePixelRatio: 1,
+          containerRect: null,
+        };
+      }
+      if (msg.type === 'FULLPAGE_PILL') return { ok: true, sessionToken: 'tok-overlay-fp', cancelled: false };
+      if (msg.type === 'FULLPAGE_RESTORE') return { ok: true };
+      return { ok: true };
+    },
+  });
+  globalThis.chrome.scripting.executeScript = async ({ files }) => {
+    injected.push(...(files || []));
+    return [];
+  };
+
+  const {
+    registerServiceWorkerListeners,
+    resetInMemoryWorkerStateForTests,
+  } = await import('../background/service-worker.js');
+  resetInMemoryWorkerStateForTests();
+  if (mock.listeners.onMessage.length === 0) {
+    registerServiceWorkerListeners();
+  }
+  const extSender = { url: 'chrome-extension://testext/popup/popup.html' };
+  const tab811Sender = { frameId: 0, tab: { id: 811, windowId: 1, url: 'https://example.com/article', active: true } };
+  const tab811SubframeSender = { frameId: 7, tab: { id: 811, windowId: 1, url: 'https://example.com/article', active: true } };
+  const tab812Sender = { frameId: 0, tab: { id: 812, windowId: 1, url: 'https://evil.example/', active: false } };
+
+  // Uninitiated overlay full-page request is blocked
+  const uninitRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811Sender);
+  assert.equal(uninitRes.ok, false);
+  assert.equal(uninitRes.code, 'NO_ACTIVE_REGION_SESSION');
+
+  // Authorize region capture on tab 811 -> cross-tab and non-top-frame requests are blocked
+  const startReg = await mock.dispatchMessage({ type: 'START_REGION_CAPTURE', tabId: 811 }, extSender);
+  assert.equal(startReg.ok, true);
+  const crossTabRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab812Sender);
+  assert.equal(crossTabRes.ok, false);
+  assert.equal(crossTabRes.code, 'NO_ACTIVE_REGION_SESSION');
+  const subframeRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811SubframeSender);
+  assert.equal(subframeRes.ok, false);
+  assert.equal(subframeRes.code, 'NO_ACTIVE_REGION_SESSION');
+
+  // Survives MV3 SW cold restart via chrome.storage.session, and concurrent duplicate overlay calls allow strictly 1
+  resetInMemoryWorkerStateForTests();
+  const [raceA, raceB] = await Promise.all([
+    mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811Sender),
+    mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811Sender),
+  ]);
+  const okCount = [raceA, raceB].filter((r) => r.ok).length;
+  const blockedCount = [raceA, raceB].filter((r) => !r.ok && r.code === 'NO_ACTIVE_REGION_SESSION').length;
+  assert.equal(okCount, 1, `Concurrent overlay requests must allow strictly 1 (got ${JSON.stringify([raceA, raceB])})`);
+  assert.equal(blockedCount, 1, 'Second concurrent overlay request must be atomically rejected');
+
+  const replayRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE_FROM_OVERLAY' }, tab811Sender);
+  assert.equal(replayRes.ok, false);
+  assert.equal(replayRes.code, 'NO_ACTIVE_REGION_SESSION');
+});
+
 
 
 

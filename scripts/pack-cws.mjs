@@ -20,6 +20,7 @@ const EXTENSION_FILES = [
   'lib/editor-core.js',
   'lib/errors.js',
   'lib/feedback.js',
+  'lib/pdf.js',
   'lib/storage.js',
   'lib/theme-boot.js',
   'lib/ui.js',
