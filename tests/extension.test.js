@@ -8,6 +8,7 @@ import {
   blobToDataUrl,
   buildScreenshotFilename,
   computeCropRect,
+  createThumbnailDataUrl,
   dataUrlToBlob,
   FULLPAGE_LIMITS,
   isCapturableUrl,
@@ -45,6 +46,7 @@ import {
 import {
   addRecentUpload,
   getAccountFolderCache,
+  getExtensionStateSnapshot,
   getRecentUploads,
   getSettings,
   normalizeAutoCopyMode,
@@ -84,6 +86,7 @@ import {
 } from '../lib/editor-core.js';
 import {
   applyDocumentTheme,
+  didAuthProfileVisiblyChange,
   formatShortcutDisplay,
   initThemeSync,
   normalizeTheme,
@@ -5302,6 +5305,308 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     globalThis.OffscreenCanvas = origOffscreenCanvas;
   }
 });
+
+test('Pass 1 performance optimizations: SWR auth revalidation, verifiedAt diff filter, batched snapshot, capped 96x72 thumbnails, and lightweight SW paths', async () => {
+  const origFetch = globalThis.fetch;
+  const origCreateImageBitmap = globalThis.createImageBitmap;
+  const origOffscreenCanvas = globalThis.OffscreenCanvas;
+  const origLocalStorage = globalThis.localStorage;
+
+  try {
+    // 1. didAuthProfileVisiblyChange ignores verifiedAt-only refresh & unchanged signedOut, catches real auth/profile changes
+    assert.equal(
+      didAuthProfileVisiblyChange({
+        signedOut: { oldValue: false, newValue: false },
+        userProfile: {
+          oldValue: { email: 'a@x.com', name: 'A', picture: 'https://img/1', verifiedAt: 100 },
+          newValue: { email: 'a@x.com', name: 'A', picture: 'https://img/1', verifiedAt: 99999 },
+        },
+      }),
+      false,
+      'verifiedAt-only refresh must NOT trigger redundant reload'
+    );
+    assert.equal(
+      didAuthProfileVisiblyChange({
+        signedOut: { oldValue: false, newValue: true },
+      }),
+      true
+    );
+    assert.equal(
+      didAuthProfileVisiblyChange({
+        userProfile: {
+          oldValue: { email: 'a@x.com', name: 'A', picture: '' },
+          newValue: { email: 'b@x.com', name: 'B', picture: '' },
+        },
+      }),
+      true
+    );
+    assert.equal(
+      didAuthProfileVisiblyChange({
+        userProfile: {
+          oldValue: { email: 'a@x.com', name: 'A', picture: '' },
+          newValue: null,
+        },
+      }),
+      true
+    );
+
+    // 2. applyDocumentTheme mirrors theme to localStorage for zero-FOUC lib/theme-boot.js
+    const memLS = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => (memLS.has(k) ? memLS.get(k) : null),
+      setItem: (k, v) => memLS.set(k, String(v)),
+      removeItem: (k) => memLS.delete(k),
+    };
+    const fakeDoc = { documentElement: { dataset: {} } };
+    applyDocumentTheme('dark', fakeDoc);
+    assert.equal(memLS.get('ss_theme'), 'dark');
+    applyDocumentTheme('light', fakeDoc);
+    assert.equal(memLS.get('ss_theme'), 'light');
+    applyDocumentTheme('auto', fakeDoc);
+    assert.equal(memLS.has('ss_theme'), false);
+    assert.ok(fs.existsSync(path.join(rootDir, 'lib/theme-boot.js')));
+
+    // 3. getExtensionStateSnapshot reads settings, recentUploads, and authState in a single storage.local.get IPC
+    resetAuthMemoryForTests();
+    let localGetCalls = 0;
+    installChromeMock({
+      initialStore: {
+        settings: { folderName: 'FastShots', theme: 'dark', autoCopyMode: 'image' },
+        recentUploads: [{ id: 'f1', name: 'shot.png' }],
+        signedOut: false,
+        userProfile: { email: 'fast@example.com', name: 'Fast', verifiedAt: 1 },
+      },
+    });
+    const origLocalGet = globalThis.chrome.storage.local.get;
+    globalThis.chrome.storage.local.get = async (keys) => {
+      localGetCalls += 1;
+      return origLocalGet(keys);
+    };
+    const snap = await getExtensionStateSnapshot();
+    assert.equal(localGetCalls, 1, 'getExtensionStateSnapshot must batch into 1 storage IPC');
+    assert.equal(snap.settings.folderName, 'FastShots');
+    assert.equal(snap.recentUploads.length, 1);
+    assert.equal(snap.authState.userProfile.email, 'fast@example.com');
+
+    // 4. getSilentAuthSession SWR returns immediately without blocking on slow /drive/v3/about,
+    //    yet background revalidation still revokes 403 DRIVE_SCOPE_MISSING and updates storage!
+    resetAuthMemoryForTests();
+    const swrRevoked = [];
+    const { store: swrStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'swr@example.com', name: 'SWR', verifiedAt: 1 },
+      },
+    });
+    let releaseSlowAbout;
+    const slow403Fetch = (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        swrRevoked.push(u);
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return new Promise((resolve) => {
+        releaseSlowAbout = () => resolve(new Response('', { status: 403 }));
+      });
+    };
+
+    const t0 = Date.now();
+    const swrRes = await getSilentAuthSession(slow403Fetch, {
+      allowStaleWhileRevalidate: true,
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(swrRes.signedIn, true, 'SWR must return cached session immediately');
+    assert.equal(swrRes.profile.email, 'swr@example.com');
+    assert.ok(elapsed < 100, `SWR must not block on slow network (took ${elapsed}ms)`);
+
+    // Now release the background 403 response and verify grant revocation + signedOut transition
+    releaseSlowAbout();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(swrStore.signedOut, true, 'Background revalidation 403 must sign out');
+    assert.equal(swrStore.userProfile, null);
+    assert.ok(swrRevoked.length >= 1, 'Background revalidation 403 must revoke incomplete grant');
+
+    // 5. SWR background revalidation racing against signOut must NEVER resurrect signedOut=false
+    resetAuthMemoryForTests();
+    const swrRaceRevoked = [];
+    const { store: swrRaceStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'race@example.com', name: 'Race', verifiedAt: 1 },
+      },
+    });
+    let releaseRaceAbout;
+    const raceAboutFetch = (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        swrRaceRevoked.push(u);
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return new Promise((resolve) => {
+        releaseRaceAbout = () =>
+          resolve(
+            new Response(
+              JSON.stringify({ user: { displayName: 'Race', emailAddress: 'race@example.com' } }),
+              { status: 200 }
+            )
+          );
+      });
+    };
+    const raceSwrRes = await getSilentAuthSession(raceAboutFetch, {
+      allowStaleWhileRevalidate: true,
+    });
+    assert.equal(raceSwrRes.signedIn, true);
+    await signOut(raceAboutFetch);
+    releaseRaceAbout();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(swrRaceStore.signedOut, true, 'SWR background revalidation must never undo signOut');
+    assert.equal(swrRaceStore.userProfile, null);
+    assert.ok(swrRaceRevoked.length >= 1);
+
+    // 6. createThumbnailDataUrl caps tall full-page screenshots to <= 96x72 and passes resizeWidth
+    let sawResizeWidth = null;
+    let thumbCanvasW = 0;
+    let thumbCanvasH = 0;
+    globalThis.createImageBitmap = async (_blob, opts) => {
+      sawResizeWidth = opts?.resizeWidth ?? null;
+      return { width: 96, height: 614, close() {} };
+    };
+    globalThis.OffscreenCanvas = class {
+      constructor(w, h) {
+        thumbCanvasW = w;
+        thumbCanvasH = h;
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return { imageSmoothingEnabled: true, imageSmoothingQuality: '', drawImage() {} };
+      }
+      async convertToBlob() {
+        return new Blob([new Uint8Array([82, 73, 70, 70])], { type: 'image/webp' });
+      }
+    };
+    const thumbUrl = await createThumbnailDataUrl(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }));
+    assert.equal(sawResizeWidth, 96, 'createThumbnailDataUrl should pass resizeWidth hint');
+    assert.equal(thumbCanvasW, 96);
+    assert.equal(thumbCanvasH, 72, 'Tall full-page thumbnail must be capped at 72px height');
+    assert.ok(thumbUrl.startsWith('data:image/webp;base64,'));
+
+    // 7. Service worker GET_STATE lightweight flags & pre-queried tabUrl skip redundant chrome.tabs.get
+    resetAuthMemoryForTests();
+    let tabsGetCount = 0;
+    const mock = installChromeMock({
+      tabs: [{ id: 801, active: true, windowId: 1, url: 'https://example.com/a', incognito: false }],
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'sw@example.com', name: 'SW', verifiedAt: Date.now() },
+        recentUploads: [{ id: 'u1', name: 'one.png' }],
+      },
+    });
+    const origTabsGet = globalThis.chrome.tabs.get;
+    globalThis.chrome.tabs.get = async (id) => {
+      tabsGetCount += 1;
+      return origTabsGet(id);
+    };
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+    } = await import('../background/service-worker.js');
+    resetInMemoryWorkerStateForTests();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
+
+    const trustedSender = { url: 'chrome-extension://testext/popup/popup.html' };
+    const lightState = await mock.dispatchMessage(
+      { type: 'GET_STATE', includeTab: false, includeRecent: false },
+      trustedSender
+    );
+    assert.equal(lightState.ok, true);
+    assert.equal(tabsGetCount, 0, 'includeTab: false must skip chrome.tabs.get');
+    assert.deepEqual(lightState.recentUploads, [], 'includeRecent: false must return empty recentUploads');
+
+    const fastPopupState = await mock.dispatchMessage(
+      { type: 'GET_STATE', tabId: 801, tabUrl: 'https://example.com/a', tabIncognito: false },
+      trustedSender
+    );
+    assert.equal(fastPopupState.ok, true);
+    assert.equal(tabsGetCount, 0, 'Pre-queried trusted tabUrl must skip redundant chrome.tabs.get');
+    assert.equal(fastPopupState.capturable.canCaptureVisible, true);
+    assert.equal(fastPopupState.recentUploads.length, 1);
+
+    // 8. SWR background revalidation racing with signOut() + new signIn() must NEVER revoke or sign out the new session
+    resetAuthMemoryForTests();
+    const revokedAfterNewSignIn = [];
+    const { store: reSignInStore } = installChromeMock({
+      initialStore: {
+        signedOut: false,
+        userProfile: { email: 'old@example.com', name: 'Old', verifiedAt: 1 },
+      },
+      onGetAuthToken: ({ interactive }) => ({
+        token: interactive ? 'tok-brand-new-session' : 'tok-old-session',
+      }),
+    });
+    let releaseOld401;
+    const oldSessionFetch = (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        revokedAfterNewSignIn.push(u);
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return new Promise((resolve) => {
+        releaseOld401 = () => resolve(new Response('', { status: 401 }));
+      });
+    };
+    const newSessionFetch = async (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return new Response('', { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ user: { displayName: 'New User', emailAddress: 'new@example.com' } }),
+        { status: 200 }
+      );
+    };
+
+    const oldSwr = await getSilentAuthSession(oldSessionFetch, {
+      allowStaleWhileRevalidate: true,
+    });
+    assert.equal(oldSwr.signedIn, true);
+    await signOut(newSessionFetch);
+    const freshSignIn = await signIn(newSessionFetch);
+    assert.equal(freshSignIn.profile.email, 'new@example.com');
+    // Now the stale background SWR 401 resolves AFTER a brand-new signIn()!
+    releaseOld401();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(reSignInStore.signedOut, false, 'Stale SWR 401 must NEVER sign out a newer signIn()');
+    assert.equal(reSignInStore.userProfile?.email, 'new@example.com');
+    assert.equal(
+      revokedAfterNewSignIn.filter((u) => u.includes('tok-brand-new-session')).length,
+      0,
+      'Stale SWR must NEVER revoke the new session token'
+    );
+
+    // 9. Narrow (<96px) real PNG header must NOT pass resizeWidth (prevents upscaling small regions)
+    const smallPngHeader = new Uint8Array(24);
+    smallPngHeader.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    new DataView(smallPngHeader.buffer).setUint32(16, 40, false); // IHDR width = 40px
+    let narrowResizeOpt = 'unset';
+    globalThis.createImageBitmap = async (_blob, opts) => {
+      narrowResizeOpt = opts?.resizeWidth ?? null;
+      return { width: 40, height: 200, close() {} };
+    };
+    await createThumbnailDataUrl(new Blob([smallPngHeader], { type: 'image/png' }));
+    assert.equal(narrowResizeOpt, null, 'PNG narrower than maxWidth must NOT pass resizeWidth');
+    assert.equal(thumbCanvasW, 40, 'Narrow 40px PNG must keep 1:1 width without upscaling');
+    assert.equal(thumbCanvasH, 72, 'Narrow tall PNG must cap height at 72px');
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.createImageBitmap = origCreateImageBitmap;
+    globalThis.OffscreenCanvas = origOffscreenCanvas;
+    globalThis.localStorage = origLocalStorage;
+  }
+});
+
 
 
 

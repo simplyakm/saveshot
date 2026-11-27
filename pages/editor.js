@@ -17,7 +17,12 @@ import {
   STROKE_SIZES,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
-import { initThemeSync, safeHttpsUrl, sendRuntimeMessage } from '../lib/ui.js';
+import {
+  didAuthProfileVisiblyChange,
+  initThemeSync,
+  safeHttpsUrl,
+  sendRuntimeMessage,
+} from '../lib/ui.js';
 
 const MAX_UNDO_STEPS = 20;
 const MIN_UNDO_STEPS = 3;
@@ -180,6 +185,7 @@ function hasUnsavedChanges() {
 }
 
 let statusPillTimer = null;
+let initialAutoCopyPromise = null;
 
 function clearStatusPillIfIdle() {
   if (state.saving || state.uploadState === 'uploading' || state.uploadState === 'failed') {
@@ -1952,7 +1958,11 @@ function stopUploadStatusPoll() {
 async function syncAuthStateFromWorker() {
   if (state.saving || !state.ready) return;
   try {
-    const res = await sendRuntimeMessage({ type: 'GET_STATE' });
+    const res = await sendRuntimeMessage({
+      type: 'GET_STATE',
+      includeTab: false,
+      includeRecent: false,
+    });
     if (!res?.ok || state.saving) return;
 
     if (res.settings) {
@@ -2012,7 +2022,11 @@ function startUploadStatusPoll() {
         await applyBackgroundUploadUpdate(res);
       } else if (res && !res.ok && res.code === 'EDITOR_SESSION_EXPIRED') {
         stopUploadStatusPoll();
-        const stateRes = await sendRuntimeMessage({ type: 'GET_STATE' }).catch(() => null);
+        const stateRes = await sendRuntimeMessage({
+          type: 'GET_STATE',
+          includeTab: false,
+          includeRecent: false,
+        }).catch(() => null);
         if (stateRes?.ok && !stateRes.session?.signedIn) {
           await syncAuthStateFromWorker();
         } else {
@@ -2028,7 +2042,7 @@ function startUploadStatusPoll() {
     } catch {
       // Ignore transient poll errors while waiting for background upload
     }
-  }, 2500);
+  }, 6000);
 }
 
 async function tryAutoCopyShareLink() {
@@ -2108,6 +2122,9 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
     }
 
     const copiedLink = await tryAutoCopyShareLink();
+    if (initialAutoCopyPromise) {
+      await initialAutoCopyPromise.catch(() => false);
+    }
 
     if (state.saving) {
       updateUiState();
@@ -2651,18 +2668,24 @@ async function initEditor() {
     baseCtx.drawImage(bitmap, 0, 0);
     syncPreviewCanvasSize();
 
-    // Auto-copy PNG image immediately on fresh capture BEFORE marking ready so background
-    // upload status updates cannot race ahead of state.autoImageCopied
-    let copiedInitialImage = false;
-    if (res.session.isFreshCapture && state.autoCopyMode === 'image') {
-      copiedInitialImage = await tryAutoCopyInitialImage(blob);
-    }
-
+    // Paint and activate the editor immediately so Chromium's clipboard PNG encoder
+    // never blocks first paint, dimensions/zoom layout, or drawing controls
     state.ready = true;
     els.stageMessage.hidden = true;
     els.canvasWrap.hidden = false;
     updateDimensionsLabel();
     updateUiState();
+
+    const shouldAutoCopyImage =
+      Boolean(res.session.isFreshCapture) && state.autoCopyMode === 'image';
+    const autoCopyPromise = shouldAutoCopyImage
+      ? tryAutoCopyInitialImage(blob).finally(() => {
+          if (initialAutoCopyPromise === autoCopyPromise) {
+            initialAutoCopyPromise = null;
+          }
+        })
+      : Promise.resolve(false);
+    initialAutoCopyPromise = shouldAutoCopyImage ? autoCopyPromise : null;
 
     if (pendingUploadUpdate && pendingUploadUpdate.sessionId === state.sessionId) {
       const queued = pendingUploadUpdate;
@@ -2691,27 +2714,63 @@ async function initEditor() {
     } else if (state.captureNotice) {
       const notice = state.captureNotice;
       state.captureNotice = '';
-      showStatusPill(
-        'warn',
-        copiedInitialImage ? `${notice} \u00b7 Image copied` : notice,
-        5500
-      );
-    } else if (copiedInitialImage) {
-      showStatusPill('ok', 'Copied image to clipboard', 3000);
+      showStatusPill('warn', notice, 5500);
     }
 
     if (state.captureNotice && !els.statusPill.classList.contains('err')) {
       const notice = state.captureNotice;
       state.captureNotice = '';
       if (state.uploadState === 'uploading') {
-        const msg = copiedInitialImage ? `${notice} \u00b7 Image copied` : notice;
-        showStatusPill('warn', msg, 4500);
+        showStatusPill('warn', notice, 4500);
       } else if (state.uploadState === 'uploaded') {
         const suffix = state.autoImageCopied
           ? ' \u00b7 Saved to Drive \u00b7 Image copied'
           : ' \u00b7 Saved to Drive';
         showStatusPill('warn', `${notice}${suffix}`, 6000);
       }
+    }
+
+    if (shouldAutoCopyImage) {
+      autoCopyPromise
+        .then((copiedInitialImage) => {
+          if (!copiedInitialImage || state.saving) return;
+          if (state.signedIn && state.uploadState === 'uploading') {
+            if (els.statusPill.textContent === 'Uploading to Google Drive...') {
+              restorePersistentUploadPill();
+            } else if (
+              !els.statusPill.hidden &&
+              !els.statusPill.textContent.includes('Image copied')
+            ) {
+              showStatusPill(
+                'warn',
+                `${els.statusPill.textContent} \u00b7 Image copied`,
+                4500
+              );
+            }
+          } else if (
+            state.uploadState === 'uploaded' &&
+            !hasUnsavedChanges() &&
+            !els.statusPill.hidden &&
+            !els.statusPill.textContent.includes('Image copied') &&
+            !els.statusPill.classList.contains('err')
+          ) {
+            const pillKind = els.statusPill.classList.contains('warn') ? 'warn' : 'ok';
+            showStatusPill(
+              pillKind,
+              `${els.statusPill.textContent} \u00b7 Image copied`,
+              4500
+            );
+          } else if (!els.statusPill.hidden && !els.statusPill.textContent.includes('Image copied') && els.statusPill.classList.contains('warn')) {
+            showStatusPill(
+              'warn',
+              `${els.statusPill.textContent} \u00b7 Image copied`,
+              5500
+            );
+          } else if (els.statusPill.hidden && !hasUnsavedChanges()) {
+            showStatusPill('ok', 'Copied image to clipboard', 3000);
+          }
+        })
+        .catch(() => {});
     }
 
     if (pendingAuthRefresh) {
@@ -2759,7 +2818,7 @@ if (chrome?.storage?.onChanged?.addListener) {
     }
 
     if (areaName !== 'local') return;
-    if (!changes.signedOut && !changes.userProfile) return;
+    if (!didAuthProfileVisiblyChange(changes)) return;
 
     if (!state.ready) {
       pendingAuthRefresh = true;

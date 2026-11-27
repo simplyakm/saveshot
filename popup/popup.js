@@ -1,5 +1,8 @@
+import { isCapturableUrl } from '../lib/capture.js';
+import { normalizeSettingsObject } from '../lib/storage.js';
 import {
   applyDocumentTheme,
+  didAuthProfileVisiblyChange,
   formatShortcutDisplay,
   initThemeSync,
   normalizeTheme,
@@ -112,12 +115,12 @@ function openHelpPage({ kind = '', errorCode = '', jumpToFeedback = false } = {}
   chrome.tabs.create({ url: chrome.runtime.getURL(`pages/welcome.html${qs}${hash}`) });
 }
 
-async function getPopupWindowTabId() {
+async function getPopupActiveTab() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return typeof tab?.id === 'number' ? tab.id : undefined;
+    return tab || null;
   } catch {
-    return undefined;
+    return null;
   }
 }
 
@@ -317,19 +320,29 @@ function setAvatarInitial(initial) {
   els.userAvatar.replaceChildren(span);
 }
 
+let lastRenderedProfileKey = '';
+let lastRenderedUploadsKey = '';
+
 function renderProfile(profile) {
   const name = profile?.name || 'Google Account';
   const email = profile?.email || '';
+  const safePic = safeHttpsUrl(profile?.picture);
+  const profileKey = `${email}\0${name}\0${safePic}`;
+  if (profileKey === lastRenderedProfileKey) return;
+  lastRenderedProfileKey = profileKey;
+
   els.userEmail.textContent = email || name;
   els.userEmail.title = email && name && name !== email ? `${name} (${email})` : email || name;
 
   const initial = (email || name || 'G').trim().charAt(0).toUpperCase();
-  const safePic = safeHttpsUrl(profile?.picture);
 
   if (safePic) {
     const img = document.createElement('img');
     img.src = safePic;
     img.alt = name;
+    img.width = 18;
+    img.height = 18;
+    img.decoding = 'async';
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('error', () => setAvatarInitial(initial));
     els.userAvatar.replaceChildren(img);
@@ -369,6 +382,16 @@ function renderSettings(settings) {
 
 function renderRecentUploads(uploads) {
   const list = Array.isArray(uploads) ? uploads : [];
+  const uploadsKey = list
+    .map(
+      (item) =>
+        `${item.id || ''}|${item.name || ''}|${item.pageTitle || ''}|${item.mode || ''}|${item.createdTime || ''}|${item.webViewLink || ''}|${(item.thumbnailDataUrl || '').length}`
+    )
+    .join('\n');
+  if (uploadsKey === lastRenderedUploadsKey && els.uploadList.hidden === (list.length === 0)) {
+    return;
+  }
+  lastRenderedUploadsKey = uploadsKey;
 
   if (list.length === 0) {
     els.uploadList.replaceChildren();
@@ -396,6 +419,9 @@ function renderRecentUploads(uploads) {
       thumb.className = 'upload-thumb';
       thumb.src = item.thumbnailDataUrl;
       thumb.alt = item.name || 'Screenshot';
+      thumb.width = 42;
+      thumb.height = 30;
+      thumb.decoding = 'async';
       li.append(thumb);
     } else {
       const placeholder = document.createElement('div');
@@ -566,21 +592,93 @@ function initStaticMetadata() {
 let stateLoadSeq = 0;
 let stateLoadInFlight = false;
 let pendingRecentUploads = null;
+let userMutatedSettings = false;
+let statusOwnedByAction = false;
 
-async function loadState({ showSpinner = true } = {}) {
+function isFileSchemeAllowedPopup() {
+  if (typeof chrome?.extension?.isAllowedFileSchemeAccess !== 'function') {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    chrome.extension.isAllowedFileSchemeAccess((allowed) => {
+      void chrome.runtime?.lastError;
+      resolve(Boolean(allowed));
+    });
+  });
+}
+
+async function hydratePopupFromLocalCache(cachedData, activeTab) {
+  if (!cachedData || typeof cachedData !== 'object') return false;
+  const settings = normalizeSettingsObject(cachedData.settings);
+  renderSettings(settings);
+
+  const tabUrl = typeof activeTab?.url === 'string' ? activeTab.url : '';
+  currentState.activeTabId = typeof activeTab?.id === 'number' ? activeTab.id : undefined;
+  currentState.incognito = Boolean(activeTab?.incognito);
+  if (tabUrl) {
+    const allowFileScheme = tabUrl.startsWith('file:')
+      ? await isFileSchemeAllowedPopup()
+      : true;
+    currentState.capturable = isCapturableUrl(tabUrl, { allowFileScheme });
+  } else if (typeof activeTab?.id === 'number') {
+    // Restricted pages (chrome://, Chrome Web Store) omit tab.url under activeTab
+    currentState.capturable = isCapturableUrl('');
+  } else {
+    currentState.capturable = { ok: true, canCaptureVisible: true, canCaptureRegion: true };
+  }
+
+  const hasProfile = Boolean(cachedData.userProfile?.email || cachedData.userProfile?.name);
+  const signedIn = !Boolean(cachedData.signedOut) && hasProfile;
+  currentState.signedIn = signedIn;
+
+  if (signedIn) {
+    renderProfile(cachedData.userProfile);
+    renderRecentUploads(Array.isArray(cachedData.recentUploads) ? cachedData.recentUploads : []);
+  } else {
+    renderRecentUploads([]);
+  }
+  updateCaptureAvailability();
+  showView('main', { signedIn, needsSetup: false });
+  return true;
+}
+
+async function loadState({ showSpinner = true, useLocalCache = false } = {}) {
   const seq = ++stateLoadSeq;
   stateLoadInFlight = true;
   pendingRecentUploads = null;
+  if (!useLocalCache) {
+    userMutatedSettings = false;
+    statusOwnedByAction = false;
+  }
   if (showSpinner) {
     showView('loading');
   }
   try {
-    currentState.activeTabId = await getPopupWindowTabId();
+    let activeTab = null;
+    if (useLocalCache && chrome?.storage?.local?.get) {
+      const [cachedData, queriedTab] = await Promise.all([
+        chrome.storage.local
+          .get(['settings', 'recentUploads', 'signedOut', 'userProfile'])
+          .catch(() => null),
+        getPopupActiveTab(),
+      ]);
+      if (seq !== stateLoadSeq || authActionInFlight) return;
+      activeTab = queriedTab;
+      await hydratePopupFromLocalCache(cachedData, activeTab);
+      if (seq !== stateLoadSeq || authActionInFlight) return;
+    } else {
+      activeTab = await getPopupActiveTab();
+      if (seq !== stateLoadSeq || authActionInFlight) return;
+    }
+
+    currentState.activeTabId = typeof activeTab?.id === 'number' ? activeTab.id : undefined;
     const res = await sendRuntimeMessage({
       type: 'GET_STATE',
       tabId: currentState.activeTabId,
+      tabUrl: typeof activeTab?.url === 'string' ? activeTab.url : '',
+      tabIncognito: Boolean(activeTab?.incognito),
     });
-    if (seq !== stateLoadSeq) return;
+    if (seq !== stateLoadSeq || authActionInFlight) return;
     if (!res.ok) throw new Error(res.error);
 
     currentState.capturable = res.capturable || {
@@ -591,7 +689,7 @@ async function loadState({ showSpinner = true } = {}) {
     currentState.incognito = Boolean(res.incognito);
     currentState.lastErrorCode = res.lastErrorCode || '';
 
-    if (res.settings) {
+    if (res.settings && !userMutatedSettings) {
       renderSettings(res.settings);
     }
 
@@ -599,9 +697,11 @@ async function loadState({ showSpinner = true } = {}) {
       currentState.signedIn = false;
       pendingRecentUploads = null;
       renderRecentUploads([]);
-      els.authError.hidden = true;
+      if (!statusOwnedByAction) {
+        els.authError.hidden = true;
+      }
       updateCaptureAvailability();
-      hideStatus();
+      if (!currentState.busy && !statusOwnedByAction) hideStatus();
       showView('main', {
         signedIn: false,
         needsSetup: Boolean(res.session?.needsSetup),
@@ -615,10 +715,10 @@ async function loadState({ showSpinner = true } = {}) {
     renderProfile(res.session.profile);
     renderRecentUploads(recentToRender);
     updateCaptureAvailability();
-    hideStatus();
+    if (!currentState.busy && !statusOwnedByAction) hideStatus();
     showView('main', { signedIn: true, needsSetup: false });
   } catch (err) {
-    if (seq !== stateLoadSeq) return;
+    if (seq !== stateLoadSeq || authActionInFlight) return;
     currentState.signedIn = false;
     pendingRecentUploads = null;
     els.authError.textContent = err.message || 'Could not load SaveShot.';
@@ -645,6 +745,8 @@ els.footerBugBtn.addEventListener('click', () =>
 els.signInBtn.addEventListener('click', async () => {
   els.signInBtn.disabled = true;
   els.authError.hidden = true;
+  stateLoadSeq += 1;
+  statusOwnedByAction = true;
   authActionInFlight = true;
   try {
     const res = await sendRuntimeMessage({ type: 'SIGN_IN' });
@@ -653,6 +755,7 @@ els.signInBtn.addEventListener('click', async () => {
       err.code = res.code;
       throw err;
     }
+    authActionInFlight = false;
     await loadState({ showSpinner: false });
   } catch (err) {
     els.authError.textContent = err.message || 'Google sign-in failed.';
@@ -667,6 +770,9 @@ els.signInBtn.addEventListener('click', async () => {
 
 els.signOutBtn.addEventListener('click', async () => {
   els.signOutBtn.disabled = true;
+  stateLoadSeq += 1;
+  statusOwnedByAction = false;
+  userMutatedSettings = false;
   authActionInFlight = true;
   try {
     await sendRuntimeMessage({ type: 'SIGN_OUT' });
@@ -695,6 +801,8 @@ els.settingsToggleBtn.addEventListener('click', () => {
 els.saveFolderBtn.addEventListener('click', async () => {
   const folderName = els.folderNameInput.value.trim() || 'Chrome_SaveShot_ScreenShots';
   els.saveFolderBtn.disabled = true;
+  userMutatedSettings = true;
+  statusOwnedByAction = true;
   try {
     const res = await sendRuntimeMessage({
       type: 'UPDATE_SETTINGS',
@@ -714,6 +822,7 @@ els.saveFolderBtn.addEventListener('click', async () => {
 for (const btn of els.themeSegmented.querySelectorAll('[data-theme-opt]')) {
   btn.addEventListener('click', async () => {
     const theme = normalizeTheme(btn.dataset.themeOpt);
+    userMutatedSettings = true;
     renderThemeButtons(theme);
     const res = await sendRuntimeMessage({
       type: 'UPDATE_SETTINGS',
@@ -727,6 +836,7 @@ for (const btn of els.autoCopySegmented.querySelectorAll('[data-copy-opt]')) {
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     const autoCopyMode = btn.dataset.copyOpt;
+    userMutatedSettings = true;
     renderAutoCopyButtons(autoCopyMode);
     const res = await sendRuntimeMessage({
       type: 'UPDATE_SETTINGS',
@@ -737,6 +847,7 @@ for (const btn of els.autoCopySegmented.querySelectorAll('[data-copy-opt]')) {
 }
 
 els.editBeforeUploadCheckbox.addEventListener('change', async () => {
+  userMutatedSettings = true;
   const res = await sendRuntimeMessage({
     type: 'UPDATE_SETTINGS',
     patch: { editBeforeUpload: els.editBeforeUploadCheckbox.checked },
@@ -747,6 +858,7 @@ els.editBeforeUploadCheckbox.addEventListener('change', async () => {
 els.captureVisibleBtn.addEventListener('click', async () => {
   if (currentState.busy) return;
   currentState.busy = true;
+  statusOwnedByAction = true;
   updateCaptureAvailability();
   showStatus('loading', 'Opening screenshot editor...');
 
@@ -781,6 +893,7 @@ els.captureVisibleBtn.addEventListener('click', async () => {
 els.captureFullpageBtn.addEventListener('click', async () => {
   if (currentState.busy) return;
   currentState.busy = true;
+  statusOwnedByAction = true;
   updateCaptureAvailability();
   showStatus('loading', 'Starting full-page capture...');
 
@@ -814,6 +927,7 @@ els.captureFullpageBtn.addEventListener('click', async () => {
 els.captureRegionBtn.addEventListener('click', async () => {
   if (currentState.busy) return;
   currentState.busy = true;
+  statusOwnedByAction = true;
   updateCaptureAvailability();
 
   try {
@@ -890,7 +1004,7 @@ els.clearHistoryBtn.addEventListener('click', async () => {
 if (chrome?.storage?.onChanged?.addListener) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local' || authActionInFlight) return;
-    if (changes.signedOut || changes.userProfile) {
+    if (didAuthProfileVisiblyChange(changes)) {
       loadState({ showSpinner: false });
       if (changes.recentUploads) {
         pendingRecentUploads = changes.recentUploads.newValue || [];
@@ -912,6 +1026,6 @@ if (chrome?.storage?.onChanged?.addListener) {
   });
 }
 
-initThemeSync();
+initThemeSync(null, { skipInitialRead: true });
 initStaticMetadata();
-loadState();
+loadState({ showSpinner: false, useLocalCache: true });

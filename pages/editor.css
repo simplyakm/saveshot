@@ -236,7 +236,6 @@ body {
 
 .dock {
   background: var(--ss-dock-bg);
-  backdrop-filter: blur(12px);
   box-shadow: var(--ss-dock-shadow);
   border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius-dock);
@@ -250,7 +249,6 @@ body {
 
 .context-bar {
   background: var(--ss-dock-bg);
-  backdrop-filter: blur(12px);
   box-shadow: var(--ss-dock-shadow);
   border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius-ctrl);
