@@ -644,7 +644,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     );
     assert.equal(welcomeCheck.accountHeading, 'Autosave to your Google Drive');
     assert.equal(welcomeCheck.stepTitles.length, 4, 'Welcome How it works must show all 4 steps including Editing');
-    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or copy'));
+    assert.ok(welcomeCheck.stepTitles.includes('Area, tab, or full page'));
+    assert.ok(welcomeCheck.stepTitles.includes('Edit, redact, or export'));
     assert.equal(welcomeCheck.shortcutRegionText, 'Alt + Shift + S');
     assert.equal(welcomeCheck.shortcutVisibleText, 'Alt + Shift + V');
     assert.equal(welcomeCheck.unsetHintHidden, true, 'Both default shortcuts must bind cleanly on fresh install');

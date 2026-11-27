@@ -6,9 +6,9 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing an area,
 
 ## Key Capabilities
 
-- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, capture a **Full page** scrolling screenshot (automatically hides repeated sticky headers, press `Esc` to stop early, capped safely on endless feeds), press `Enter` inside the selector for the full tab, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at `chrome://extensions/shortcuts`.
+- **Capture options**: Select a screen area with pixel-exact HiDPI and zoom cropping, capture a **Full page** scrolling screenshot (automatically hides repeated sticky headers, press `Esc` to stop early, capped safely on endless feeds), press `Enter` for the full tab or `F` for full page inside the selector, capture the visible tab in one click, right-click any webpage and choose **Take Screenshot**, or set custom keyboard shortcuts at `chrome://extensions/shortcuts`.
 - **Built-in screenshot editor**: Crop (`K`), add arrows, rectangles, circles, lines, translucent marker highlights (`H`, hold `Shift` for a straight line), freehand pencil strokes, clean or bold outlined **Meme** text (`S/M/L/XL`), Light/Dark top **Caption bars**, paste images onto the canvas (`Ctrl+V`), custom `#HEX` colors, or permanent solid black and mosaic **Pixelate** redactions, plus rotate 90 degrees, flip, undo, or reset.
-- **Instant auto-copy and local export (no sign-in required)**: Automatically copies fresh captures as lossless PNGs to your clipboard by default (choose `Image`, `Link`, or `Off` in Settings), or click **Copy image** (`Ctrl+C` / `Cmd+C`) or **Download** anytime.
+- **Instant auto-copy and local PNG/PDF export (no sign-in required)**: Automatically copies fresh captures as lossless PNGs to your clipboard by default (choose `Image`, `Link`, or `Off` in Settings), or click **Copy image** (`Ctrl+C` / `Cmd+C`) or **Download** (lossless PNG or smart-paged PDF that avoids clipping text at page breaks) anytime.
 - **Direct Google Drive autosave**: Optionally connect Google Drive once to open the editor immediately while uploading screenshots straight from Chrome into `Chrome_SaveShot_ScreenShots` (customizable in Settings). Turn on **Only upload when I click Save** in Settings to redact before uploading, with **Retry**, **Copy image**, and **Download** ready if Drive is offline or full.
 
 ## Privacy and Security
@@ -30,7 +30,7 @@ SaveShot is a privacy-first, lightweight Chrome extension for capturing an area,
 
 ### Do I need to sign in to capture and download screenshots?
 
-No. You can capture an area, visible tab, or full page, crop, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.
+No. You can capture an area, visible tab, or full page, crop, highlight, annotate, or redact it in the editor, and click **Copy image** or **Download** (PNG or smart-paged PDF) with no sign-in required. Connect Google Drive whenever you want automatic cloud backup and instant share links.
 
 ### Does SaveShot use any external servers or track my data?
 
@@ -42,7 +42,7 @@ Yes. When signed in, SaveShot opens the editor right away and uploads to Google 
 
 ### How do keyboard shortcuts work?
 
-SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. If a shortcut is not active because another extension already uses those keys, you can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).
+SaveShot supports customizable shortcuts for both **Select area** and **Visible tab**. Inside the area selector, press `Enter` for the full tab or `F` for a full scrolling page (and `Esc` to stop a full-page capture early). You can set your preferred keys anytime at `chrome://extensions/shortcuts` (or right-click any webpage and choose **Take Screenshot**).
 
 ### Why are capture buttons disabled on some tabs?
 
@@ -50,8 +50,8 @@ Chrome blocks all extensions from running on internal pages like `chrome://setti
 
 ### What happens if my Google Drive is full or offline?
 
-If a background upload fails, your screenshot stays open in the editor with a clear error status pill so you can click **Retry**, **Copy image**, or **Download** (or **Save PNG locally**) without losing it.
+If a background upload fails, your screenshot stays open in the editor with a clear error message so you can click **Retry**, **Copy image**, or **Download** (PNG or PDF, plus **Save PNG locally**) without losing it.
 
 ### How does Incognito mode work?
 
-If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history is skipped for privacy.
+If you turn on **Allow in Incognito** in `chrome://extensions`, screenshots can still upload directly to your Google Drive while page URLs are left out of filenames and descriptions, and local upload history and temporary browser caches are skipped for privacy.
