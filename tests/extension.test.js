@@ -11,6 +11,7 @@ import {
   dataUrlToBlob,
   FULLPAGE_LIMITS,
   isCapturableUrl,
+  isSameDocumentCaptureUrl,
   planFullPageSlice,
   sanitizeScreenshotFilename,
 } from '../lib/capture.js';
@@ -4679,6 +4680,77 @@ test('v1.3.0 storage autoCopyMode defaults/migration, planFullPageSlice math/cap
   assert.equal(heightCapped.truncated, true);
   assert.equal(heightCapped.nextPhysicalHeight, FULLPAGE_LIMITS.MAX_PHYSICAL_HEIGHT);
 
+  // isSameDocumentCaptureUrl: allows same-origin history.replaceState/#hash/?query; blocks cross-origin & cross-file
+  assert.equal(
+    isSameDocumentCaptureUrl(
+      'https://infinite-scroll.com/demo/full-page/',
+      'https://infinite-scroll.com/demo/full-page/page2.html'
+    ),
+    true
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('https://docs.example.com/guide', 'https://docs.example.com/guide#sec-2'),
+    true
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('https://docs.example.com/guide', 'https://evil.example/guide'),
+    false
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('https://docs.example.com/guide', 'http://docs.example.com/guide'),
+    false
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('file:///tmp/report.html', 'file:///tmp/report.html#section-3'),
+    true
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('file:///tmp/report.html', 'file:///etc/passwd'),
+    false,
+    'file:// opaque origin must not match a different local file path'
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('https://docs.example.com/guide', ''),
+    false,
+    'Empty liveUrl (e.g. activeTab revoked on cross-origin redirect) must fail closed'
+  );
+  assert.equal(
+    isSameDocumentCaptureUrl('', 'https://docs.example.com/guide'),
+    false,
+    'Empty initialUrl must fail closed'
+  );
+
+  // Fractional DPR (1.75x) with truncated viewportHeight=514, bitmapHeight=901 & 72px overlap: zero cumulative drift
+  let fracCurH = 0;
+  let fracPrevY = 0;
+  const fracStepAdvance = 514 - 72; // 442 CSS px
+  for (let i = 0; i < 6; i += 1) {
+    const actualY = i * fracStepAdvance;
+    const p = planFullPageSlice({
+      sliceIndex: i,
+      prevScrollY: fracPrevY,
+      actualScrollY: actualY,
+      viewportWidth: 800,
+      viewportHeight: 514,
+      bitmapWidth: 1400,
+      bitmapHeight: 901,
+      devicePixelRatio: 1.75,
+      currentPhysicalHeight: fracCurH,
+    });
+    assert.equal(p.skip, false);
+    if (i > 0) {
+      // Top overlap cropped cleanly >= 72 * 1.75 = 126 physical pixels
+      assert.ok(p.sy >= 125, `Top overlap must crop off pill band at 1.75x DPR (got sy=${p.sy})`);
+    }
+    fracCurH = p.nextPhysicalHeight;
+    fracPrevY = actualY;
+  }
+  assert.equal(
+    fracCurH,
+    901 + Math.round(5 * fracStepAdvance * 1.75),
+    'Fractional DPR overlapping slices must accumulate zero pixel drift'
+  );
+
   // 3. editor-core: balanced-grid applyPixelateRect (zero 1x1 unredacted corner slivers!)
   assert.ok(EDITOR_TOOLS.includes('crop'));
   assert.equal(FONT_SIZES.xl, 44);
@@ -4898,13 +4970,19 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     let stepCalls = 0;
     let restoreCalls = 0;
     let prepareCancelledOnce = false;
+    let simulateReplaceStateOnStep = false;
+    let failPreCapturePillOnce = false;
+    let tokenSeq = 0;
+    const activeTokenByTab = new Map();
+    const scrollYByTab = new Map();
     const pillMessages = [];
+    const mockTabs = [
+      { id: 601, active: true, windowId: 1, url: 'https://docs.example.com/long-article', title: 'Long Article', incognito: false },
+      { id: 602, active: true, windowId: 2, url: 'https://secret.example.com/private', title: 'Secret Private Title', incognito: true },
+    ];
 
     const mock = installChromeMock({
-      tabs: [
-        { id: 601, active: true, windowId: 1, url: 'https://docs.example.com/long-article', title: 'Long Article', incognito: false },
-        { id: 602, active: true, windowId: 2, url: 'https://secret.example.com/private', title: 'Secret Private Title', incognito: true },
-      ],
+      tabs: mockTabs,
       initialStore: {
         settings: {
           folderName: 'Chrome_SaveShot_ScreenShots',
@@ -4919,20 +4997,52 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
         if (message.type === 'FULLPAGE_PREPARE') {
           const cancelled = prepareCancelledOnce;
           prepareCancelledOnce = false;
+          tokenSeq += 1;
+          const token = `tok-${tokenSeq}`;
+          activeTokenByTab.set(tabId, token);
+          scrollYByTab.set(tabId, 0);
           return {
             ok: true,
+            sessionToken: token,
             cancelled,
             viewportWidth: 500,
-            viewportHeight: 250,
-            scrollStepHeight: 250,
+            viewportHeight: 300,
+            scrollStepHeight: 300,
             actualY: 0,
-            totalHeight: 750,
+            totalHeight: 900,
+            devicePixelRatio: 2,
             containerRect: null,
           };
         }
         if (message.type === 'FULLPAGE_PILL') {
-          pillMessages.push({ tabId, hidden: Boolean(message.hidden), progressText: message.progressText || '' });
-          return { ok: true };
+          pillMessages.push({
+            tabId,
+            hidden: Boolean(message.hidden),
+            allowStaticIfClear: Boolean(message.allowStaticIfClear),
+            postSettleHide: Boolean(message.postSettleHide),
+            progressText: message.progressText || '',
+            sessionToken: message.sessionToken || '',
+          });
+          if (message.postSettleHide && failPreCapturePillOnce) {
+            failPreCapturePillOnce = false;
+            return { ok: false, code: 'NO_FULLPAGE_SESSION' };
+          }
+          const token = activeTokenByTab.get(tabId) || '';
+          return {
+            ok: true,
+            sessionToken: token,
+            didHidePill: false,
+            pillClearBottomCss: 58,
+            metrics: {
+              viewportWidth: 500,
+              viewportHeight: 300,
+              scrollStepHeight: 300,
+              actualY: scrollYByTab.get(tabId) || 0,
+              totalHeight: 900,
+              devicePixelRatio: 2,
+              containerRect: null,
+            },
+          };
         }
         if (message.type === 'FULLPAGE_STEP') {
           stepCalls += 1;
@@ -4941,14 +5051,21 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
             stepGate = null;
             await gate.promise;
           }
-          const y = Math.min(500, message.targetY || 0);
+          const y = Math.min(600, Math.floor(message.targetY || 0));
+          scrollYByTab.set(tabId, y);
+          if (simulateReplaceStateOnStep) {
+            const t = mockTabs.find((item) => item.id === tabId);
+            if (t) t.url = `https://docs.example.com/long-article/page-${stepCalls}`;
+          }
           return {
             ok: true,
+            sessionToken: activeTokenByTab.get(tabId) || '',
             viewportWidth: 500,
-            viewportHeight: 250,
-            scrollStepHeight: 250,
+            viewportHeight: 300,
+            scrollStepHeight: 300,
             actualY: y,
-            totalHeight: 750,
+            totalHeight: 900,
+            devicePixelRatio: 2,
             containerRect: null,
           };
         }
@@ -4983,7 +5100,7 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(spoofedRes.code, 'FORBIDDEN_SENDER');
 
     // 2. background: true starts immediately after FULLPAGE_PREPARE, blocks concurrent duplicate on same tab,
-    //    ignores cross-tab FULLPAGE_CANCEL, and stops cleanly on same-tab FULLPAGE_CANCEL with captureNotice
+    //    ignores cross-tab & stale-token FULLPAGE_CANCEL, and stops cleanly on matching FULLPAGE_CANCEL with captureNotice
     const gateEsc = makeDeferred();
     stepGate = gateEsc;
     const bgStart = await mock.dispatchMessage(
@@ -5014,9 +5131,24 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     );
     assert.equal(wrongTabCancel.ok, false);
 
-    // Same-tab FULLPAGE_CANCEL from tab 601 cancels cleanly
-    const rightTabCancel = await mock.dispatchMessage(
+    // Stale or untokened sessionToken FULLPAGE_CANCEL from same tab must be rejected
+    const staleTokenCancel = await mock.dispatchMessage(
+      { type: 'FULLPAGE_CANCEL', sessionToken: 'stale-tok-999' },
+      { tab: { id: 601 }, url: 'https://docs.example.com/long-article' }
+    );
+    assert.equal(staleTokenCancel.ok, false);
+    assert.equal(staleTokenCancel.code, 'FULLPAGE_SESSION_MISMATCH');
+
+    const untokenedCancel = await mock.dispatchMessage(
       { type: 'FULLPAGE_CANCEL' },
+      { tab: { id: 601 }, url: 'https://docs.example.com/long-article' }
+    );
+    assert.equal(untokenedCancel.ok, false);
+    assert.equal(untokenedCancel.code, 'FULLPAGE_SESSION_MISMATCH');
+
+    // Same-tab matching-token FULLPAGE_CANCEL cancels cleanly
+    const rightTabCancel = await mock.dispatchMessage(
+      { type: 'FULLPAGE_CANCEL', sessionToken: activeTokenByTab.get(601) },
       { tab: { id: 601 }, url: 'https://docs.example.com/long-article' }
     );
     assert.equal(rightTabCancel.ok, true);
@@ -5052,7 +5184,7 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(reloadLoad.session.captureNotice, '', 'Tab reload must NOT re-show one-shot captureNotice');
 
     // 3. Incognito full-page capture scrubs pageUrl and pageTitle from chrome.storage.session
-    //    and sends non-blinking FULLPAGE_PILL progress messages ("Capturing x/yy .. Press ESC to stop")
+    //    and keeps FULLPAGE_PILL static (never requests hidden: true when overlap clearance holds)
     const tabsBeforeIncog = mock.createdTabs.length;
     pillMessages.length = 0;
     const incogRes = await mock.dispatchMessage(
@@ -5061,10 +5193,16 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     );
     assert.equal(incogRes.ok, true);
     assert.equal(incogRes.openedEditor, true);
+    assert.equal(incogRes.stoppedEarly, false);
     assert.equal(mock.createdTabs.length, tabsBeforeIncog + 1);
     assert.ok(
       pillMessages.some((m) => !m.hidden && /^Capturing \d+\/\d+ \.\. Press ESC to stop$/.test(m.progressText)),
       `Expected static FULLPAGE_PILL progress text (got: ${JSON.stringify(pillMessages)})`
+    );
+    assert.equal(
+      pillMessages.filter((m) => m.hidden).length,
+      0,
+      'Static crop-out pill must never request hidden: true on normal slices'
     );
 
     const sessionDump = await globalThis.chrome.storage.session.get('editorSessionsById');
@@ -5074,7 +5212,34 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
     assert.equal(incogMeta.pageUrl, '', 'Incognito pageUrl must be scrubbed from chrome.storage.session');
     assert.equal(incogMeta.pageTitle, '', 'Incognito pageTitle must be scrubbed from chrome.storage.session');
 
-    // 4. Pre-slice-0 Esc cancel exits silently with { ok: true, cancelled: true } and zero red '!' error badge
+    // 4. Same-origin history.replaceState mid-scroll (like infinite-scroll.com/demo/full-page/)
+    //    continues cleanly across all slices with stoppedEarly: false
+    mockTabs[0].url = 'https://docs.example.com/long-article';
+    simulateReplaceStateOnStep = true;
+    const replaceStateRes = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601 },
+      trustedSender
+    );
+    simulateReplaceStateOnStep = false;
+    assert.equal(replaceStateRes.ok, true);
+    assert.equal(replaceStateRes.openedEditor, true);
+    assert.equal(replaceStateRes.stoppedEarly, false, 'Same-origin history.replaceState must NOT abort capture');
+    assert.ok(replaceStateRes.sliceCount >= 3, `Expected full multi-slice capture across replaceState (got ${replaceStateRes.sliceCount})`);
+
+    // 5. Real same-origin page reload/navigation during 450ms wait (NO_FULLPAGE_SESSION on pre-capture pill)
+    //    stops cleanly with stoppedEarly: true instead of stitching the newly navigated page
+    mockTabs[0].url = 'https://docs.example.com/long-article';
+    failPreCapturePillOnce = true;
+    const reloadAbortRes = await mock.dispatchMessage(
+      { type: 'CAPTURE_FULLPAGE', tabId: 601 },
+      trustedSender
+    );
+    assert.equal(reloadAbortRes.ok, true);
+    assert.equal(reloadAbortRes.openedEditor, true);
+    assert.equal(reloadAbortRes.stoppedEarly, true, 'Real same-origin reload mid-capture must stop cleanly');
+    assert.equal(reloadAbortRes.sliceCount, 1, 'Must not capture or stitch slices from the navigated page');
+
+    // 6. Pre-slice-0 Esc cancel exits silently with { ok: true, cancelled: true } and zero red '!' error badge
     const badgesBeforePreEsc = mock.badges.length;
     const tabsBeforePreEsc = mock.createdTabs.length;
     prepareCancelledOnce = true;
@@ -5091,7 +5256,7 @@ test('v1.3.0 Full-Page service-worker orchestration, background mode, Esc cancel
       'Pre-slice-0 Esc cancel must not set red ! error badge'
     );
 
-    // 5. SIGN_OUT mid-full-page capture aborts cleanly with zero session resurrection, zero editor tab, and zero red '!' badge
+    // 7. SIGN_OUT mid-full-page capture aborts cleanly with zero session resurrection, zero editor tab, and zero red '!' badge
     const gateSignOut = makeDeferred();
     stepGate = gateSignOut;
     const tabsBeforeSignOut = mock.createdTabs.length;

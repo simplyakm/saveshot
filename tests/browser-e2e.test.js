@@ -216,6 +216,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         <html>
         <head>
           <style>
+            html { scroll-snap-type: y mandatory; }
             html, body { margin: 0; padding: 0; background: rgb(255, 255, 255); }
             #bg-wallpaper {
               position: fixed;
@@ -268,7 +269,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               height: 460px;
               background: rgb(20, 184, 166);
             }
-            .band-top { height: 1100px; background: rgb(14, 165, 233); }
+            .band-top { height: 1100px; background: rgb(14, 165, 233); scroll-snap-align: start; }
             #sticky-hdr {
               position: sticky;
               top: 0;
@@ -276,8 +277,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
               background: rgb(147, 51, 234);
               z-index: 50;
             }
-            .band-mid { height: 1100px; background: rgb(34, 197, 94); }
-            .band-bot { height: 1000px; background: rgb(249, 115, 22); }
+            .band-mid { height: 1100px; background: rgb(34, 197, 94); scroll-snap-align: start; }
+            .band-bot { height: 1000px; background: rgb(249, 115, 22); scroll-snap-align: start; }
             #layers {
               position: fixed;
               bottom: 0;
@@ -359,17 +360,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
             closedRoot.appendChild(dock);
             document.documentElement.appendChild(extHost);
 
-            // Simulate hostile JS scroll listeners: Back-to-top appearing + clobbering inline opacity,
-            // plus X.com-like sidebar JS attempting to reset position on scroll.
+            // Simulate hostile JS scroll listeners: infinite-scroll history.replaceState(),
+            // Back-to-top appearing + clobbering inline opacity, and sidebar JS resetting position.
             window.addEventListener('scroll', () => {
               const btn = document.getElementById('back-to-top');
               if (window.scrollY > 300) {
                 btn.style.display = 'block';
                 btn.style.opacity = '1';
                 document.getElementById('sticky-right-rail').style.position = 'fixed';
+                if (location.pathname !== '/fullpage/page2') {
+                  history.replaceState(null, '', '/fullpage/page2');
+                }
               } else {
                 btn.style.display = 'none';
                 document.getElementById('sticky-right-rail').style.position = '';
+                if (location.pathname !== '/fullpage') {
+                  history.replaceState(null, '', '/fullpage');
+                }
               }
             });
           </script>
@@ -3256,10 +3263,15 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
 
     const fullPageCase = await openEditorForTab(fpTabInfo.tabId, { type: 'CAPTURE_FULLPAGE' });
     assert.equal(fullPageCase.res.ok, true, `Full-page capture failed: ${JSON.stringify(fullPageCase.res)}`);
+    assert.equal(
+      fullPageCase.res.stoppedEarly,
+      false,
+      'Same-origin history.replaceState and scroll-snap-type: mandatory must NOT stop capture early'
+    );
 
     // Attach to /fullpage tab so we know exact viewport CSS dimensions & can verify full DOM restoration
     const fpTargets = (await cdp.send('Target.getTargets')).targetInfos;
-    const fpPageTarget = fpTargets.find((t) => t.type === 'page' && t.url.endsWith('/fullpage'));
+    const fpPageTarget = fpTargets.find((t) => t.type === 'page' && t.url.includes('/fullpage'));
     assert.ok(fpPageTarget);
     const { sessionId: fpPageSess } = await cdp.send('Target.attachToTarget', {
       targetId: fpPageTarget.targetId,
@@ -3295,9 +3307,9 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         };
         const sample = (fracY) => sampleAt(midX, fracY);
 
-        const scanColumn = (x, predicate, minY = 0, maxY = canvas.height) => {
+        const scanColumn = (x, predicate, minY = 0, maxY = canvas.height, step = 6) => {
           let hits = 0;
-          for (let y = Math.max(0, minY); y < Math.min(canvas.height, maxY); y += 6) {
+          for (let y = Math.max(0, minY); y < Math.min(canvas.height, maxY); y += step) {
             const d = ctx.getImageData(x, y, 1, 1).data;
             if (predicate(d[0], d[1], d[2])) hits += 1;
           }
@@ -3313,6 +3325,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const isPortalVioletFab = (r, g, b) => r > 110 && r < 170 && g > 60 && g < 125 && b > 215;
         const isClosedShadowRose = (r, g, b) => r > 160 && g < 55 && b > 65 && b < 130;
         const isBackToTopRed = (r, g, b) => r > 155 && r < 215 && g < 55 && b < 55;
+        // Static progress pill is dark rgba(20,21,24); all center bands below header have max(r,g,b) > 150
+        const isDarkPillLeak = (r, g, b) => Math.max(r, g, b) < 90;
 
         return {
           width: canvas.width,
@@ -3345,6 +3359,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           closedDockSlice0Hits: scanColumn(closedDockX, isClosedShadowRose, 0, vpHPx),
           closedDockBelowFoldHits: scanColumn(closedDockX, isClosedShadowRose, vpHPx + Math.round(20 * scale)),
           backToTopBelowFoldHits: scanColumn(centerBtnX, isBackToTopRed, Math.round(200 * scale)),
+          pillLeakHits: scanColumn(centerBtnX, isDarkPillLeak, Math.round(60 * scale), canvas.height, 2),
         };
       })()`
     );
@@ -3395,6 +3410,11 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       fpAudit.backToTopBelowFoldHits,
       0,
       `Scroll-triggered Back-to-top button (even clobbering inline opacity) must NOT appear on lower slices (hits=${fpAudit.backToTopBelowFoldHits})`
+    );
+    assert.equal(
+      fpAudit.pillLeakHits,
+      0,
+      `Static crop-out progress pill and its shadow must NEVER leak into the stitched PNG (hits=${fpAudit.pillLeakHits})`
     );
     assert.ok(fpAudit.bandTopRgb[2] > 180, `Top cyan band expected (got ${fpAudit.bandTopRgb})`);
     assert.ok(fpAudit.bandMidRgb[1] > 150, `Mid green band expected (got ${fpAudit.bandMidRgb})`);

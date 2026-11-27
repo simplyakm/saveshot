@@ -12,6 +12,7 @@ import {
   dataUrlToBlob,
   FULLPAGE_LIMITS,
   isCapturableUrl,
+  isSameDocumentCaptureUrl,
   planFullPageSlice,
   sanitizeScreenshotFilename,
 } from '../lib/capture.js';
@@ -1302,7 +1303,7 @@ async function captureFullPageFlow({
     });
   }
 
-  const runState = { cancelled: false, abortedBySignOut: false };
+  const runState = { cancelled: false, abortedBySignOut: false, sessionToken: '' };
   activeFullPageTabs.set(targetTab.id, runState);
 
   let prep;
@@ -1325,8 +1326,16 @@ async function captureFullPageFlow({
     throw err;
   }
 
+  const runSessionToken = typeof prep.sessionToken === 'string' ? prep.sessionToken : '';
+  runState.sessionToken = runSessionToken;
+
   const isAbortedBySignOut = () =>
     runState.abortedBySignOut || workerSessionEpoch !== startEpoch;
+
+  const MIN_STATIC_PILL_STEP_H = 260;
+  const DEFAULT_PILL_OVERLAP_CSS = 72;
+  const MAX_PILL_OVERLAP_CSS = 96;
+  const MIN_STEP_ADVANCE_CSS = 165;
 
   const runLoop = async () => {
     const slices = [];
@@ -1340,6 +1349,7 @@ async function captureFullPageFlow({
       const initialUrl = targetTab.url || '';
       let metrics = prep;
       let prevScrollY = 0;
+      let pillClearBottomCss = 58;
 
       const isTabStillValid = async () => {
         const liveTab = await chrome.tabs.get(targetTab.id).catch(() => null);
@@ -1347,14 +1357,59 @@ async function captureFullPageFlow({
           liveTab &&
             liveTab.active &&
             liveTab.windowId === targetTab.windowId &&
-            (!initialUrl || !liveTab.url || liveTab.url === initialUrl)
+            isSameDocumentCaptureUrl(initialUrl, liveTab.url || '')
+        );
+      };
+
+      const computeOverlapCss = (m) => {
+        const stepH = Math.max(1, Number(m.scrollStepHeight || m.viewportHeight) || 1);
+        if (stepH < MIN_STATIC_PILL_STEP_H || (Number(m.visualViewportScale) || 1) > 1.01) {
+          return 0;
+        }
+        const containerTop =
+          m.isInnerContainer && m.containerRect ? Math.max(0, Number(m.containerRect.top) || 0) : 0;
+        const neededInsideContainer = Math.max(0, Math.ceil(pillClearBottomCss) + 4 - containerTop);
+        if (neededInsideContainer <= 0) {
+          return 0;
+        }
+        const maxOverlap = Math.min(
+          MAX_PILL_OVERLAP_CSS,
+          Math.floor(stepH - MIN_STEP_ADVANCE_CSS)
+        );
+        if (neededInsideContainer > maxOverlap) {
+          return 0;
+        }
+        const desired =
+          containerTop === 0
+            ? Math.max(DEFAULT_PILL_OVERLAP_CSS, neededInsideContainer + 8)
+            : neededInsideContainer + 8;
+        return Math.min(maxOverlap, desired);
+      };
+
+      const estimateTotalSlices = (m, sliceIndex) => {
+        const stepH = Math.max(1, Number(m.scrollStepHeight || m.viewportHeight) || 1);
+        const curY = Number(m.actualY) || 0;
+        const totalH = Math.max(stepH, Number(m.totalHeight) || stepH);
+        const overlap = computeOverlapCss(m);
+        const stepAdvance = Math.max(1, stepH - overlap);
+        const remaining = Math.max(0, totalH - (curY + stepH));
+        return Math.max(
+          sliceIndex + 1,
+          Math.min(
+            FULLPAGE_LIMITS.MAX_SLICES,
+            sliceIndex + 1 + (remaining <= 2 ? 0 : Math.ceil(remaining / stepAdvance))
+          )
         );
       };
 
       const sendFullPagePill = (payload) =>
         chrome.tabs
-          .sendMessage(targetTab.id, { type: 'FULLPAGE_PILL', ...payload })
-          .catch(() => {});
+          .sendMessage(targetTab.id, {
+            type: 'FULLPAGE_PILL',
+            sessionToken: runSessionToken,
+            ...payload,
+          })
+          .catch(() => null);
 
       for (let sliceIndex = 0; sliceIndex < FULLPAGE_LIMITS.MAX_SLICES; sliceIndex += 1) {
         if (isAbortedBySignOut()) {
@@ -1376,35 +1431,15 @@ async function captureFullPageFlow({
           });
         }
 
-        const stepH = Math.max(1, Number(metrics.scrollStepHeight || metrics.viewportHeight) || 1);
-        const estimatedTotal = Math.max(
-          sliceIndex + 1,
-          Math.min(
-            FULLPAGE_LIMITS.MAX_SLICES,
-            Math.ceil(Math.max(1, metrics.totalHeight) / stepH)
-          )
-        );
-        const currentYBefore = Number(metrics.actualY) || 0;
-        const totalHBefore = Math.max(stepH, Number(metrics.totalHeight) || stepH);
-        const isLikelyLast =
-          currentYBefore + stepH >= totalHBefore - 2 ||
-          sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES;
-        const showProgressPill = estimatedTotal > 1;
-        const needsRateLimitWait = Date.now() - lastCaptureTimestamp < 520;
-        const shouldShowPillNow =
-          showProgressPill && (sliceIndex > 0 || needsRateLimitWait);
+        const estimatedTotalBefore = estimateTotalSlices(metrics, sliceIndex);
+        const showProgressPill = estimatedTotalBefore > 1;
 
         if (showProgressPill && !isAbortedBySignOut()) {
-          setBadge(`${sliceIndex + 1}/${estimatedTotal}`, '#1a73e8');
-        }
-        if (shouldShowPillNow) {
-          await sendFullPagePill({
-            hidden: false,
-            progressText: `Capturing ${sliceIndex + 1}/${estimatedTotal} .. Press ESC to stop`,
-          });
+          setBadge(`${sliceIndex + 1}/${estimatedTotalBefore}`, '#1a73e8');
         }
 
-        // Wait for Chrome's captureVisibleTab rate-limit slot WHILE the progress pill remains steadily visible
+        // Wait for Chrome's captureVisibleTab rate-limit slot WHILE the static progress pill stays visible
+        const waitedForSlot = Date.now() - lastCaptureTimestamp < 520;
         await waitForCaptureVisibleTabSlot();
 
         if (isAbortedBySignOut()) {
@@ -1425,23 +1460,72 @@ async function captureFullPageFlow({
           });
         }
 
-        // Briefly hide pill and run post-settle overlay enforcement right before capture
-        if (shouldShowPillNow || sliceIndex > 0) {
-          await sendFullPagePill({
-            hidden: shouldShowPillNow,
+        // Run the authoritative pre-capture gate AFTER the rate-limit wait (on all slices >= 1,
+        // and on slice 0 if we actually slept for the rate-limit slot): verifies sessionToken
+        // (catches same-origin reload/navigation), runs post-settle overlay hiding on slice >= 1,
+        // reads fresh live metrics, and keeps the pill static whenever crop-out clearance holds.
+        let didHidePillForSlice = false;
+        if (sliceIndex > 0 || waitedForSlot) {
+          const preRes = await sendFullPagePill({
+            hidden: false,
+            allowStaticIfClear: sliceIndex > 0,
             postSettleHide: sliceIndex > 0,
+            prevScrollY: sliceIndex > 0 ? prevScrollY : null,
           });
+          if (
+            !preRes ||
+            preRes.ok === false ||
+            (runSessionToken && preRes.sessionToken !== runSessionToken)
+          ) {
+            if (slices.length > 0) {
+              stoppedEarly = true;
+              break;
+            }
+            throw new SaveShotError({
+              code: 'TAB_SWITCHED',
+              userMessage: 'The tab changed before capture finished. Stay on the tab and try again.',
+            });
+          }
+          if (preRes.cancelled || runState.cancelled) {
+            stoppedEarly = true;
+            break;
+          }
+          if (preRes.metrics && typeof preRes.metrics === 'object') {
+            metrics = { ...metrics, ...preRes.metrics };
+          }
+          if (typeof preRes.pillClearBottomCss === 'number' && preRes.pillClearBottomCss > 0) {
+            pillClearBottomCss = preRes.pillClearBottomCss;
+          }
+          if (sliceIndex > 0 && (Number(metrics.actualY) || 0) <= prevScrollY + 0.5) {
+            break;
+          }
+          didHidePillForSlice = Boolean(preRes.didHidePill);
         }
 
         const dataUrl = await captureVisibleTabSafe(targetTab.windowId);
 
-        // Immediately restore pill with next slice label while decoding/scrolling (skip on final slice)
-        if (showProgressPill && !isLikelyLast && !runState.cancelled && !isAbortedBySignOut()) {
+        const stepH = Math.max(1, Number(metrics.scrollStepHeight || metrics.viewportHeight) || 1);
+        const currentY = Number(metrics.actualY) || 0;
+        const totalH = Math.max(stepH, Number(metrics.totalHeight) || stepH);
+        const estimatedTotal = estimateTotalSlices(metrics, sliceIndex);
+        const isLikelyLast =
+          currentY + stepH >= totalH - 2 || sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES;
+
+        // Immediately mount (after Slice 0) or update counter text (on Slice 1+) in parallel with bitmap decode
+        let pillUpdatePromise = null;
+        if (
+          (showProgressPill || estimatedTotal > 1) &&
+          !isLikelyLast &&
+          !runState.cancelled &&
+          !isAbortedBySignOut()
+        ) {
           const nextNum = Math.min(estimatedTotal, sliceIndex + 2);
-          sendFullPagePill({
+          pillUpdatePromise = sendFullPagePill({
             hidden: false,
             progressText: `Capturing ${nextNum}/${estimatedTotal} .. Press ESC to stop`,
           });
+        } else if (didHidePillForSlice && isLikelyLast) {
+          pillUpdatePromise = null;
         }
 
         // Re-check after captureVisibleTabSafe
@@ -1483,11 +1567,12 @@ async function captureFullPageFlow({
         const plan = planFullPageSlice({
           sliceIndex,
           prevScrollY,
-          actualScrollY: metrics.actualY || 0,
+          actualScrollY: currentY,
           viewportHeight: metrics.viewportHeight || bmpH,
           viewportWidth: metrics.viewportWidth || bmpW,
           bitmapWidth: bmpW,
           bitmapHeight: bmpH,
+          devicePixelRatio: metrics.devicePixelRatio || 0,
           containerRect: metrics.isInnerContainer ? metrics.containerRect : null,
           lockedCanvasWidth: canvasWidth,
           currentPhysicalHeight: totalPhysicalHeight,
@@ -1533,19 +1618,26 @@ async function captureFullPageFlow({
           fullBitmap?.close?.();
         }
 
+        if (pillUpdatePromise) {
+          const pillRes = await pillUpdatePromise;
+          if (
+            pillRes &&
+            typeof pillRes.pillClearBottomCss === 'number' &&
+            pillRes.pillClearBottomCss > 0
+          ) {
+            pillClearBottomCss = pillRes.pillClearBottomCss;
+          }
+        }
+
         if (plan.truncated) {
           truncated = true;
           break;
         }
 
-        const currentY = Number(metrics.actualY) || 0;
-        const totalH = Math.max(stepH, Number(metrics.totalHeight) || stepH);
-        if (currentY + stepH >= totalH - 2) {
-          break;
-        }
-
-        if (sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES) {
-          truncated = true;
+        if (isLikelyLast) {
+          if (sliceIndex + 1 >= FULLPAGE_LIMITS.MAX_SLICES && currentY + stepH < totalH - 2) {
+            truncated = true;
+          }
           break;
         }
 
@@ -1558,18 +1650,29 @@ async function captureFullPageFlow({
         }
 
         prevScrollY = currentY;
-        const nextTargetY = currentY + stepH;
-        const stepRes = await sendMessageToContentScript(targetTab.id, {
-          type: 'FULLPAGE_STEP',
-          targetY: nextTargetY,
-          hideFixed: true,
-          progressText: `Capturing ${sliceIndex + 2}/${estimatedTotal} .. Press ESC to stop`,
-        });
+        const overlapCss = computeOverlapCss(metrics);
+        const stepAdvance = Math.max(1, stepH - overlapCss);
+        const nextEstimatedTotal = estimateTotalSlices(metrics, sliceIndex);
+        const nextTargetY = currentY + stepAdvance;
+        const stepRes = await chrome.tabs
+          .sendMessage(targetTab.id, {
+            type: 'FULLPAGE_STEP',
+            targetY: nextTargetY,
+            hideFixed: true,
+            sessionToken: runSessionToken,
+            progressText: `Capturing ${Math.min(nextEstimatedTotal, sliceIndex + 2)}/${nextEstimatedTotal} .. Press ESC to stop`,
+          })
+          .catch(() => null);
 
         if (isAbortedBySignOut()) {
           return { aborted: true };
         }
-        if (!stepRes || stepRes.ok === false) {
+        if (
+          !stepRes ||
+          stepRes.ok === false ||
+          (runSessionToken && stepRes.sessionToken !== runSessionToken)
+        ) {
+          stoppedEarly = true;
           break;
         }
         if (stepRes.cancelled || runState.cancelled) {
@@ -1692,7 +1795,10 @@ async function captureFullPageFlow({
         setBadge('', '');
       }
       await chrome.tabs
-        .sendMessage(targetTab.id, { type: 'FULLPAGE_RESTORE' })
+        .sendMessage(targetTab.id, {
+          type: 'FULLPAGE_RESTORE',
+          sessionToken: runSessionToken,
+        })
         .catch(() => {});
       if (activeFullPageTabs.get(targetTab.id) === runState) {
         activeFullPageTabs.delete(targetTab.id);
@@ -2154,6 +2260,13 @@ export function registerServiceWorkerListeners() {
                 typeof senderTabId === 'number' ? activeFullPageTabs.get(senderTabId) : null;
               if (!activeRun) {
                 sendResponse({ ok: false, code: 'NO_ACTIVE_FULLPAGE_SESSION' });
+                return;
+              }
+              if (
+                activeRun.sessionToken &&
+                message.sessionToken !== activeRun.sessionToken
+              ) {
+                sendResponse({ ok: false, code: 'FULLPAGE_SESSION_MISMATCH' });
                 return;
               }
               activeRun.cancelled = true;

@@ -1100,11 +1100,13 @@
 
     const el = session.element;
     const r = el.getBoundingClientRect();
+    const left = Math.max(0, r.left);
+    const top = Math.max(0, r.top);
     const containerRect = {
-      left: Math.max(0, r.left),
-      top: Math.max(0, r.top),
-      width: Math.max(1, Math.min(vpW - Math.max(0, r.left), r.width)),
-      height: Math.max(1, Math.min(vpH - Math.max(0, r.top), r.height)),
+      left,
+      top,
+      width: Math.max(1, Math.min(vpW - left, r.right - left)),
+      height: Math.max(1, Math.min(vpH - top, r.bottom - top)),
     };
     return {
       viewportWidth: vpW,
@@ -1916,17 +1918,17 @@
       return { host: session.pillHost, pill: session.pillTextEl };
     }
     removeHostElement(FULLPAGE_PILL_HOST_ID);
-    const vv = window.visualViewport;
-    const vvScale = vv?.scale || 1;
-    const topPx = Math.round((vv?.offsetTop || 0) + 14 / vvScale);
-    const leftPx = Math.round((vv?.offsetLeft || 0) + (vv?.width || window.innerWidth || 320) / 2);
     const { host, shadow } = mountTopLayerHost(FULLPAGE_PILL_HOST_ID, {
       interactiveModalFallback: false,
-      cssBounds: `top:${topPx}px !important;left:${leftPx}px !important;transform:translateX(-50%) scale(${1 / vvScale}) !important;transform-origin:top center !important;pointer-events:none !important;`,
+      cssBounds:
+        'inset:auto !important;top:10px !important;left:0 !important;right:0 !important;bottom:auto !important;width:100% !important;height:auto !important;display:flex !important;justify-content:center !important;pointer-events:none !important;',
     });
     const style = document.createElement('style');
     style.textContent = `
       .fp-pill {
+        box-sizing: border-box;
+        max-width: calc(100% - 24px);
+        direction: ltr;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 12.5px;
         font-weight: 500;
@@ -1934,11 +1936,13 @@
         font-variant-numeric: tabular-nums;
         color: #f3f4f6;
         background: rgba(20, 21, 24, 0.94);
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.22);
         border-radius: 999px;
-        padding: 6px 14px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+        padding: 5px 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         pointer-events: none;
         user-select: none;
       }
@@ -1953,13 +1957,57 @@
     return { host, pill };
   }
 
+  function measureFullPagePillGeometry(session) {
+    const host = session?.pillHost;
+    const pill = session?.pillTextEl;
+    if (!host || !host.isConnected || !pill) {
+      return {
+        pillClearBottomCss: 58,
+        isTopLayer: false,
+        vvScale: window.visualViewport?.scale || 1,
+        vvOffsetTop: Math.abs(window.visualViewport?.offsetTop || 0),
+      };
+    }
+    const hostRect = host.getBoundingClientRect();
+    const pillRect = pill.getBoundingClientRect();
+    const bottomCss = Math.max(hostRect.bottom, pillRect.bottom);
+    // Skia box-shadow (0 2px 8px) paints up to 2 + ceil(1.5 * 8) = 14px below border-box; add 4px AA cushion
+    const pillClearBottomCss =
+      pillRect.height > 0 && bottomCss > 0 ? Math.ceil(bottomCss) + 18 : 58;
+    const vv = window.visualViewport;
+    let isTopLayer = false;
+    try {
+      isTopLayer = typeof host.matches === 'function' && host.matches(':popover-open');
+    } catch {
+      isTopLayer = false;
+    }
+    return {
+      pillClearBottomCss,
+      isTopLayer,
+      vvScale: vv?.scale || 1,
+      vvOffsetTop: Math.abs(vv?.offsetTop || 0),
+    };
+  }
+
   async function setFullPagePillState({
     hidden = false,
     progressText = '',
     postSettleHide = false,
+    sessionToken = '',
+    prevScrollY = null,
+    allowStaticIfClear = false,
   } = {}) {
     const session = fullPageSession;
-    if (!session || session.cancelled) return { ok: true };
+    if (!session) {
+      return { ok: false, code: 'NO_FULLPAGE_SESSION' };
+    }
+    if (session.token && sessionToken !== session.token) {
+      return { ok: false, code: 'FULLPAGE_SESSION_MISMATCH' };
+    }
+    if (session.cancelled) {
+      return { ok: true, cancelled: true, sessionToken: session.token };
+    }
+
     const safeText = typeof progressText === 'string' ? progressText.slice(0, 120) : '';
     if (safeText) {
       const refs = ensureFullPageProgressPill(session);
@@ -1973,10 +2021,41 @@
       didMutateDom = hideFixedAndStickyElements(session);
     }
 
+    const liveMetrics = readScrollMetrics(session);
     const host = session.pillHost;
+    let shouldHideNow = Boolean(hidden);
+    let measuredClearBottom = 58;
+
+    if (host && host.isConnected) {
+      const geom = measureFullPagePillGeometry(session);
+      measuredClearBottom = geom.pillClearBottomCss;
+
+      if (allowStaticIfClear && !shouldHideNow) {
+        const liveDeltaCss =
+          typeof prevScrollY === 'number' && Number.isFinite(prevScrollY)
+            ? Math.max(0, liveMetrics.actualY - prevScrollY)
+            : 0;
+        const containerTop =
+          liveMetrics.isInnerContainer && liveMetrics.containerRect
+            ? liveMetrics.containerRect.top
+            : 0;
+        const cropTopViewportCss =
+          containerTop + Math.max(0, liveMetrics.scrollStepHeight - liveDeltaCss);
+        const canKeepStatic =
+          geom.isTopLayer &&
+          geom.vvScale <= 1.01 &&
+          geom.vvOffsetTop <= 1 &&
+          liveMetrics.scrollStepHeight >= 260 &&
+          cropTopViewportCss >= geom.pillClearBottomCss;
+        if (!canKeepStatic) {
+          shouldHideNow = true;
+        }
+      }
+    }
+
     let didHidePill = false;
     if (host && host.isConnected) {
-      if (hidden) {
+      if (shouldHideNow) {
         try {
           if (typeof host.hidePopover === 'function') {
             host.hidePopover();
@@ -1987,7 +2066,7 @@
         host.style.setProperty('display', 'none', 'important');
         didHidePill = true;
       } else {
-        host.style.setProperty('display', 'block', 'important');
+        host.style.setProperty('display', 'flex', 'important');
         try {
           if (typeof host.showPopover === 'function' && !host.matches(':popover-open')) {
             host.showPopover();
@@ -1995,6 +2074,7 @@
         } catch {
           // Fallback fixed positioning already active
         }
+        measuredClearBottom = measureFullPagePillGeometry(session).pillClearBottomCss;
       }
     }
 
@@ -2002,11 +2082,21 @@
     if (didHidePill || didMutateDom) {
       await waitNextPaint(0);
     }
-    return { ok: true };
+    return {
+      ok: true,
+      sessionToken: session.token,
+      cancelled: session.cancelled,
+      didHidePill,
+      pillClearBottomCss: measuredClearBottom,
+      metrics: liveMetrics,
+    };
   }
 
-  function restoreFullPageSession() {
+  function restoreFullPageSession({ expectedToken = '', force = false } = {}) {
     const session = fullPageSession;
+    if (!force && session && session.token && expectedToken !== session.token) {
+      return;
+    }
     fullPageSession = null;
     removeHostElement(FULLPAGE_PILL_HOST_ID);
     const existingStyle = document.getElementById(FULLPAGE_STYLE_ID);
@@ -2031,10 +2121,11 @@
       window.removeEventListener('keydown', session.onKeyDown, true);
     }
 
-    // Suppress transitions across the single restore flush so elements with transition: opacity
-    // snap back to opacity: 1 immediately instead of starting a fade-in from 0.
+    // Suppress transitions and scroll-snap across restore so elements snap back to opacity: 1
+    // immediately and scrollTo(origScrollY) lands accurately before restoring normal page styles.
     if (existingStyle) {
-      existingStyle.textContent = '*, *::before, *::after { transition-property: none !important; }';
+      existingStyle.textContent =
+        '*, *::before, *::after { transition-property: none !important; scroll-behavior: auto !important; scroll-snap-type: none !important; }';
     }
 
     if (session.attrTrackedSet) {
@@ -2066,11 +2157,6 @@
       session.inlineRestoreMap.clear();
     }
 
-    if (existingStyle) {
-      void document.documentElement?.offsetHeight;
-      existingStyle.remove();
-    }
-
     if (session.containerScrollbarPatched && session.element) {
       try {
         if (session.prevContainerScrollbar) {
@@ -2088,6 +2174,12 @@
     }
 
     scrollTargetInstant(session, session.origScrollX, session.origScrollY);
+
+    if (existingStyle) {
+      void document.documentElement?.offsetHeight;
+      existingStyle.remove();
+    }
+
     try {
       const target = session.isWindow ? window : session.element;
       target?.dispatchEvent?.(new Event('scroll'));
@@ -2109,7 +2201,7 @@
     // Clear any leftover overlay, toast, or previous full-page state
     clearActiveOverlay();
     removeHostElement(TOAST_HOST_ID);
-    restoreFullPageSession();
+    restoreFullPageSession({ force: true });
 
     const target = detectFullPageScrollTarget();
     const docEl = document.scrollingElement || document.documentElement;
@@ -2125,6 +2217,7 @@
     style.textContent = `
       html, body, * {
         scroll-behavior: auto !important;
+        scroll-snap-type: none !important;
       }
       html::-webkit-scrollbar, body::-webkit-scrollbar {
         display: none !important;
@@ -2154,7 +2247,13 @@
     `;
     (document.head || document.documentElement).appendChild(style);
 
+    const sessionToken =
+      typeof crypto?.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
     const session = {
+      token: sessionToken,
       element: target.element,
       isWindow: target.isWindow,
       origScrollX,
@@ -2197,7 +2296,10 @@
         session.pillHost = null;
         session.pillTextEl = null;
         try {
-          const maybePromise = chrome.runtime.sendMessage({ type: 'FULLPAGE_CANCEL' });
+          const maybePromise = chrome.runtime.sendMessage({
+            type: 'FULLPAGE_CANCEL',
+            sessionToken: session.token,
+          });
           if (maybePromise && typeof maybePromise.catch === 'function') {
             maybePromise.catch(() => {});
           }
@@ -2222,6 +2324,7 @@
 
     return {
       ok: true,
+      sessionToken: session.token,
       ...readScrollMetrics(session),
       cancelled: session.cancelled,
     };
@@ -2231,20 +2334,25 @@
     targetY = 0,
     hideFixed = false,
     progressText = '',
+    sessionToken = '',
   } = {}) {
     const session = fullPageSession;
     if (!session) {
       return { ok: false, code: 'NO_FULLPAGE_SESSION' };
     }
+    if (session.token && sessionToken !== session.token) {
+      return { ok: false, code: 'FULLPAGE_SESSION_MISMATCH' };
+    }
     if (session.cancelled) {
-      return { ok: true, cancelled: true, ...readScrollMetrics(session) };
+      return { ok: true, sessionToken: session.token, cancelled: true, ...readScrollMetrics(session) };
     }
 
     if (progressText) {
-      await setFullPagePillState({ hidden: false, progressText });
+      await setFullPagePillState({ hidden: false, progressText, sessionToken: session.token });
     }
 
-    const safeY = Math.max(0, Math.round(Number(targetY) || 0));
+    // Floor rather than round up so fractional scroll coordinates never shrink top overlap
+    const safeY = Math.max(0, Math.floor(Number(targetY) || 0));
     scrollTargetInstant(session, session.origScrollX, safeY);
 
     // Wait a brief frame after scroll so dynamic sticky/fixed wrappers settle before hiding
@@ -2255,6 +2363,7 @@
 
     return {
       ok: true,
+      sessionToken: session.token,
       cancelled: session.cancelled,
       ...readScrollMetrics(session),
     };
@@ -2300,12 +2409,12 @@
     if (message.type === 'FULLPAGE_PILL') {
       setFullPagePillState(message)
         .then((res) => sendResponse(res))
-        .catch(() => sendResponse({ ok: true }));
+        .catch(() => sendResponse({ ok: false, code: 'FULLPAGE_PILL_ERROR' }));
       return true;
     }
 
     if (message.type === 'FULLPAGE_RESTORE') {
-      restoreFullPageSession();
+      restoreFullPageSession({ expectedToken: message.sessionToken || '' });
       sendResponse({ ok: true });
       return;
     }
