@@ -25,6 +25,7 @@ export const ASSET_INPUT_FILES = [
   'lib/editor-core.js',
   'pages/welcome.html',
   'pages/welcome.css',
+  'content/fullpage.js',
   'content/selector.js',
   'icons/icon16.png',
   'icons/icon32.png',

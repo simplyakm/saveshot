@@ -173,8 +173,9 @@
           <li>Your folder name, appearance theme, auto-copy, and manual-upload (&quot;Only upload when I click Save&quot;) settings.</li>
           <li>Your connected Google account display name, email, and avatar URL.</li>
           <li>Your last 8 uploaded screenshot links and small preview thumbnails for quick access in the popup.</li>
+          <li>Short-lived, one-shot local browser cache entries used only to hand off a full-resolution PNG between the extension background worker and editor tab, deleted immediately once read (and cleared on sign-out or browser startup).</li>
         </ul>
-        <p class="outro">If you use SaveShot in an <strong>Incognito</strong> window, page URLs are left out of filenames and Drive descriptions, and screenshots are not added to local history on your device.</p>
+        <p class="outro">If you use SaveShot in an <strong>Incognito</strong> window, page URLs are left out of filenames and Drive descriptions, and screenshots are not added to local history or temporary browser caches on your device.</p>
         <h2>Removing your data and revoking access</h2>
         <ul>
           <li>Click <strong>Clear</strong> in the popup to remove your local recent uploads list (your files remain in Google Drive).</li>

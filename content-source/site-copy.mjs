@@ -181,9 +181,10 @@ export const SITE_COPY = {
           'Your folder name, appearance theme, auto-copy, and manual-upload ("Only upload when I click Save") settings.',
           'Your connected Google account display name, email, and avatar URL.',
           'Your last 8 uploaded screenshot links and small preview thumbnails for quick access in the popup.',
+          'Short-lived, one-shot local browser cache entries used only to hand off a full-resolution PNG between the extension background worker and editor tab, deleted immediately once read (and cleared on sign-out or browser startup).',
         ],
         outro:
-          'If you use SaveShot in an **Incognito** window, page URLs are left out of filenames and Drive descriptions, and screenshots are not added to local history on your device.',
+          'If you use SaveShot in an **Incognito** window, page URLs are left out of filenames and Drive descriptions, and screenshots are not added to local history or temporary browser caches on your device.',
       },
       {
         heading: 'Removing your data and revoking access',

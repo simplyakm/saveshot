@@ -2,22 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 import {
   blobToDataUrl,
   buildScreenshotFilename,
+  clearBlobTransferCache,
   computeCropRect,
   createThumbnailDataUrl,
   dataUrlToBlob,
   FULLPAGE_LIMITS,
   isCapturableUrl,
   isSameDocumentCaptureUrl,
+  isValidBlobTransferUrl,
   planFullPageSlice,
+  putBlobInTransferCache,
   sanitizeScreenshotFilename,
+  takeBlobFromTransferCache,
 } from '../lib/capture.js';
 import {
   buildMultipartUploadBody,
+  clearDriveFolderVerifyCache,
   downloadScreenshotFromDrive,
   ensureDriveFolder,
   escapeDriveQueryValue,
@@ -68,6 +74,7 @@ import {
   applyPixelateRect,
   CAPTION_THEMES,
   clampPoint,
+  computeAnnotationBounds,
   computeArrowGeometry,
   computePastedImageBox,
   cropSourceToCanvas,
@@ -2331,9 +2338,21 @@ test('centralized design language, zero external dependencies, strict CSS/HTML h
   }
 
   // 6. Content script shadow templates use [hidden] & classes instead of inline HTML style="..."
+  //    and both scripts compile cleanly with zero syntax errors.
   const selectorJs = fs.readFileSync(path.join(rootDir, 'content/selector.js'), 'utf8');
+  assert.doesNotThrow(
+    () => new vm.Script(selectorJs, { filename: 'content/selector.js' }),
+    'content/selector.js must parse with zero syntax errors'
+  );
   assert.ok(!/\bstyle="/.test(selectorJs), 'content/selector.js shadow HTML must not use inline style="..."');
   assert.ok(!/\.style\.flex\b/.test(selectorJs), 'content/selector.js toast buttons must use CSS classes instead of .style.flex');
+  assert.ok(selectorJs.length < 40_000, `content/selector.js should remain lightweight after fullpage split (got ${selectorJs.length} bytes)`);
+  const fullpageJs = fs.readFileSync(path.join(rootDir, 'content/fullpage.js'), 'utf8');
+  assert.doesNotThrow(
+    () => new vm.Script(fullpageJs, { filename: 'content/fullpage.js' }),
+    'content/fullpage.js must parse with zero syntax errors'
+  );
+  assert.ok(!/\bstyle="/.test(fullpageJs), 'content/fullpage.js shadow HTML must not use inline style="..."');
 
   // 7. Consistent box-arrow external-link icon across Popup, Recent list, Editor, and Welcome,
   //    plus slim split footer order (version -> Report bug | @_simplyakm) with zero third-party logos
@@ -5606,6 +5625,338 @@ test('Pass 1 performance optimizations: SWR auth revalidation, verifiedAt diff f
     globalThis.localStorage = origLocalStorage;
   }
 });
+
+test('Pass 2 engine optimizations: computeAnnotationBounds, Drive verifyTtlMs cache, Cache Storage blob transfer with Incognito isolation, and lazy fullpage.js injection', async () => {
+  const origFetch = globalThis.fetch;
+  const origCaches = globalThis.caches;
+
+  try {
+    // 1. computeAnnotationBounds produces tight, conservatively padded, clamped rects for all in-place tools
+    const arrowBounds = computeAnnotationBounds(
+      { tool: 'arrow', x1: 100, y1: 100, x2: 200, y2: 120, strokeWidth: 4 },
+      1000,
+      800
+    );
+    assert.ok(arrowBounds && arrowBounds.x <= 96 && arrowBounds.x + arrowBounds.width >= 204);
+    assert.ok(arrowBounds.width < 200 && arrowBounds.height < 120);
+
+    const pencilBounds = computeAnnotationBounds(
+      {
+        tool: 'pencil',
+        points: [{ x: 10, y: 10 }, { x: 40, y: 50 }, { x: 35, y: 90 }],
+        strokeWidth: 6,
+      },
+      500,
+      500
+    );
+    assert.ok(pencilBounds && pencilBounds.x >= 0 && pencilBounds.y >= 0);
+    assert.ok(pencilBounds.x <= 4 && pencilBounds.x + pencilBounds.width >= 46);
+    assert.ok(pencilBounds.y + pencilBounds.height >= 96);
+
+    const textBounds = computeAnnotationBounds(
+      { tool: 'text', text: 'Hello\nWorld', textStyle: 'meme', x: 50, y: 60, fontSize: 36 },
+      800,
+      600
+    );
+    assert.ok(textBounds && textBounds.x <= 40 && textBounds.y <= 50);
+    assert.ok(textBounds.height >= 80 && textBounds.width >= 100);
+
+    const redactBounds = computeAnnotationBounds(
+      { tool: 'redact', x1: -20, y1: -10, x2: 60, y2: 40 },
+      400,
+      300
+    );
+    assert.equal(redactBounds.x, 0);
+    assert.equal(redactBounds.y, 0);
+    assert.ok(redactBounds.width >= 60 && redactBounds.height >= 40);
+
+    const boxBounds = computeAnnotationBounds(
+      { tool: 'box', x1: 20, y1: 30, x2: 120, y2: 90, strokeWidth: 4 },
+      400,
+      300
+    );
+    assert.ok(boxBounds && boxBounds.x <= 16 && boxBounds.y <= 26);
+    assert.ok(boxBounds.x + boxBounds.width >= 124 && boxBounds.y + boxBounds.height >= 94);
+
+    const circleBounds = computeAnnotationBounds(
+      { tool: 'circle', x1: 50, y1: 50, x2: 150, y2: 110, strokeWidth: 6 },
+      400,
+      300
+    );
+    assert.ok(circleBounds && circleBounds.x <= 44 && circleBounds.y <= 44);
+    assert.ok(circleBounds.x + circleBounds.width >= 156 && circleBounds.y + circleBounds.height >= 116);
+
+    const lineBounds = computeAnnotationBounds(
+      { tool: 'line', x1: 10, y1: 20, x2: 90, y2: 80, strokeWidth: 4 },
+      400,
+      300
+    );
+    assert.ok(lineBounds && lineBounds.x <= 6 && lineBounds.x + lineBounds.width >= 94);
+
+    const hlBounds = computeAnnotationBounds(
+      { tool: 'highlighter', points: [{ x: 40, y: 40 }, { x: 140, y: 40 }], strokeWidth: 28 },
+      400,
+      300
+    );
+    assert.ok(hlBounds && hlBounds.x <= 24 && hlBounds.y <= 24);
+    assert.ok(hlBounds.y + hlBounds.height >= 56);
+
+    // 2. ensureDriveFolder verifyTtlMs skips redundant GET RTT on consecutive uploads and clears cleanly
+    clearDriveFolderVerifyCache();
+    let verifyGets = 0;
+    const ttlFetch = async (url) => {
+      verifyGets += 1;
+      assert.ok(String(url).includes('/drive/v3/files/folder-ttl-1'));
+      return new Response(
+        JSON.stringify({
+          id: 'folder-ttl-1',
+          name: 'Shots',
+          mimeType: 'application/vnd.google-apps.folder',
+          trashed: false,
+          webViewLink: 'https://drive.google.com/drive/folders/folder-ttl-1',
+        }),
+        { status: 200 }
+      );
+    };
+    const f1 = await ensureDriveFolder(
+      'tok-ttl',
+      { folderName: 'Shots', cachedFolderId: 'folder-ttl-1', accountKey: 'a@x.com', verifyTtlMs: 60_000 },
+      ttlFetch
+    );
+    const f2 = await ensureDriveFolder(
+      'tok-ttl',
+      { folderName: 'Shots', cachedFolderId: 'folder-ttl-1', accountKey: 'a@x.com', verifyTtlMs: 60_000 },
+      ttlFetch
+    );
+    assert.equal(f1.id, 'folder-ttl-1');
+    assert.equal(f2.id, 'folder-ttl-1');
+    assert.equal(verifyGets, 1, 'verifyTtlMs must skip redundant GET on consecutive upload within TTL');
+
+    // Default verifyTtlMs=0 always verifies immediately
+    await ensureDriveFolder(
+      'tok-ttl',
+      { folderName: 'Shots', cachedFolderId: 'folder-ttl-1', accountKey: 'a@x.com' },
+      ttlFetch
+    );
+    assert.equal(verifyGets, 2, 'Default verifyTtlMs=0 must always re-verify');
+
+    clearDriveFolderVerifyCache();
+    await ensureDriveFolder(
+      'tok-ttl',
+      { folderName: 'Shots', cachedFolderId: 'folder-ttl-1', accountKey: 'a@x.com', verifyTtlMs: 60_000 },
+      ttlFetch
+    );
+    assert.equal(verifyGets, 3, 'clearDriveFolderVerifyCache must force fresh verify');
+
+    // 3. Cache Storage blob transfer URL validation, one-shot delete, Incognito exclusion, and PNG header check
+    const cacheBuckets = new Map();
+    globalThis.caches = {
+      async open(name) {
+        if (!cacheBuckets.has(name)) cacheBuckets.set(name, new Map());
+        const map = cacheBuckets.get(name);
+        return {
+          async put(url, resp) {
+            map.set(String(url), resp);
+          },
+          async match(url) {
+            return map.get(String(url)) || undefined;
+          },
+          async delete(url) {
+            return map.delete(String(url));
+          },
+          async keys() {
+            return Array.from(map.keys()).map((u) => ({ url: u }));
+          },
+        };
+      },
+      async delete(name) {
+        return cacheBuckets.delete(name);
+      },
+    };
+
+    const injectedScripts = [];
+    const mock = installChromeMock({
+      tabs: [
+        { id: 901, active: true, windowId: 1, url: 'https://example.com/normal', title: 'Normal', incognito: false },
+        { id: 902, active: true, windowId: 2, url: 'https://example.com/incog', title: 'Incog', incognito: true },
+      ],
+      initialStore: {
+        signedOut: true,
+        userProfile: null,
+        settings: { folderName: 'Shots', editBeforeUpload: true },
+      },
+      onTabSendMessage: async (_tabId, msg) => {
+        if (msg.type === 'HIDE_UI_FOR_CAPTURE') return { ok: true, removed: false };
+        if (msg.type === 'FULLPAGE_PREPARE') {
+          if (injectedScripts.filter((f) => f === 'content/fullpage.js').length === 0) {
+            throw new Error('Receiving end does not exist');
+          }
+          return {
+            ok: true,
+            sessionToken: 'tok-fp-lazy',
+            viewportWidth: 400,
+            viewportHeight: 300,
+            scrollStepHeight: 300,
+            actualY: 0,
+            totalHeight: 300,
+            devicePixelRatio: 1,
+            containerRect: null,
+          };
+        }
+        if (msg.type === 'FULLPAGE_PILL') {
+          return { ok: true, sessionToken: 'tok-fp-lazy', cancelled: false };
+        }
+        if (msg.type === 'FULLPAGE_RESTORE') return { ok: true };
+        return { ok: true };
+      },
+    });
+    globalThis.chrome.scripting.executeScript = async ({ files }) => {
+      injectedScripts.push(...(files || []));
+      return [];
+    };
+
+    assert.equal(isValidBlobTransferUrl('https://evil.example/__saveshot_blob__/12345678'), false);
+    assert.equal(isValidBlobTransferUrl('chrome-extension://testext/__saveshot_blob__/../secret'), false);
+    const validPngBlob = await dataUrlToBlob(TINY_PNG_DATA_URL);
+    const testCacheUrl = await putBlobInTransferCache(validPngBlob);
+    assert.equal(isValidBlobTransferUrl(testCacheUrl), true);
+    const taken1 = await takeBlobFromTransferCache(testCacheUrl);
+    assert.ok(taken1 && taken1.size === validPngBlob.size);
+    const taken2 = await takeBlobFromTransferCache(testCacheUrl);
+    assert.equal(taken2, null, 'takeBlobFromTransferCache must be one-shot (deleted on read)');
+
+    const {
+      registerServiceWorkerListeners,
+      resetInMemoryWorkerStateForTests,
+    } = await import('../background/service-worker.js');
+    resetInMemoryWorkerStateForTests();
+    if (mock.listeners.onMessage.length === 0) {
+      registerServiceWorkerListeners();
+    }
+    const trustedSender = { url: 'chrome-extension://testext/pages/editor.html' };
+
+    // Non-Incognito GET_EDITOR_SESSION with acceptBlobCache: true transfers via Cache Storage (empty dataUrl)
+    const capNormal = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 901 }, trustedSender);
+    assert.equal(capNormal.ok, true);
+    const edNormal = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: capNormal.sessionId, acceptBlobCache: true },
+      trustedSender
+    );
+    assert.equal(edNormal.ok, true);
+    assert.ok(edNormal.blobCacheUrl, 'Non-Incognito acceptBlobCache must return blobCacheUrl');
+    assert.equal(edNormal.dataUrl, '', 'Cache Storage fast path must skip base64 dataUrl');
+    const fetchedNormal = await takeBlobFromTransferCache(edNormal.blobCacheUrl);
+    assert.ok(fetchedNormal && fetchedNormal.size > 0);
+
+    // Incognito GET_EDITOR_SESSION must NEVER write screenshot pixels to Cache Storage even with acceptBlobCache: true
+    const capIncog = await mock.dispatchMessage({ type: 'CAPTURE_VISIBLE', tabId: 902 }, trustedSender);
+    assert.equal(capIncog.ok, true);
+    const edIncog = await mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: capIncog.sessionId, acceptBlobCache: true },
+      trustedSender
+    );
+    assert.equal(edIncog.ok, true);
+    assert.equal(edIncog.blobCacheUrl, '', 'Incognito session must NEVER use Cache Storage');
+    assert.ok(edIncog.dataUrl.startsWith('data:image/png;base64,'));
+
+    // Spoofed non-PNG cached blob in SAVE_EDITED_SCREENSHOT is rejected with INVALID_IMAGE_DATA and deleted
+    const spoofUrl = await putBlobInTransferCache(new Blob(['not a png'], { type: 'text/plain' }));
+    const spoofSave = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: capNormal.sessionId,
+        filename: 'test.png',
+        blobCacheUrl: spoofUrl,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedSender
+    );
+    assert.equal(spoofSave.ok, false);
+    assert.equal(spoofSave.code, 'INVALID_IMAGE_DATA');
+    assert.equal(await takeBlobFromTransferCache(spoofUrl), null, 'Spoofed blob must be deleted from Cache Storage');
+
+    // Pre-read failure (expired/missing sessionId) must STILL delete blobCacheUrl in handleSaveEditedScreenshot finally
+    const orphanUrl = await putBlobInTransferCache(validPngBlob);
+    const badSessionSave = await mock.dispatchMessage(
+      {
+        type: 'SAVE_EDITED_SCREENSHOT',
+        sessionId: 'non-existent-session-id',
+        filename: 'test.png',
+        blobCacheUrl: orphanUrl,
+        imageModified: true,
+        saveMode: 'new',
+      },
+      trustedSender
+    );
+    assert.equal(badSessionSave.ok, false);
+    assert.equal(
+      await takeBlobFromTransferCache(orphanUrl),
+      null,
+      'Pre-read SAVE_EDITED_SCREENSHOT error must delete blobCacheUrl so it never orphans on disk'
+    );
+
+    // GET_EDITOR_SESSION racing with SIGN_OUT during Drive media download must abort and write zero bytes to Cache Storage
+    await clearBlobTransferCache();
+    mock.store.signedOut = false;
+    mock.store.userProfile = { email: 'alice@example.com', name: 'Alice', verifiedAt: Date.now() };
+    let resolveSlowDownload;
+    globalThis.fetch = (url) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/revoke')) {
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      if (u.includes('alt=media')) {
+        return new Promise((resolve) => {
+          resolveSlowDownload = () =>
+            resolve(new Response(validPngBlob, { status: 200, headers: { 'Content-Type': 'image/png' } }));
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+    };
+    const openedExisting = await mock.dispatchMessage(
+      { type: 'OPEN_EDITOR', fileId: 'fileDriveRace12345', filename: 'race.png' },
+      trustedSender
+    );
+    assert.equal(openedExisting.ok, true);
+    const pendingGetSession = mock.dispatchMessage(
+      { type: 'GET_EDITOR_SESSION', sessionId: openedExisting.sessionId, acceptBlobCache: true },
+      trustedSender
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const signOutRes = await mock.dispatchMessage({ type: 'SIGN_OUT' }, trustedSender);
+    assert.equal(signOutRes.ok, true);
+    assert.equal(typeof resolveSlowDownload, 'function', 'Drive download should have been in flight');
+    resolveSlowDownload();
+    const racedEditorRes = await pendingGetSession;
+    assert.equal(racedEditorRes.ok, false, 'GET_EDITOR_SESSION racing with SIGN_OUT must fail');
+    assert.equal(racedEditorRes.code, 'EDITOR_SESSION_EXPIRED');
+    const cacheBucketAfterSignOut = cacheBuckets.get('saveshot-blobs-v1');
+    assert.equal(
+      cacheBucketAfterSignOut ? cacheBucketAfterSignOut.size : 0,
+      0,
+      'GET_EDITOR_SESSION racing with SIGN_OUT must leave zero entries in Cache Storage'
+    );
+
+    // CAPTURE_FULLPAGE lazily injects content/fullpage.js (NOT content/selector.js)
+    injectedScripts.length = 0;
+    const fpRes = await mock.dispatchMessage({ type: 'CAPTURE_FULLPAGE', tabId: 901 }, trustedSender);
+    assert.equal(fpRes.ok, true, `CAPTURE_FULLPAGE failed: ${JSON.stringify(fpRes)}`);
+    assert.deepEqual(
+      injectedScripts,
+      ['content/fullpage.js'],
+      'CAPTURE_FULLPAGE must lazily inject only content/fullpage.js'
+    );
+
+    await clearBlobTransferCache();
+    assert.equal(cacheBuckets.size, 0);
+  } finally {
+    globalThis.fetch = origFetch;
+    globalThis.caches = origCaches;
+    clearDriveFolderVerifyCache();
+  }
+});
+
 
 
 
