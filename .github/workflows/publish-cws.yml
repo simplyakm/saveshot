@@ -1,0 +1,116 @@
+name: Publish to Chrome Web Store
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Release action (draft uploads ZIP only; staged submits for review then holds; publish submits and auto-publishes on approval)'
+        type: choice
+        required: true
+        default: draft
+        options:
+          - draft
+          - staged
+          - publish
+          - status
+          - cancel
+      run_tests:
+        description: 'Run full unit + real-Chromium E2E test suite before uploading'
+        type: boolean
+        required: true
+        default: true
+      skip_review:
+        description: 'Request skipReview for eligible minor updates (staged/publish only)'
+        type: boolean
+        required: true
+        default: false
+      cancel_pending:
+        description: 'Cancel an existing PENDING_REVIEW or STAGED submission before uploading a new package'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cws-publish
+  cancel-in-progress: false
+
+jobs:
+  cws-release:
+    name: Chrome Web Store (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Install Chrome for Testing (supports --load-extension for MV3 E2E)
+        if: ${{ inputs.run_tests && inputs.mode != 'status' && inputs.mode != 'cancel' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          INSTALL_OUT="$(npx --yes @puppeteer/browsers install chrome@stable --path "${RUNNER_TEMP}/cft")"
+          CHROME_BIN="$(printf '%s\n' "${INSTALL_OUT}" | awk '{print $2}' | tail -n 1)"
+          test -x "${CHROME_BIN}"
+          echo "CHROMIUM_BIN=${CHROME_BIN}" >> "$GITHUB_ENV"
+
+      - name: Run full verification suite (unit + real-Chromium E2E)
+        if: ${{ inputs.run_tests && inputs.mode != 'status' && inputs.mode != 'cancel' }}
+        run: npm test
+
+      - name: Build deterministic CWS ZIP package
+        if: ${{ inputs.mode == 'draft' || inputs.mode == 'staged' || inputs.mode == 'publish' }}
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run pack
+          ZIP_FILE="$(node -e "import('./scripts/pack-cws.mjs').then(async ({ findLatestCwsZipName }) => { const fs = await import('node:fs'); const { version } = JSON.parse(fs.readFileSync('manifest.json', 'utf8')); const name = findLatestCwsZipName(process.cwd(), version); if (!name) process.exit(1); console.log('store-assets/' + name); })")"
+          [[ "${ZIP_FILE}" =~ ^store-assets/saveshot-v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-cws\.zip$ ]]
+          test -f "${ZIP_FILE}"
+          echo "zip_path=${ZIP_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload CWS ZIP workflow artifact
+        if: ${{ inputs.mode == 'draft' || inputs.mode == 'staged' || inputs.mode == 'publish' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: saveshot-cws-package-${{ github.run_number }}
+          path: ${{ steps.pack.outputs.zip_path }}
+          retention-days: 14
+
+      - name: Execute Chrome Web Store API V2 action
+        shell: bash
+        env:
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ secrets.CWS_ITEM_ID }}
+          CWS_SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_MODE: ${{ inputs.mode }}
+          CWS_SKIP_REVIEW: ${{ inputs.skip_review }}
+          CWS_CANCEL_PENDING: ${{ inputs.cancel_pending }}
+          CWS_ZIP_PATH: ${{ steps.pack.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          ARGS=("--mode=${CWS_MODE}")
+          if [ -n "${CWS_ZIP_PATH}" ]; then
+            ARGS+=("--zip=${CWS_ZIP_PATH}")
+          fi
+          if [ "${CWS_SKIP_REVIEW}" = "true" ]; then
+            ARGS+=("--skip-review")
+          fi
+          if [ "${CWS_CANCEL_PENDING}" = "true" ]; then
+            ARGS+=("--cancel-pending")
+          fi
+          node scripts/publish-cws.mjs "${ARGS[@]}"

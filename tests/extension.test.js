@@ -6599,6 +6599,438 @@ test('MV3 bidirectional undefined lazy injection, frameId 0 targeting, mid-prepa
   }
 });
 
+test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path validation, embedded ZIP manifest check, async upload polling, draft/staged/publish/cancel, and workflow hygiene)', async () => {
+  const crypto = await import('node:crypto');
+  const os = await import('node:os');
+  const {
+    ALLOWED_TOKEN_URIS,
+    compareVersions,
+    createServiceAccountJwt,
+    CWS_SCOPES,
+    extractManifestFromZipBuffer,
+    formatStepSummary,
+    getAccessToken,
+    parseCliArgs,
+    runCwsCommand,
+    sanitizeApiErrorBody,
+    VALID_MODES,
+    validateItemId,
+    validatePublisherId,
+  } = await import('../scripts/publish-cws.mjs');
+  const { buildCwsZipBuffer } = await import('../scripts/pack-cws.mjs');
+
+  const PUB_ID = '11112222-3333-4444-5555-666677778888';
+  const ITEM_ID = 'eilmbilnlihhddjdmdpppalfnbnieppf';
+
+  // 1. Strict ID, version, frozen exports, and error redaction guards
+  assert.equal(Object.isFrozen(ALLOWED_TOKEN_URIS), true);
+  assert.equal(Object.isFrozen(VALID_MODES), true);
+  assert.equal(validatePublisherId(PUB_ID), PUB_ID);
+  assert.throws(() => validatePublisherId('.'), /Invalid CWS_PUBLISHER_ID/);
+  assert.throws(() => validatePublisherId('---'), /Invalid CWS_PUBLISHER_ID/);
+  assert.throws(() => validatePublisherId('../evil'), /Invalid CWS_PUBLISHER_ID/);
+  assert.throws(() => validatePublisherId('pub/123?x=1'), /Invalid CWS_PUBLISHER_ID/);
+  assert.equal(validateItemId(ITEM_ID), ITEM_ID);
+  assert.throws(() => validateItemId('ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ'), /Invalid CWS_ITEM_ID/);
+  assert.throws(() => validateItemId('short'), /Invalid CWS_ITEM_ID/);
+
+  assert.equal(compareVersions('1.3.0', '1.2.1'), 1);
+  assert.equal(compareVersions('1.10.0', '1.9.9'), 1);
+  assert.equal(compareVersions('1.3.0', '1.3'), 0);
+  assert.equal(compareVersions('1.2.1', '1.3.0'), -1);
+  assert.throws(() => compareVersions('1.3.0-rc1', '1.2.1'), /Invalid dotted numeric version/);
+
+  const redacted = sanitizeApiErrorBody(
+    'Err {"access_token":"ya29.sec\\"ret","private_key":"k"} assertion=eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig123456789 GOCSPX-abc123 1//refreshtok Bearer ya29.abc123 -----BEGIN PRIVATE KEY-----\ntruncated'
+  );
+  assert.equal(redacted.includes('ya29.'), false);
+  assert.equal(redacted.includes('eyJhbGci'), false);
+  assert.equal(redacted.includes('GOCSPX-'), false);
+  assert.equal(redacted.includes('1//refreshtok'), false);
+  assert.equal(redacted.includes('BEGIN PRIVATE KEY'), false);
+  assert.match(redacted, /\[REDACTED\]/);
+
+  // Embedded ZIP manifest extraction verifies real packed CWS ZIP cleanly
+  const builtZip = buildCwsZipBuffer(rootDir);
+  const extractedManifest = extractManifestFromZipBuffer(builtZip.buffer);
+  assert.equal(extractedManifest.version, builtZip.version);
+  assert.equal('key' in extractedManifest, false);
+
+  // 2. Real RSA-2048 Service Account JWT signing + kid header + cryptographic verification + SSRF guard
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const serviceAccount = {
+    type: 'service_account',
+    client_email: 'cws-bot@saveshot-test.iam.gserviceaccount.com',
+    private_key: privateKey,
+    private_key_id: 'key-id-99',
+    token_uri: 'https://oauth2.googleapis.com/token',
+  };
+  const { assertion, tokenUri } = createServiceAccountJwt(serviceAccount, {
+    scope: CWS_SCOPES.WRITE,
+    nowSec: 1700000000,
+  });
+  assert.equal(tokenUri, 'https://oauth2.googleapis.com/token');
+  const [hdrB64, payB64, sigB64] = assertion.split('.');
+  const decodedHeader = JSON.parse(Buffer.from(hdrB64, 'base64url').toString('utf8'));
+  const decodedPayload = JSON.parse(Buffer.from(payB64, 'base64url').toString('utf8'));
+  assert.deepEqual(decodedHeader, { alg: 'RS256', typ: 'JWT', kid: 'key-id-99' });
+  assert.equal(decodedPayload.iss, serviceAccount.client_email);
+  assert.equal(decodedPayload.scope, CWS_SCOPES.WRITE);
+  assert.equal(decodedPayload.aud, 'https://oauth2.googleapis.com/token');
+  assert.equal(decodedPayload.exp, 1700003600);
+  const sigValid = crypto.verify(
+    'RSA-SHA256',
+    Buffer.from(`${hdrB64}.${payB64}`, 'utf8'),
+    publicKey,
+    Buffer.from(sigB64, 'base64url')
+  );
+  assert.equal(sigValid, true, 'Service Account RS256 JWT signature must verify cryptographically');
+
+  assert.throws(
+    () =>
+      createServiceAccountJwt({
+        ...serviceAccount,
+        token_uri: 'https://evil.example/steal-jwt',
+      }),
+    /Untrusted service account token_uri/
+  );
+
+  // OAuth2 refresh token fallback works when no Service Account is provided + sets redirect: error
+  let refreshBody = '';
+  const refreshTok = await getAccessToken({
+    env: {
+      CWS_CLIENT_ID: 'cid-1',
+      CWS_CLIENT_SECRET: 'csec-1',
+      CWS_REFRESH_TOKEN: 'rtok-1',
+    },
+    fetchImpl: async (url, opts) => {
+      assert.equal(url, 'https://oauth2.googleapis.com/token');
+      assert.equal(opts.redirect, 'error');
+      refreshBody = String(opts.body);
+      return new Response(JSON.stringify({ access_token: 'tok-from-refresh' }), { status: 200 });
+    },
+  });
+  assert.equal(refreshTok, 'tok-from-refresh');
+  assert.match(refreshBody, /grant_type=refresh_token/);
+
+  const saEnv = {
+    CWS_PUBLISHER_ID: PUB_ID,
+    CWS_ITEM_ID: ITEM_ID,
+    CWS_SERVICE_ACCOUNT_JSON: JSON.stringify(serviceAccount),
+  };
+
+  // 3. Status mode uses READONLY scope, picks highest channel version, and renders takenDown/warned/lastAsyncUploadState
+  let statusTokenScope = '';
+  const statusRes = await runCwsCommand({
+    mode: 'status',
+    env: saEnv,
+    fetchImpl: async (url, opts) => {
+      if (url === 'https://oauth2.googleapis.com/token') {
+        const params = new URLSearchParams(String(opts.body));
+        const jwtPayload = JSON.parse(
+          Buffer.from(params.get('assertion').split('.')[1], 'base64url').toString('utf8')
+        );
+        statusTokenScope = jwtPayload.scope;
+        return new Response(JSON.stringify({ access_token: 'tok-ro' }), { status: 200 });
+      }
+      assert.equal(
+        url,
+        `https://chromewebstore.googleapis.com/v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`
+      );
+      return new Response(
+        JSON.stringify({
+          publishedItemRevisionStatus: {
+            state: 'PUBLISHED',
+            distributionChannels: [
+              { crxVersion: '1.2.0', deployPercentage: 50 },
+              { crxVersion: '1.2.1', deployPercentage: 50 },
+            ],
+          },
+          lastAsyncUploadState: 'SUCCEEDED',
+          takenDown: false,
+          warned: true,
+        }),
+        { status: 200 }
+      );
+    },
+  });
+  assert.equal(statusTokenScope, CWS_SCOPES.READONLY);
+  assert.equal(statusRes.publishedVersion, '1.2.1');
+  assert.equal(statusRes.warned, true);
+  assert.match(formatStepSummary(statusRes), /Last Async Upload State.*SUCCEEDED/);
+  assert.match(formatStepSummary(statusRes), /Policy Warning.*WARNED/);
+
+  // 4. Pre-flight guards: version regression, takenDown, PENDING_REVIEW/STAGED without cancelPending, and cancel mode
+  let uploadCalls = 0;
+  await assert.rejects(
+    () =>
+      runCwsCommand({
+        mode: 'draft',
+        env: saEnv,
+        logger: { log: () => {} },
+        fetchImpl: async (url) => {
+          if (url.includes('oauth2.googleapis.com')) {
+            return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+          }
+          if (url.endsWith(':upload')) uploadCalls += 1;
+          return new Response(
+            JSON.stringify({
+              publishedItemRevisionStatus: {
+                state: 'PUBLISHED',
+                distributionChannels: [{ crxVersion: '1.3.0' }],
+              },
+            }),
+            { status: 200 }
+          );
+        },
+      }),
+    /must be higher than currently published/
+  );
+  assert.equal(uploadCalls, 0, 'Must abort before uploading when manifest version <= published version');
+
+  await assert.rejects(
+    () =>
+      runCwsCommand({
+        mode: 'draft',
+        env: saEnv,
+        logger: { log: () => {} },
+        fetchImpl: async (url) => {
+          if (url.includes('oauth2.googleapis.com')) {
+            return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+          }
+          return new Response(JSON.stringify({ takenDown: true }), { status: 200 });
+        },
+      }),
+    /taken down/
+  );
+
+  for (const blockedState of ['PENDING_REVIEW', 'STAGED']) {
+    await assert.rejects(
+      () =>
+        runCwsCommand({
+          mode: 'draft',
+          env: saEnv,
+          logger: { log: () => {} },
+          fetchImpl: async (url) => {
+            if (url.includes('oauth2.googleapis.com')) {
+              return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+            }
+            return new Response(
+              JSON.stringify({ submittedItemRevisionStatus: { state: blockedState } }),
+              { status: 200 }
+            );
+          },
+        }),
+      new RegExp(`currently ${blockedState}`)
+    );
+  }
+
+  let cancelCalled = false;
+  const cancelRes = await runCwsCommand({
+    mode: 'cancel',
+    env: saEnv,
+    fetchImpl: async (url) => {
+      if (url.includes('oauth2.googleapis.com')) {
+        return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+      }
+      assert.equal(
+        url,
+        `https://chromewebstore.googleapis.com/v2/publishers/${PUB_ID}/items/${ITEM_ID}:cancelSubmission`
+      );
+      cancelCalled = true;
+      return new Response('{}', { status: 200 });
+    },
+  });
+  assert.equal(cancelCalled, true);
+  assert.equal(cancelRes.cancelled, true);
+
+  // 5. Draft mode: never-published item (no publishedItemRevisionStatus), cancels PENDING_REVIEW when cancelPending=true,
+  //    uploads ZIP, tolerates UPLOAD_STATE_UNSPECIFIED + transient 503 during async polling, falls back to ZIP manifest version
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-cws-test-'));
+  const tmpZipPath = path.join(tmpDir, 'test-pkg.zip');
+  fs.writeFileSync(tmpZipPath, builtZip.buffer);
+  try {
+    const callSequence = [];
+    let statusPolls = 0;
+    const draftRes = await runCwsCommand({
+      mode: 'draft',
+      env: saEnv,
+      zipPath: tmpZipPath,
+      cancelPending: true,
+      pollIntervalMs: 1,
+      sleepImpl: async () => {},
+      logger: { log: () => {} },
+      fetchImpl: async (url, opts) => {
+        if (url.includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+        }
+        callSequence.push(`${opts.method} ${new URL(url).pathname}`);
+        if (url.endsWith(':fetchStatus')) {
+          statusPolls += 1;
+          if (statusPolls === 1) {
+            return new Response(
+              JSON.stringify({ submittedItemRevisionStatus: { state: 'PENDING_REVIEW' } }),
+              { status: 200 }
+            );
+          }
+          if (statusPolls === 2) {
+            return new Response('Temporary outage', { status: 503 });
+          }
+          return new Response(
+            JSON.stringify({
+              lastAsyncUploadState: statusPolls === 3 ? 'UPLOAD_STATE_UNSPECIFIED' : 'SUCCEEDED',
+            }),
+            { status: 200 }
+          );
+        }
+        if (url.endsWith(':cancelSubmission')) {
+          return new Response('{}', { status: 200 });
+        }
+        if (url.endsWith(':upload')) {
+          assert.equal(opts.headers['X-Goog-Upload-Protocol'], 'raw');
+          assert.equal(opts.headers['Content-Type'], 'application/zip');
+          assert.ok(Buffer.isBuffer(opts.body) && opts.body.length > 1000);
+          return new Response(
+            JSON.stringify({ itemId: ITEM_ID, uploadState: 'IN_PROGRESS' }),
+            { status: 200 }
+          );
+        }
+        throw new Error(`Unexpected URL in draft mode: ${url}`);
+      },
+    });
+    assert.equal(draftRes.published, false);
+    assert.equal(draftRes.uploadState, 'SUCCEEDED');
+    assert.equal(draftRes.version, builtZip.version);
+    assert.deepEqual(callSequence, [
+      `GET /v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`,
+      `POST /v2/publishers/${PUB_ID}/items/${ITEM_ID}:cancelSubmission`,
+      `POST /upload/v2/publishers/${PUB_ID}/items/${ITEM_ID}:upload`,
+      `GET /v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`,
+      `GET /v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`,
+      `GET /v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`,
+    ]);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // 6. Staged/publish mode sends exact V2 publishType, skipReview, deployInfos, blockOnWarnings, and escapes Markdown summary
+  let capturedPublishBody = null;
+  const pubRes = await runCwsCommand({
+    mode: 'staged',
+    env: saEnv,
+    skipReview: true,
+    deployPercentage: 25,
+    blockOnWarnings: true,
+    logger: { log: () => {} },
+    fetchImpl: async (url, opts) => {
+      if (url.includes('oauth2.googleapis.com')) {
+        return new Response(JSON.stringify({ access_token: 'tok-w' }), { status: 200 });
+      }
+      if (url.endsWith(':fetchStatus')) {
+        return new Response(
+          JSON.stringify({
+            publishedItemRevisionStatus: {
+              state: 'PUBLISHED',
+              distributionChannels: [{ crxVersion: '1.2.1' }],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(':upload')) {
+        return new Response(
+          JSON.stringify({ itemId: ITEM_ID, crxVersion: '1.3.0', uploadState: 'SUCCEEDED' }),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(':publish')) {
+        capturedPublishBody = JSON.parse(String(opts.body));
+        return new Response(
+          JSON.stringify({
+            itemId: ITEM_ID,
+            state: 'PENDING_REVIEW',
+            warningInfo: {
+              warnings: [{ reason: 'TEST_WARN', description: '<script>evil</script> [click](http://evil)' }],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+  });
+  assert.deepEqual(capturedPublishBody, {
+    publishType: 'STAGED_PUBLISH',
+    skipReview: true,
+    blockOnWarnings: true,
+    deployInfos: [{ deployPercentage: 25 }],
+  });
+  assert.equal(pubRes.published, true);
+  assert.equal(pubRes.publishState, 'PENDING_REVIEW');
+  const summaryMd = formatStepSummary(pubRes);
+  assert.match(summaryMd, /Chrome Web Store API V2 \(staged\)/);
+  assert.equal(summaryMd.includes('<script>'), false, 'Step summary must escape raw HTML tags');
+
+  // 7. CLI parser & GitHub Actions workflow security hygiene (per-run-block secret check, pinned SHAs, persist-credentials: false)
+  assert.deepEqual(
+    parseCliArgs(['--mode=publish', '--skip-review', '--cancel-pending', '--deploy-percentage=50']),
+    {
+      mode: 'publish',
+      zipPath: '',
+      skipReview: true,
+      deployPercentage: 50,
+      blockOnWarnings: false,
+      cancelPending: true,
+      allowSameVersion: false,
+      json: false,
+    }
+  );
+  assert.throws(() => parseCliArgs(['--mode']), /Missing value for --mode/);
+  assert.throws(() => parseCliArgs(['--unknown-flag']), /Unknown CLI argument/);
+  await assert.rejects(
+    () => runCwsCommand({ mode: 'draft', skipReview: true, env: saEnv }),
+    /only valid in staged or publish modes/
+  );
+
+  const wfPath = path.join(rootDir, '.github/workflows/publish-cws.yml');
+  const wfContent = fs.readFileSync(wfPath, 'utf8');
+  assert.equal(wfContent.includes('\u2014'), false, 'Workflow YAML must contain no em dashes');
+  assert.equal(wfContent.includes('\u2013'), false, 'Workflow YAML must contain no en dashes');
+  assert.match(wfContent, /workflow_dispatch:/);
+  assert.match(wfContent, /default:\s*draft/);
+  assert.match(wfContent, /contents:\s*read/);
+  assert.match(wfContent, /persist-credentials:\s*false/);
+  assert.equal(
+    /uses:\s+actions\/[a-z-]+@v\d+\b/.test(wfContent),
+    false,
+    'Workflow must pin GitHub Actions to 40-char commit SHAs, not mutable @v4 tags'
+  );
+  // Check each run: block individually to ensure secrets.* is NEVER interpolated into shell run scripts
+  const wfLines = wfContent.split('\n');
+  for (let i = 0; i < wfLines.length; i += 1) {
+    const m = wfLines[i].match(/^(\s*)run:\s*(.*)$/);
+    if (!m) continue;
+    const baseIndent = m[1].length;
+    const blockLines = [m[2]];
+    for (let j = i + 1; j < wfLines.length; j += 1) {
+      if (wfLines[j].trim() === '') continue;
+      const indent = wfLines[j].match(/^(\s*)/)[1].length;
+      if (indent <= baseIndent) break;
+      blockLines.push(wfLines[j]);
+    }
+    assert.equal(
+      /\$\{\{\s*secrets\./.test(blockLines.join('\n')),
+      false,
+      `Workflow run: block at line ${i + 1} must never interpolate secrets directly`
+    );
+  }
+});
+
+
 
 
 
