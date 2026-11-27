@@ -23,6 +23,7 @@ export const ASSET_INPUT_FILES = [
   'pages/editor.html',
   'pages/editor.css',
   'lib/editor-core.js',
+  'lib/pdf.js',
   'pages/welcome.html',
   'pages/welcome.css',
   'content/fullpage.js',
@@ -1344,6 +1345,7 @@ export async function generateAllStoreAssets() {
                   <span>Drag to select area</span>
                   <span class="selector-hud-sep"></span>
                   <span class="selector-hud-btn">Full tab <span class="selector-hud-key">Enter</span></span>
+                  <span class="selector-hud-btn">Full page <span class="selector-hud-key">F</span></span>
                   <span class="selector-hud-key">Esc</span>
                 </div>
                 <div class="crop-box">

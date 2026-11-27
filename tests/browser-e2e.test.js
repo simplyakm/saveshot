@@ -1670,6 +1670,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
             return {
               id,
               text: el.textContent.trim(),
+              left: b.left,
               top: b.top,
               bottom: b.bottom,
               height: Math.round(b.height),
@@ -1682,8 +1683,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         const topbarBtns = measureBtns([
           'editor-help-btn',
           'copy-image-btn',
-          'download-btn',
           'copy-link-btn',
+          'download-btn',
           'save-drive-btn',
         ]);
         const pencilRect = document.getElementById('rename-pencil-btn').getBoundingClientRect();
@@ -1753,12 +1754,13 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(dialogAndXssCheck.leftUnsavedMetrics.inLeft, true, 'Unsaved changes pill must render inside .topbar-left');
     assert.equal(dialogAndXssCheck.leftUnsavedMetrics.height, 24, 'Left unsaved pill must match 24px status pill height');
 
-    // Verify all 5 Editor topbar-right buttons (Help, Copy image, Download, Copy link, Save) share exact 32px height and 0px vertical drift
-    const [helpBtnMetrics, copyImgMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics] =
+    // Verify all 5 Editor topbar-right buttons (Help, Copy image, Copy link, Download, Save) share exact 32px height, 0px vertical drift, and left-to-right order
+    const [helpBtnMetrics, copyImgMetrics, copyBtnMetrics, dlBtnMetrics, saveBtnMetrics] =
       dialogAndXssCheck.topbarBtns;
     assert.equal(helpBtnMetrics.text, 'Help');
     assert.equal(copyImgMetrics.text, 'Copy image');
-    for (const m of [helpBtnMetrics, copyImgMetrics, dlBtnMetrics, copyBtnMetrics, saveBtnMetrics]) {
+    assert.equal(dlBtnMetrics.text, 'Download');
+    for (const m of [helpBtnMetrics, copyImgMetrics, copyBtnMetrics, dlBtnMetrics, saveBtnMetrics]) {
       assert.equal(m.height, 32, `${m.id} must be 32px tall`);
       assert.equal(m.fontSize, '12.5px', `${m.id} must use 12.5px font-size`);
       assert.equal(m.lineHeight, '18px', `${m.id} must use 18px line-height`);
@@ -1766,6 +1768,13 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       assert.ok(Math.abs(m.top - dlBtnMetrics.top) <= 0.5, `${m.id} top misaligned`);
       assert.ok(Math.abs(m.bottom - dlBtnMetrics.bottom) <= 0.5, `${m.id} bottom misaligned`);
     }
+    assert.ok(
+      helpBtnMetrics.left < copyImgMetrics.left &&
+        copyImgMetrics.left < copyBtnMetrics.left &&
+        copyBtnMetrics.left < dlBtnMetrics.left &&
+        dlBtnMetrics.left < saveBtnMetrics.left,
+      'Topbar-right buttons must render left-to-right as Help, Copy image, Copy link, Download, Save'
+    );
 
     // 5C.2. Verify real ClipboardItem PNG copy (zero clipboardWrite permission) via Copy image button & Ctrl+C, plus input focus & Circle (C) safety
     await cdp.send('Page.bringToFront', {}, editorSession);
@@ -2129,14 +2138,17 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       `(() => {
         const host = document.getElementById('__saveshot-overlay-host');
         const btn = host?.shadowRoot?.getElementById('full-tab-btn');
+        const fpBtn = host?.shadowRoot?.getElementById('full-page-btn');
         return {
           mounted: Boolean(host),
           fullTabBtnText: btn?.textContent?.replace(/\\s+/g, ' ')?.trim() || '',
+          fullPageBtnText: fpBtn?.textContent?.replace(/\\s+/g, ' ')?.trim() || '',
         };
       })()`
     );
     assert.equal(hudCheck.mounted, true);
     assert.equal(hudCheck.fullTabBtnText, 'Full tab Enter');
+    assert.equal(hudCheck.fullPageBtnText, 'Full page F');
 
     // Press Enter to capture full visible tab straight from the region overlay
     await cdp.send(
@@ -4042,6 +4054,120 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       `Enter must stamp second blue image (got rgba=${memeAndPasteAudit.stampedSecondPx})`
     );
     assert.equal(memeAndPasteAudit.pasteContextHiddenAfterStamp, true);
+
+    // 9. Verify floating bottom-center status toast never clips long notices, dismiss button works,
+    //    Download dropdown stays in viewport, mutes tool shortcuts while open, and exports a real valid PDF
+    const toastAndPdfAudit = await evalIn(
+      toolsCase.edSess,
+      `(async () => {
+        const pill = document.getElementById('status-pill');
+        const closeBtn = document.getElementById('status-toast-close');
+        const wrap = document.getElementById('status-toast-wrap');
+        const dlBtn = document.getElementById('download-btn');
+        const dlMenu = document.getElementById('download-menu');
+        const dlPdfBtn = document.getElementById('download-pdf-btn');
+
+        // Inject a long 78-char capture warning directly via DOM check (same element showStatusPill uses)
+        pill.hidden = false;
+        pill.className = 'status-pill warn';
+        pill.textContent = 'Captured top section (page height limit reached). Image copied to clipboard.';
+        closeBtn.hidden = false;
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const pillRect = pill.getBoundingClientRect();
+        const wrapRect = wrap.getBoundingClientRect();
+        const notClipped = pill.scrollWidth <= pill.clientWidth + 2 && pillRect.width > 240;
+        const nearBottom = wrapRect.bottom <= window.innerHeight && wrapRect.bottom > window.innerHeight - 60;
+
+        // Clicking dismiss hides toast cleanly
+        closeBtn.click();
+        const dismissedCleanly = pill.hidden && getComputedStyle(wrap).display === 'none';
+
+        // Open Download dropdown -> right-aligned inside viewport, 'a' shortcut muted, Escape closes & restores focus
+        dlBtn.click();
+        await new Promise((r) => requestAnimationFrame(r));
+        const menuOpen = !dlMenu.hidden && dlBtn.getAttribute('aria-expanded') === 'true';
+        const menuRect = dlMenu.getBoundingClientRect();
+        const menuInViewport = menuRect.left >= 0 && menuRect.right <= window.innerWidth + 1;
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+        const arrowNotActivatedWhileMenuOpen =
+          document.querySelector('[data-tool="arrow"]').getAttribute('aria-pressed') === 'false';
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        const closedOnEsc = dlMenu.hidden && dlBtn.getAttribute('aria-expanded') === 'false';
+        const focusRestoredOnEsc = document.activeElement === dlBtn;
+
+        // Real in-browser PDF export via #download-pdf-btn (intercept Blob via URL.createObjectURL)
+        const origCreateObjectURL = URL.createObjectURL;
+        let capturedBlob = null;
+        let capturedDownloadName = '';
+        const origAnchorClick = HTMLAnchorElement.prototype.click;
+        URL.createObjectURL = (blob) => {
+          capturedBlob = blob;
+          return origCreateObjectURL.call(URL, blob);
+        };
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.download) capturedDownloadName = this.download;
+        };
+        try {
+          dlBtn.click();
+          dlPdfBtn.click();
+          for (let i = 0; i < 40; i += 1) {
+            if (capturedBlob && !pill.hidden && pill.classList.contains('ok')) break;
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        } finally {
+          URL.createObjectURL = origCreateObjectURL;
+          HTMLAnchorElement.prototype.click = origAnchorClick;
+        }
+
+        let pdfHeader = '';
+        let pdfTail = '';
+        let hasProducer = false;
+        let hasStreamFilter = false;
+        if (capturedBlob) {
+          const bytes = new Uint8Array(await capturedBlob.arrayBuffer());
+          const text = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+          pdfHeader = text.slice(0, 9);
+          pdfTail = text.slice(-16).trim();
+          hasProducer = text.includes('/Producer (SaveShot)');
+          hasStreamFilter = text.includes('/Filter /FlateDecode') || text.includes('/Filter /DCTDecode');
+        }
+
+        return {
+          notClipped,
+          nearBottom,
+          dismissedCleanly,
+          menuOpen,
+          menuInViewport,
+          arrowNotActivatedWhileMenuOpen,
+          closedOnEsc,
+          focusRestoredOnEsc,
+          blobType: capturedBlob?.type || '',
+          blobSize: capturedBlob?.size || 0,
+          capturedDownloadName,
+          pdfHeader,
+          pdfTail,
+          hasProducer,
+          hasStreamFilter,
+          donePillText: pill.textContent.trim(),
+        };
+      })()`
+    );
+    assert.equal(toastAndPdfAudit.notClipped, true, 'Floating status toast must not clip 78-char capture warning');
+    assert.equal(toastAndPdfAudit.nearBottom, true, 'Status toast must float cleanly at bottom-center');
+    assert.equal(toastAndPdfAudit.dismissedCleanly, true, 'Dismiss button must hide status toast');
+    assert.equal(toastAndPdfAudit.menuOpen, true);
+    assert.equal(toastAndPdfAudit.menuInViewport, true, 'Right-aligned Download menu must stay inside viewport');
+    assert.equal(toastAndPdfAudit.arrowNotActivatedWhileMenuOpen, true, 'Single-letter tool shortcuts must be muted while Download menu is open');
+    assert.equal(toastAndPdfAudit.closedOnEsc, true);
+    assert.equal(toastAndPdfAudit.focusRestoredOnEsc, true);
+    assert.equal(toastAndPdfAudit.blobType, 'application/pdf');
+    assert.ok(toastAndPdfAudit.blobSize > 200, 'Generated PDF blob must be non-empty');
+    assert.ok(toastAndPdfAudit.capturedDownloadName.endsWith('.pdf'), `PDF download must end with .pdf (got ${toastAndPdfAudit.capturedDownloadName})`);
+    assert.equal(toastAndPdfAudit.pdfHeader, '%PDF-1.4\n');
+    assert.ok(toastAndPdfAudit.pdfTail.endsWith('%%EOF'));
+    assert.equal(toastAndPdfAudit.hasProducer, true);
+    assert.equal(toastAndPdfAudit.hasStreamFilter, true);
+    assert.match(toastAndPdfAudit.donePillText, /^Downloaded .*\.pdf/);
 
     await cdp.send('Target.closeTarget', { targetId: toolsCase.targetId });
   } finally {

@@ -64,13 +64,13 @@ export const SITE_COPY = {
       summary:
         'Drag a box over any part of a webpage with pixel-exact HiDPI and zoom accuracy, scroll and stitch a **Full page** (cleanly handling sticky sidebars, floating widgets, and infinite scroll, press `Esc` to stop early), right-click any page and choose **Take Screenshot**, capture the visible tab in one click, or use customizable keyboard shortcuts.',
       readmeBullet:
-        '**Select area, visible tab, full page, or right-click**: Drag a box over any part of a page, scroll and stitch a **Full page** (cleanly handling sticky sidebars, floating widgets, and infinite scroll with `Esc` early stop), right-click any page and choose **Take Screenshot**, press `Enter` for the full tab, or capture the visible tab in one click.',
+        '**Select area, visible tab, full page, or right-click**: Drag a box over any part of a page, scroll and stitch a **Full page** (cleanly handling sticky sidebars, floating widgets, and infinite scroll with `Esc` early stop), right-click any page and choose **Take Screenshot**, press `Enter` for the full tab or `F` for full page, or capture the visible tab in one click.',
     },
     {
       title: 'Edit, crop, redact & create',
       webTitle: 'Edit, Crop, Redact & Create',
       summary:
-        'Opens immediately in a new tab with zoom and pan controls and auto-copies your PNG to the clipboard by default (switch between `Image`, `Link`, or `Off` in Settings). Crop (`K`), highlight, annotate, use solid black or **Pixelate** redaction, switch Text to **Meme** style or add a **+ Caption bar**, paste images onto the canvas (`Ctrl+V`), rotate or flip, and download or save to Google Drive.',
+        'Opens immediately in a new tab with zoom and pan controls and auto-copies your PNG to the clipboard by default (switch between `Image`, `Link`, or `Off` in Settings). Crop (`K`), highlight, annotate, use solid black or **Pixelate** redaction, switch Text to **Meme** style or add a **+ Caption bar**, paste images onto the canvas (`Ctrl+V`), rotate or flip, and download as PNG or PDF or save to Google Drive.',
       readmeBullet:
         '**Auto-copy & customizable shortcuts**: Copies your captured PNG straight to the clipboard by default (switch between `Image`, `Link`, or `Off` in Settings), and supports customizable shortcuts anytime at `chrome://extensions/shortcuts`.',
     },
@@ -81,7 +81,7 @@ export const SITE_COPY = {
         'When connected, screenshots upload over HTTPS directly from your browser to Google\'s official Drive API (`https://www.googleapis.com`) into `' +
         'Chrome_SaveShot_ScreenShots` while keeping your editor instant. SaveShot has no private servers, analytics, or ads.',
       readmeBullet:
-        '**Works locally or autosaves to your Drive**: Capture, auto-copy, edit, and download PNGs locally right away without signing in, or connect Google Drive once to open the editor immediately while autosaving in the background to `Chrome_SaveShot_ScreenShots` (customizable in Settings). Turn on **Only upload when I click Save** in Settings to redact before anything is uploaded.',
+        '**Works locally or autosaves to your Drive**: Capture, auto-copy, edit, and download PNGs or PDFs locally right away without signing in, or connect Google Drive once to open the editor immediately while autosaving in the background to `Chrome_SaveShot_ScreenShots` (customizable in Settings). Turn on **Only upload when I click Save** in Settings to redact before anything is uploaded.',
     },
     {
       title: 'Narrow `drive.file` Scope',
@@ -89,7 +89,7 @@ export const SITE_COPY = {
       summary:
         'Uses only `activeTab` and Google\'s narrow `drive.file` permission. SaveShot can only access the screenshots and folder it creates itself, never any other files in your Google Drive.',
       readmeBullet:
-        '**Built-in lightweight editor**: Opens immediately in a new tab with zoom and pan controls so you can crop, rename, highlight text, add arrows, boxes, circles, lines, freehand strokes, clean or **Meme** text, top **Caption bars**, paste images (`Ctrl+V`), apply solid black or **Pixelate** redactions, pick custom `#HEX` colors, rotate or flip, click **Copy image** (`Ctrl+C`), click **Download**, or click **Save** to update Google Drive.',
+        '**Built-in lightweight editor**: Opens immediately in a new tab with zoom and pan controls so you can crop, rename, highlight text, add arrows, boxes, circles, lines, freehand strokes, clean or **Meme** text, top **Caption bars**, paste images (`Ctrl+V`), apply solid black or **Pixelate** redactions, pick custom `#HEX` colors, rotate or flip, click **Copy image** (`Ctrl+C`), click **Download** (PNG or smart-paged PDF), or click **Save** to update Google Drive.',
     },
   ],
 

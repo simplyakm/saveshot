@@ -2,6 +2,7 @@ import {
   blobToDataUrl,
   dataUrlToBlob,
   putBlobInTransferCache,
+  sanitizePdfFilename,
   sanitizeScreenshotFilename,
   takeBlobFromTransferCache,
 } from '../lib/capture.js';
@@ -21,6 +22,7 @@ import {
   STROKE_SIZES,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
+import { exportCanvasToPdfBlob, PDF_LIMITS } from '../lib/pdf.js';
 import {
   didAuthProfileVisiblyChange,
   initThemeSync,
@@ -53,12 +55,19 @@ const els = {
   zoomOutBtn: document.getElementById('zoom-out-btn'),
   zoomResetBtn: document.getElementById('zoom-reset-btn'),
   zoomInBtn: document.getElementById('zoom-in-btn'),
+  statusToastWrap: document.getElementById('status-toast-wrap'),
   statusPill: document.getElementById('status-pill'),
+  statusToastClose: document.getElementById('status-toast-close'),
   unsavedPill: document.getElementById('unsaved-pill'),
   editorHelpBtn: document.getElementById('editor-help-btn'),
   copyImageBtn: document.getElementById('copy-image-btn'),
-  downloadBtn: document.getElementById('download-btn'),
   copyLinkBtn: document.getElementById('copy-link-btn'),
+  downloadDropdown: document.getElementById('download-dropdown'),
+  downloadBtn: document.getElementById('download-btn'),
+  downloadMenu: document.getElementById('download-menu'),
+  downloadPngBtn: document.getElementById('download-png-btn'),
+  downloadPdfBtn: document.getElementById('download-pdf-btn'),
+  downloadPdfMeta: document.getElementById('download-pdf-meta'),
   openDriveLink: document.getElementById('open-drive-link'),
   saveDriveBtn: document.getElementById('save-drive-btn'),
   editorDock: document.getElementById('editor-dock'),
@@ -207,6 +216,7 @@ const state = {
   sizeKey: 'md',
   ready: false,
   saving: false,
+  exporting: false,
   uploadState: 'idle', // 'idle' | 'uploading' | 'uploaded' | 'failed'
   uploadError: '',
   uploadErrorCode: '',
@@ -258,21 +268,32 @@ function hasUnsavedChanges() {
 
 let statusPillTimer = null;
 let initialAutoCopyPromise = null;
+let activePdfExportAbort = null;
 
-function clearStatusPillIfIdle() {
-  if (state.saving || state.uploadState === 'uploading' || state.uploadState === 'failed') {
-    return;
-  }
+function hideStatusPill() {
   if (statusPillTimer) {
     clearTimeout(statusPillTimer);
     statusPillTimer = null;
   }
   els.statusPill.hidden = true;
   els.statusPill.title = '';
+  els.statusToastClose.hidden = true;
+}
+
+function clearStatusPillIfIdle() {
+  if (
+    state.saving ||
+    state.exporting ||
+    state.uploadState === 'uploading' ||
+    state.uploadState === 'failed'
+  ) {
+    return;
+  }
+  hideStatusPill();
 }
 
 function restorePersistentUploadPill() {
-  if (!state.ready || state.saving) return;
+  if (!state.ready || state.saving || state.exporting) return;
   if (state.signedIn && state.uploadState === 'uploading') {
     const uploadingText = state.autoImageCopied
       ? 'Uploading to Google Drive... \u00b7 Image copied'
@@ -292,8 +313,7 @@ function showStatusPill(kind, text, autoHideMs = 0) {
     statusPillTimer = null;
   }
   if (!text) {
-    els.statusPill.hidden = true;
-    els.statusPill.title = '';
+    hideStatusPill();
     updateUiState();
     return;
   }
@@ -302,18 +322,31 @@ function showStatusPill(kind, text, autoHideMs = 0) {
   els.statusPill.className = `status-pill ${kind}`;
   els.statusPill.textContent = text;
   els.statusPill.title = text;
+  const showDismiss =
+    kind === 'err' ||
+    (kind === 'warn' &&
+      (autoHideMs >= 4500 ||
+        (autoHideMs === 0 &&
+          !state.saving &&
+          !state.exporting &&
+          state.uploadState !== 'uploading')));
+  els.statusToastClose.hidden = !showDismiss;
   if (autoHideMs > 0) {
     statusPillTimer = setTimeout(() => {
       statusPillTimer = null;
       if (els.statusPill.textContent === text) {
-        els.statusPill.hidden = true;
-        els.statusPill.title = '';
+        hideStatusPill();
         restorePersistentUploadPill();
         updateUiState();
       }
     }, autoHideMs);
   }
 }
+
+els.statusToastClose.addEventListener('click', () => {
+  hideStatusPill();
+  updateUiState();
+});
 
 function updateDimensionsLabel() {
   if (!state.ready) {
@@ -530,45 +563,45 @@ function updateStyleControlsState() {
 
 function updateUiState() {
   const dirty = hasUnsavedChanges();
+  const busy = state.saving || state.exporting;
   const isUploadingInitial = state.signedIn && state.uploadState === 'uploading';
   const isFailedInitial =
     state.signedIn && state.mode === 'new' && state.uploadState === 'failed';
   const showUnsaved =
     state.ready &&
-    !state.saving &&
+    !busy &&
     state.signedIn &&
     dirty &&
     !isUploadingInitial &&
     !isFailedInitial;
 
   if (showUnsaved && !els.statusPill.hidden && els.statusPill.classList.contains('ok')) {
-    els.statusPill.hidden = true;
-    els.statusPill.title = '';
+    hideStatusPill();
   }
   els.unsavedPill.hidden = !showUnsaved || !els.statusPill.hidden;
 
   if (!state.signedIn) {
     els.saveDriveBtn.textContent = 'Save to Google Drive';
-    els.saveDriveBtn.disabled = !state.ready || state.saving;
+    els.saveDriveBtn.disabled = !state.ready || busy;
     els.saveDriveBtn.title = !state.ready
       ? 'Loading screenshot...'
       : 'Connect Google Drive and save screenshot';
   } else if (isFailedInitial) {
     els.saveDriveBtn.textContent = 'Retry';
-    els.saveDriveBtn.disabled = !state.ready || state.saving;
+    els.saveDriveBtn.disabled = !state.ready || busy;
     els.saveDriveBtn.title = !state.ready
       ? 'Loading screenshot...'
       : 'Retry uploading screenshot to Google Drive';
   } else if (isUploadingInitial) {
     els.saveDriveBtn.textContent = 'Save';
-    els.saveDriveBtn.disabled = !state.ready || state.saving || !dirty;
+    els.saveDriveBtn.disabled = !state.ready || busy || !dirty;
     els.saveDriveBtn.title = !state.ready
       ? 'Loading screenshot...'
       : dirty
       ? 'Save changes to Google Drive'
       : 'Uploading screenshot to Google Drive...';
   } else {
-    const canSave = state.ready && !state.saving && (state.mode === 'new' || dirty);
+    const canSave = state.ready && !busy && (state.mode === 'new' || dirty);
     els.saveDriveBtn.textContent = 'Save';
     els.saveDriveBtn.disabled = !canSave;
     els.saveDriveBtn.title = !state.ready
@@ -579,6 +612,14 @@ function updateUiState() {
       ? 'Save changes to Google Drive'
       : 'Make an edit or rename to enable Save';
   }
+
+  els.downloadBtn.disabled = !state.ready || busy;
+  els.downloadPngBtn.disabled = !state.ready || busy;
+  els.downloadPdfBtn.disabled = !state.ready || busy;
+  els.copyImageBtn.disabled = !state.ready || busy;
+  els.renamePencilBtn.disabled = !state.ready || busy;
+  els.editorDock.inert = busy;
+  els.contextBar.inert = busy;
 
   const safeLink = state.signedIn ? safeHttpsUrl(state.webViewLink) : '';
   if (safeLink) {
@@ -595,8 +636,8 @@ function updateUiState() {
     !els.textOverlayInput.hidden ||
     Boolean(state.pastedOverlay) ||
     Boolean(state.pendingCrop);
-  els.undoBtn.disabled = !state.ready || state.saving || !hasUndoableAction;
-  els.resetBtn.disabled = !state.ready || state.saving || state.isAtOriginalCapture;
+  els.undoBtn.disabled = !state.ready || busy || !hasUndoableAction;
+  els.resetBtn.disabled = !state.ready || busy || state.isAtOriginalCapture;
   updateContextBar();
   updateZoomUi();
 }
@@ -618,7 +659,7 @@ function updateContextBar() {
   if (showCrop) {
     if (state.pendingCrop && state.pendingCrop.width >= 4 && state.pendingCrop.height >= 4) {
       els.cropDimLabel.textContent = `Crop ${state.pendingCrop.width} \u00d7 ${state.pendingCrop.height}`;
-      els.applyCropBtn.disabled = !state.ready || state.saving;
+      els.applyCropBtn.disabled = !state.ready || state.saving || state.exporting;
     } else {
       els.cropDimLabel.textContent = 'Drag on image to select crop area';
       els.applyCropBtn.disabled = true;
@@ -974,7 +1015,7 @@ function setCaptionTheme(theme) {
 }
 
 function applyCaptionBar() {
-  if (!state.ready || state.saving) return mutationQueue;
+  if (!state.ready || state.saving || state.exporting) return mutationQueue;
   const raw = els.captionTextInput.value.trim();
   if (!raw) {
     els.captionTextInput.focus();
@@ -1005,7 +1046,7 @@ function applyCaptionBar() {
 }
 
 function applyPendingCrop() {
-  if (!state.ready || state.saving || !state.pendingCrop) return mutationQueue;
+  if (!state.ready || state.saving || state.exporting || !state.pendingCrop) return mutationQueue;
   const cropRect = { ...state.pendingCrop };
   if (cropRect.width < 4 || cropRect.height < 4) return mutationQueue;
   clearPendingCrop();
@@ -1029,6 +1070,7 @@ function applyPendingCrop() {
 }
 
 function setTool(nextTool) {
+  if (state.saving || state.exporting) return;
   const normalized = nextTool || null;
   if (state.activeDrag) {
     state.activeDrag = null;
@@ -1121,7 +1163,7 @@ function setSizeKey(nextSize, { refocusText = false } = {}) {
 }
 
 function applyTransform(kind) {
-  if (!state.ready || state.saving) return mutationQueue;
+  if (!state.ready || state.saving || state.exporting) return mutationQueue;
   commitActiveTextIfNeeded();
   commitPastedOverlayIfNeeded();
   clearPendingCrop();
@@ -1144,7 +1186,7 @@ function applyTransform(kind) {
 }
 
 function undoLastChange() {
-  if (!state.ready || state.saving) return mutationQueue;
+  if (!state.ready || state.saving || state.exporting) return mutationQueue;
   if (!els.textOverlayInput.hidden) {
     cancelActiveText();
     return mutationQueue;
@@ -1184,7 +1226,13 @@ function undoLastChange() {
 }
 
 function resetToOriginal() {
-  if (!state.ready || state.saving || state.isAtOriginalCapture || !state.initialBlob) {
+  if (
+    !state.ready ||
+    state.saving ||
+    state.exporting ||
+    state.isAtOriginalCapture ||
+    !state.initialBlob
+  ) {
     return mutationQueue;
   }
   cancelActiveText();
@@ -1409,8 +1457,9 @@ function computeHighlighterPoints(drag, shiftKey) {
 }
 
 els.previewCanvas.addEventListener('pointerdown', (event) => {
-  if (!state.ready || state.saving || event.button !== 0) return;
+  if (!state.ready || state.saving || state.exporting || event.button !== 0) return;
   closeHexPopover();
+  closeDownloadMenu();
 
   const coords = getCanvasCoordinates(event);
 
@@ -1713,7 +1762,7 @@ els.textOverlayInput.addEventListener('keydown', async (event) => {
 
 /* Intentional Pencil Rename Handlers */
 function openFilenameEditor() {
-  if (!state.ready || state.saving) return;
+  if (!state.ready || state.saving || state.exporting) return;
   els.filenameReadonly.hidden = true;
   els.filenameEditing.hidden = false;
   els.filenameInput.value = state.committedStem;
@@ -1763,6 +1812,9 @@ els.filenameInput.addEventListener('keydown', (event) => {
 els.customColorBtn.addEventListener('click', (event) => {
   event.stopPropagation();
   const willShow = els.hexPopover.hidden;
+  if (willShow) {
+    closeDownloadMenu();
+  }
   els.hexPopover.hidden = !willShow;
   els.customColorBtn.setAttribute('aria-expanded', String(willShow));
   els.hexInputWrap.classList.remove('invalid');
@@ -1822,11 +1874,14 @@ document.addEventListener('click', (event) => {
   ) {
     closeHexPopover();
   }
+  if (!els.downloadMenu.hidden && !els.downloadDropdown.contains(event.target)) {
+    closeDownloadMenu();
+  }
 });
 
 // Clicking outside the canvas and editing controls unselects the active tool
 document.addEventListener('pointerdown', (event) => {
-  if (!state.ready || state.saving || event.button !== 0 || els.confirmReplaceDialog.open) return;
+  if (!state.ready || state.saving || state.exporting || event.button !== 0 || els.confirmReplaceDialog.open) return;
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
   // Ignore clicks inside the stage's native scrollbar gutters so dragging scrollbars keeps tool/crop intact
@@ -1843,6 +1898,8 @@ document.addEventListener('pointerdown', (event) => {
     els.editorDock.contains(target) ||
     els.contextBar.contains(target) ||
     els.hexPopover.contains(target) ||
+    els.downloadDropdown.contains(target) ||
+    els.statusToastWrap.contains(target) ||
     els.zoomControl.contains(target) ||
     els.filenameReadonly.contains(target) ||
     els.filenameEditing.contains(target) ||
@@ -1989,10 +2046,12 @@ els.cancelCropBtn.addEventListener('click', () => {
 });
 
 els.applyPasteBtn.addEventListener('click', () => {
+  if (state.saving || state.exporting) return;
   commitPastedOverlayIfNeeded();
 });
 
 els.cancelPasteBtn.addEventListener('click', () => {
+  if (state.saving || state.exporting) return;
   cancelPastedOverlay();
 });
 
@@ -2031,7 +2090,7 @@ async function exportCurrentPngBlob() {
 }
 
 async function copyCanvasImageToClipboard() {
-  if (!state.ready) return false;
+  if (!state.ready || state.saving || state.exporting) return false;
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
     showStatusPill('err', 'Clipboard image copy is not available in this browser.', 3000);
     return false;
@@ -2077,19 +2136,157 @@ els.copyImageBtn.addEventListener('click', () => {
   copyCanvasImageToClipboard();
 });
 
-els.downloadBtn.addEventListener('click', async () => {
-  if (!state.ready) return;
-  await commitPendingEditsIfNeeded();
-  const filename = getDesiredFilename();
-  const blob = await exportCurrentPngBlob().catch(() => null);
-  if (!blob) return;
+function getDownloadMenuItems() {
+  return [els.downloadPngBtn, els.downloadPdfBtn];
+}
+
+function updateDownloadMenuMeta() {
+  const w = Math.max(1, els.baseCanvas.width || 1);
+  const h = Math.max(1, els.baseCanvas.height || 1);
+  els.downloadPdfMeta.textContent =
+    h / w > PDF_LIMITS.TALL_ASPECT_THRESHOLD ? 'Multi-page \u00b7 smart breaks' : 'Single page';
+}
+
+function openDownloadMenu({ focusIndex = -1 } = {}) {
+  if (!state.ready || state.saving || state.exporting) return;
+  closeHexPopover();
+  updateDownloadMenuMeta();
+  els.downloadMenu.hidden = false;
+  els.downloadBtn.setAttribute('aria-expanded', 'true');
+  const items = getDownloadMenuItems();
+  if (focusIndex >= 0 && items[focusIndex]) {
+    items[focusIndex].focus();
+  }
+}
+
+function closeDownloadMenu({ restoreFocus = false } = {}) {
+  const wasOpen = !els.downloadMenu.hidden;
+  els.downloadMenu.hidden = true;
+  els.downloadBtn.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && wasOpen) {
+    els.downloadBtn.focus();
+  }
+}
+
+function triggerBlobDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showStatusPill('ok', `Downloaded ${filename}`, 3000);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function downloadAsPng() {
+  if (!state.ready || state.saving || state.exporting) return;
+  closeDownloadMenu();
+  state.exporting = true;
+  updateUiState();
+  try {
+    await commitPendingEditsIfNeeded();
+    const filename = getDesiredFilename();
+    const blob = await exportCurrentPngBlob().catch(() => null);
+    if (!blob) {
+      showStatusPill('err', 'Could not export PNG screenshot.', 3500);
+      return;
+    }
+    triggerBlobDownload(blob, filename);
+    showStatusPill('ok', `Downloaded ${filename}`, 3000);
+  } finally {
+    state.exporting = false;
+    updateUiState();
+  }
+}
+
+async function downloadAsPdf() {
+  if (!state.ready || state.saving || state.exporting) return;
+  closeDownloadMenu();
+  state.exporting = true;
+  updateUiState();
+  const abortController = new AbortController();
+  activePdfExportAbort = abortController;
+  try {
+    await commitPendingEditsIfNeeded();
+    const pdfFilename = sanitizePdfFilename(getDesiredFilename(), 'Screenshot.pdf');
+    const { blob, pageCount } = await exportCanvasToPdfBlob(els.baseCanvas, {
+      signal: abortController.signal,
+      onProgress: (current, total) => {
+        if (total > 1) {
+          showStatusPill('warn', `Exporting PDF (${current}/${total})...`);
+        }
+      },
+    });
+    if (abortController.signal.aborted) return;
+    triggerBlobDownload(blob, pdfFilename);
+    const pageNote = pageCount > 1 ? ` (${pageCount} pages)` : '';
+    showStatusPill('ok', `Downloaded ${pdfFilename}${pageNote}`, 3500);
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      showStatusPill('err', err?.message || 'Could not export PDF document.', 4500);
+    }
+  } finally {
+    if (activePdfExportAbort === abortController) {
+      activePdfExportAbort = null;
+    }
+    state.exporting = false;
+    updateUiState();
+  }
+}
+
+els.downloadBtn.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (!state.ready || state.saving || state.exporting) return;
+  if (els.downloadMenu.hidden) {
+    openDownloadMenu();
+  } else {
+    closeDownloadMenu();
+  }
+});
+
+els.downloadBtn.addEventListener('keydown', (event) => {
+  if (!state.ready || state.saving || state.exporting) return;
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    openDownloadMenu({ focusIndex: 0 });
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    openDownloadMenu({ focusIndex: getDownloadMenuItems().length - 1 });
+  }
+});
+
+els.downloadMenu.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
+els.downloadMenu.addEventListener('keydown', (event) => {
+  const items = getDownloadMenuItems();
+  const idx = items.indexOf(document.activeElement);
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    items[(idx + 1 + items.length) % items.length]?.focus();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    items[(idx - 1 + items.length) % items.length]?.focus();
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    items[0]?.focus();
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    items[items.length - 1]?.focus();
+  } else if (event.key === 'Tab') {
+    closeDownloadMenu({ restoreFocus: true });
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeDownloadMenu({ restoreFocus: true });
+  }
+});
+
+els.downloadPngBtn.addEventListener('click', () => {
+  downloadAsPng();
+});
+
+els.downloadPdfBtn.addEventListener('click', () => {
+  downloadAsPdf();
 });
 
 let copyLinkTimer = null;
@@ -2169,9 +2366,8 @@ async function syncAuthStateFromWorker() {
         state.uploadError = '';
         state.uploadErrorCode = '';
         state.uploadRequiresReauth = false;
-        if (!els.statusPill.hidden && els.statusPill.classList.contains('warn')) {
-          els.statusPill.hidden = true;
-          els.statusPill.title = '';
+        if (!state.exporting && !els.statusPill.hidden && els.statusPill.classList.contains('warn')) {
+          hideStatusPill();
         }
       }
     } else {
@@ -2253,7 +2449,7 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
     state.uploadError = '';
     state.uploadErrorCode = '';
     state.uploadRequiresReauth = false;
-    if (!state.saving) {
+    if (!state.saving && !state.exporting) {
       const uploadingText = state.autoImageCopied
         ? 'Uploading to Google Drive... \u00b7 Image copied'
         : 'Uploading to Google Drive...';
@@ -2293,8 +2489,8 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
       syncFilenameDisplay(state.savedFilename);
     }
 
-    // If the user already clicked Save while upload was in flight, let performSave own the status pill
-    if (state.saving) {
+    // If the user is already saving or exporting, let that active flow own the status toast
+    if (state.saving || state.exporting) {
       updateUiState();
       return;
     }
@@ -2304,19 +2500,14 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
       await initialAutoCopyPromise.catch(() => false);
     }
 
-    if (state.saving) {
+    if (state.saving || state.exporting) {
       updateUiState();
       return;
     }
 
     if (hasUnsavedChanges()) {
       if (!els.statusPill.classList.contains('err')) {
-        if (statusPillTimer) {
-          clearTimeout(statusPillTimer);
-          statusPillTimer = null;
-        }
-        els.statusPill.hidden = true;
-        els.statusPill.title = '';
+        hideStatusPill();
       }
       updateUiState();
       return;
@@ -2352,7 +2543,7 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
       state.signedIn = false;
     }
 
-    if (!state.saving) {
+    if (!state.saving && !state.exporting) {
       showStatusPill('err', state.uploadError);
       updateUiState();
     }
@@ -2360,7 +2551,8 @@ async function applyBackgroundUploadUpdate(update, { fromInitialLoad = false } =
 }
 
 async function performSave(saveMode) {
-  if (!state.ready || state.saving) return;
+  if (!state.ready || state.saving || state.exporting) return;
+  closeDownloadMenu();
   // Set saving lock synchronously before any await so rapid double-clicks / Ctrl+S cannot duplicate uploads
   state.saving = true;
   updateUiState();
@@ -2507,7 +2699,8 @@ async function performSave(saveMode) {
 }
 
 els.saveDriveBtn.addEventListener('click', async () => {
-  if (!state.ready || state.saving || saveClickPending) return;
+  if (!state.ready || state.saving || state.exporting || saveClickPending) return;
+  closeDownloadMenu();
   saveClickPending = true;
   try {
     await commitPendingEditsIfNeeded();
@@ -2549,7 +2742,7 @@ els.confirmReplaceBtn.addEventListener('click', async () => {
 });
 
 window.addEventListener('paste', async (event) => {
-  if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
+  if (!state.ready || state.saving || state.exporting || els.confirmReplaceDialog.open) return;
   const activeEl = document.activeElement;
   const tag = activeEl?.tagName;
   if ((tag === 'INPUT' || tag === 'TEXTAREA') && activeEl.offsetParent !== null) return;
@@ -2599,7 +2792,7 @@ window.addEventListener('paste', async (event) => {
     }
     clearPendingCrop();
 
-    if (!state.ready || state.saving || els.confirmReplaceDialog.open) {
+    if (!state.ready || state.saving || state.exporting || els.confirmReplaceDialog.open) {
       bitmap.close?.();
       bitmap = null;
       return;
@@ -2638,7 +2831,7 @@ window.addEventListener('keydown', (event) => {
     schedulePreviewRender();
   }
 
-  if (!state.ready || state.saving || els.confirmReplaceDialog.open) return;
+  if (!state.ready || state.saving || state.exporting || els.confirmReplaceDialog.open) return;
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault();
@@ -2656,6 +2849,11 @@ window.addEventListener('keydown', (event) => {
   if ((tag === 'INPUT' || tag === 'TEXTAREA') && activeEl.offsetParent !== null) return;
 
   if (event.key === 'Escape') {
+    if (!els.downloadMenu.hidden) {
+      event.preventDefault();
+      closeDownloadMenu({ restoreFocus: true });
+      return;
+    }
     if (!els.hexPopover.hidden) {
       event.preventDefault();
       closeHexPopover({ restoreFocus: true });
@@ -2686,6 +2884,10 @@ window.addEventListener('keydown', (event) => {
       setTool(null);
       return;
     }
+  }
+
+  if (!els.downloadMenu.hidden) {
+    return;
   }
 
   if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -2780,6 +2982,8 @@ window.addEventListener('beforeunload', (event) => {
 });
 
 window.addEventListener('pagehide', () => {
+  activePdfExportAbort?.abort();
+  activePdfExportAbort = null;
   stopUploadStatusPoll();
   clearUndoStack();
   if (state.pastedOverlay) {
@@ -2913,19 +3117,19 @@ async function initEditor() {
     } else if (state.captureNotice) {
       const notice = state.captureNotice;
       state.captureNotice = '';
-      showStatusPill('warn', notice, 5500);
+      showStatusPill('warn', notice, 6500);
     }
 
     if (state.captureNotice && !els.statusPill.classList.contains('err')) {
       const notice = state.captureNotice;
       state.captureNotice = '';
       if (state.uploadState === 'uploading') {
-        showStatusPill('warn', notice, 4500);
+        showStatusPill('warn', notice, 5500);
       } else if (state.uploadState === 'uploaded') {
         const suffix = state.autoImageCopied
           ? ' \u00b7 Saved to Drive \u00b7 Image copied'
           : ' \u00b7 Saved to Drive';
-        showStatusPill('warn', `${notice}${suffix}`, 6000);
+        showStatusPill('warn', `${notice}${suffix}`, 7000);
       }
     }
 
