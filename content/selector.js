@@ -1034,8 +1034,16 @@
     if (!message || !message.type) return;
 
     if (message.type === 'START_REGION_SELECT') {
-      const res = startRegionSelection();
-      sendResponse(res);
+      try {
+        const res = startRegionSelection();
+        sendResponse(res || { ok: true });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          code: 'REGION_ERROR',
+          reason: err?.message || 'Region selection does not work on this page. Use "Visible Tab" instead.',
+        });
+      }
       return;
     }
 
@@ -1078,8 +1086,16 @@
     }
 
     if (message.type === 'SHOW_TOAST') {
-      showToast(message.payload);
-      sendResponse({ ok: true });
+      try {
+        showToast(message.payload);
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          code: 'TOAST_ERROR',
+          reason: err?.message || 'Could not display toast notification.',
+        });
+      }
     }
   });
 })();
