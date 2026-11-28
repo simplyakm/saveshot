@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
-const EXTENSION_FILES = [
+export const EXTENSION_FILES = [
   'manifest.json',
   'LICENSE',
   'NOTICE',

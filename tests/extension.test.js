@@ -2755,7 +2755,7 @@ test('all repository source, UI, and documentation files contain no em dashes or
   const textExts = new Set(['.js', '.mjs', '.json', '.html', '.css', '.md', '.txt', '.xml', '.yml']);
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith('.git') || entry.name === 'node_modules') continue;
+      if (entry.name.startsWith('.git') || entry.name === 'node_modules' || entry.name === 'dist-dev') continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(full);
@@ -7029,6 +7029,47 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
     );
   }
 });
+
+test('local unpacked dev build (build-dev.mjs) injects SAVESHOT_DEV_KEY into dist-dev without modifying tracked manifest.json', async () => {
+  const os = await import('node:os');
+  const { buildDevUnpacked, normalizeManifestKey, readDevKey } = await import('../scripts/build-dev.mjs');
+  const { EXTENSION_FILES } = await import('../scripts/pack-cws.mjs');
+
+  const sampleB64 = Buffer.from('A'.repeat(96)).toString('base64');
+  assert.equal(normalizeManifestKey(sampleB64), sampleB64);
+  assert.equal(
+    normalizeManifestKey(`-----BEGIN PUBLIC KEY-----\n${sampleB64.slice(0, 64)}\n${sampleB64.slice(64)}\n-----END PUBLIC KEY-----`),
+    sampleB64
+  );
+  assert.throws(() => normalizeManifestKey('not-a-key'), /Invalid SAVESHOT_DEV_KEY/);
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'saveshot-devbuild-'));
+  const tmpOut = path.join(tmpRoot, 'dist-dev');
+  try {
+    // readDevKey reads .env.local and honors env override
+    fs.writeFileSync(path.join(tmpRoot, '.env.local'), `# local dev key\nSAVESHOT_DEV_KEY="${sampleB64}"\n`, 'utf8');
+    assert.equal(readDevKey({ baseDir: tmpRoot, env: {} }), sampleB64);
+
+    const otherB64 = Buffer.from('B'.repeat(96)).toString('base64');
+    assert.equal(readDevKey({ baseDir: tmpRoot, env: { SAVESHOT_DEV_KEY: otherB64 } }), otherB64);
+
+    // Refuses to wipe repository root
+    assert.throws(() => buildDevUnpacked({ baseDir: rootDir, outDir: rootDir }), /overlaps repository root/);
+
+    // Builds full unpacked copy with injected key while tracked manifest.json stays untouched
+    const trackedBefore = fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8');
+    const built = buildDevUnpacked({ baseDir: rootDir, outDir: tmpOut, key: sampleB64 });
+    assert.equal(built.fileCount, EXTENSION_FILES.length);
+    assert.equal(built.hasKey, true);
+    const devManifest = JSON.parse(fs.readFileSync(path.join(tmpOut, 'manifest.json'), 'utf8'));
+    assert.equal(devManifest.key, sampleB64);
+    assert.equal(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'), trackedBefore);
+    assert.equal(fs.existsSync(path.join(tmpOut, 'background/service-worker.js')), true);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 
 
 
