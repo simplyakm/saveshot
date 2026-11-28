@@ -189,7 +189,7 @@ export function extractManifestFromZipBuffer(zipBuffer) {
   throw new Error('ZIP package does not contain a root manifest.json.');
 }
 
-function validateManifestForCwsUpload(manifest) {
+export function validateManifestForCwsUpload(manifest) {
   if (!manifest || typeof manifest !== 'object') {
     throw new Error('Extension manifest.json must be a JSON object.');
   }
@@ -198,6 +198,22 @@ function validateManifestForCwsUpload(manifest) {
     throw new Error('Extension manifest.json is missing a valid version.');
   }
   compareVersions(version, '0');
+  let versionName = version;
+  if (manifest.version_name !== undefined) {
+    if (typeof manifest.version_name !== 'string') {
+      throw new Error('Extension manifest.json version_name must be a string.');
+    }
+    const rawName = manifest.version_name;
+    if (
+      !rawName ||
+      rawName !== rawName.trim() ||
+      rawName.length > 64 ||
+      !/^[\x20-\x7e]+$/.test(rawName)
+    ) {
+      throw new Error('Extension manifest.json has an invalid version_name.');
+    }
+    versionName = rawName;
+  }
   if (Object.prototype.hasOwnProperty.call(manifest, 'key')) {
     throw new Error(
       'Refusing to upload: manifest.json inside ZIP contains a local "key" property (Chrome Web Store rejects uploads with "key").'
@@ -209,7 +225,7 @@ function validateManifestForCwsUpload(manifest) {
       'Refusing to upload: manifest.json still contains placeholder oauth2.client_id.'
     );
   }
-  return version;
+  return { version, versionName };
 }
 
 export function createServiceAccountJwt(
@@ -685,7 +701,7 @@ export async function runCwsCommand({
 
   // Always validate the exact manifest.json embedded inside the ZIP payload
   const embeddedManifest = extractManifestFromZipBuffer(zipBuffer);
-  const version = validateManifestForCwsUpload(embeddedManifest);
+  const { version, versionName } = validateManifestForCwsUpload(embeddedManifest);
 
   const preStatus = await cwsFetchStatus({
     publisherId: safePublisherId,
@@ -724,7 +740,7 @@ export async function runCwsCommand({
   }
 
   logger?.log?.(
-    `Uploading SaveShot v${version} (${zipBuffer.length} bytes) to Chrome Web Store...`
+    `Uploading SaveShot v${versionName} (${zipBuffer.length} bytes) to Chrome Web Store...`
   );
   const uploadResult = await cwsUploadPackage({
     publisherId: safePublisherId,
@@ -743,6 +759,7 @@ export async function runCwsCommand({
       publisherId: safePublisherId,
       itemId: safeItemId,
       version: uploadResult.crxVersion || version,
+      versionName,
       zipBytes: zipBuffer.length,
       uploadState: uploadResult.uploadState,
       published: false,
@@ -754,7 +771,7 @@ export async function runCwsCommand({
   }
 
   const publishType = normalizedMode === 'staged' ? 'STAGED_PUBLISH' : 'DEFAULT_PUBLISH';
-  logger?.log?.(`Submitting SaveShot v${version} with publishType=${publishType}...`);
+  logger?.log?.(`Submitting SaveShot v${versionName} with publishType=${publishType}...`);
   const publishResult = await cwsPublishItem({
     publisherId: safePublisherId,
     itemId: safeItemId,
@@ -775,6 +792,7 @@ export async function runCwsCommand({
     publisherId: safePublisherId,
     itemId: safeItemId,
     version: uploadResult.crxVersion || version,
+    versionName,
     zipBytes: zipBuffer.length,
     uploadState: uploadResult.uploadState,
     published: true,
@@ -844,29 +862,45 @@ function escapeMarkdownInline(value) {
     .trim();
 }
 
+function escapeMarkdownCode(value) {
+  return String(value ?? '')
+    .replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, ' ')
+    .replace(/`/g, "'")
+    .trim();
+}
+
 export function formatStepSummary(result) {
   const esc = escapeMarkdownInline;
+  const code = escapeMarkdownCode;
+  const displayVer = code(result.versionName || result.version);
+  const itemIdCode = code(result.itemId) || 'UNKNOWN';
   const lines = [
     `## Chrome Web Store API V2 (${esc(result.mode)})`,
     '',
-    `- **Item ID:** \`${esc(result.itemId)}\``,
+    `- **Item ID:** \`${itemIdCode}\``,
   ];
-  if (result.version) lines.push(`- **Version:** \`v${esc(result.version)}\``);
+  if (displayVer) lines.push(`- **Version:** \`v${displayVer}\``);
   if (result.zipBytes) lines.push(`- **Package Size:** ${Number(result.zipBytes)} bytes`);
-  if (result.uploadState) lines.push(`- **Upload State:** \`${esc(result.uploadState)}\``);
-  if (result.publishState) lines.push(`- **Submission State:** \`${esc(result.publishState)}\``);
-  if (result.publishedVersion) {
+  const uploadStateCode = code(result.uploadState);
+  if (uploadStateCode) lines.push(`- **Upload State:** \`${uploadStateCode}\``);
+  const publishStateCode = code(result.publishState);
+  if (publishStateCode) lines.push(`- **Submission State:** \`${publishStateCode}\``);
+  const publishedVerCode = code(result.publishedVersion);
+  if (publishedVerCode) {
     lines.push(
-      `- **Published Revision:** \`v${esc(result.publishedVersion)}\` (\`${esc(result.publishedState || 'UNKNOWN')}\`)`
+      `- **Published Revision:** \`v${publishedVerCode}\` (\`${code(result.publishedState) || 'UNKNOWN'}\`)`
     );
   }
-  if (result.submittedState) {
+  const submittedStateCode = code(result.submittedState);
+  if (submittedStateCode) {
+    const submittedVerCode = code(result.submittedVersion);
     lines.push(
-      `- **Submitted Revision:** \`${result.submittedVersion ? `v${esc(result.submittedVersion)}` : 'n/a'}\` (\`${esc(result.submittedState)}\`)`
+      `- **Submitted Revision:** \`${submittedVerCode ? `v${submittedVerCode}` : 'n/a'}\` (\`${submittedStateCode}\`)`
     );
   }
-  if (result.lastAsyncUploadState) {
-    lines.push(`- **Last Async Upload State:** \`${esc(result.lastAsyncUploadState)}\``);
+  const lastAsyncCode = code(result.lastAsyncUploadState);
+  if (lastAsyncCode) {
+    lines.push(`- **Last Async Upload State:** \`${lastAsyncCode}\``);
   }
   if (result.takenDown) {
     lines.push('- **Policy Status:** `TAKEN_DOWN` (action required in Developer Dashboard)');
@@ -878,7 +912,7 @@ export function formatStepSummary(result) {
   if (Array.isArray(result.warnings) && result.warnings.length > 0) {
     lines.push('- **Warnings:**');
     for (const w of result.warnings) {
-      lines.push(`  - \`${esc(w.reason || 'WARNING')}\`: ${esc(w.description || '')}`);
+      lines.push(`  - \`${code(w.reason) || 'WARNING'}\`: ${esc(w.description || '')}`);
     }
   }
   if (result.mode === 'draft') {

@@ -1,4 +1,5 @@
 import { isCapturableUrl } from '../lib/capture.js';
+import { formatVersionTooltip, getEnvironmentSummary } from '../lib/feedback.js';
 import { normalizeSettingsObject } from '../lib/storage.js';
 import {
   applyDocumentTheme,
@@ -563,8 +564,9 @@ function showView(viewName, { signedIn = false, needsSetup = false } = {}) {
 }
 
 function initStaticMetadata() {
-  const version = chrome?.runtime?.getManifest?.()?.version || '1.3.0';
-  els.popupVersion.textContent = `v${version}`;
+  const env = getEnvironmentSummary();
+  els.popupVersion.textContent = `v${env.extensionVersion}`;
+  els.popupVersion.title = formatVersionTooltip(env);
 
   if (chrome?.commands?.getAll) {
     chrome.commands.getAll((commands) => {

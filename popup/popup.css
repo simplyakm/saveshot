@@ -493,10 +493,28 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .footer-left {
   display: flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+#popup-version {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+#footer-bug-btn,
+#footer-thanks-link,
+#footer-author-link {
+  flex-shrink: 0;
+  white-space: nowrap;
 }

@@ -22,6 +22,7 @@ import {
   STROKE_SIZES,
   transformSourceToCanvas,
 } from '../lib/editor-core.js';
+import { formatVersionTooltip, getEnvironmentSummary } from '../lib/feedback.js';
 import { exportCanvasToPdfBlob, PDF_LIMITS } from '../lib/pdf.js';
 import {
   didAuthProfileVisiblyChange,
@@ -3231,6 +3232,15 @@ if (chrome?.storage?.onChanged?.addListener) {
 
     await syncAuthStateFromWorker();
   });
+}
+
+const editorVersionTooltip = formatVersionTooltip(getEnvironmentSummary());
+const editorBrandEl = document.getElementById('editor-brand');
+if (editorBrandEl) {
+  editorBrandEl.title = editorVersionTooltip;
+}
+if (els.editorHelpBtn) {
+  els.editorHelpBtn.title = `Help and shortcuts (${editorVersionTooltip})`;
 }
 
 initThemeSync();
