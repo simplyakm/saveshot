@@ -632,10 +632,23 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       targetId: welcomeTarget.targetId,
       flatten: true,
     });
-    for (let i = 0; i < 25; i += 1) {
+    for (let i = 0; i < 40; i += 1) {
       const welcomeSettled = await evalIn(
         welcomeSession,
-        `document.getElementById('account-heading')?.textContent?.trim() !== 'Checking Google account...' && (!document.getElementById('pin-nudge-card')?.hidden || !document.getElementById('pin-done-card')?.hidden)`
+        `(() => {
+          const status = document.getElementById('status-card');
+          const heading = document.getElementById('account-heading');
+          const pinNudge = document.getElementById('pin-nudge-card');
+          const pinDone = document.getElementById('pin-done-card');
+          return Boolean(
+            status &&
+            heading &&
+            pinNudge &&
+            pinDone &&
+            heading.textContent.trim() !== 'Checking Google account...' &&
+            (!pinNudge.hidden || !pinDone.hidden)
+          );
+        })()`
       );
       if (welcomeSettled) break;
       await new Promise((r) => setTimeout(r, 80));
@@ -3553,7 +3566,15 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     );
     assert.equal(escStartRes.ok, true);
     assert.equal(escStartRes.started, true);
-    await new Promise((r) => setTimeout(r, 220));
+    // Wait until Slice 0 has been captured and the progress pill mounts before pressing Escape
+    for (let i = 0; i < 60; i += 1) {
+      const pillMounted = await evalIn(
+        fpPageSess,
+        `Boolean(document.getElementById('__saveshot-fullpage-pill-host'))`
+      );
+      if (pillMounted) break;
+      await new Promise((r) => setTimeout(r, 40));
+    }
     await cdp.send(
       'Input.dispatchKeyEvent',
       { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },

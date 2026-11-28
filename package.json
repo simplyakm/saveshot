@@ -10,11 +10,12 @@
     "build:assets": "node scripts/generate-store-assets.mjs",
     "sync:all": "npm run sync:docs && npm run build:assets && npm run pack",
     "pack": "node scripts/pack-cws.mjs",
+    "build:dev": "node scripts/build-dev.mjs",
     "cws:status": "node scripts/publish-cws.mjs --mode=status",
     "cws:upload": "node scripts/publish-cws.mjs --mode=draft",
     "cws:publish": "node scripts/publish-cws.mjs --mode=publish",
     "test:unit": "node --test tests/extension.test.js",
     "test:e2e": "node --test tests/browser-e2e.test.js",
-    "test": "node --test tests/extension.test.js tests/browser-e2e.test.js"
+    "test": "npm run test:unit && npm run test:e2e"
   }
 }
