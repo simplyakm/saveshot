@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SITE_COPY } from '../content-source/site-copy.mjs';
+import { formatVersionName, SITE_COPY } from '../content-source/site-copy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -395,7 +395,9 @@ function stageRealExtensionFiles(stageDir, fontBridgeCss) {
         document.getElementById('loading-view').hidden = true;
         document.getElementById('main-view').hidden = false;
         document.getElementById('settings-toggle-btn').hidden = false;
-        document.getElementById('popup-version').textContent = ${JSON.stringify(`v${SITE_COPY.version}`)};
+        document.getElementById('popup-version').textContent = ${JSON.stringify(
+          `v${formatVersionName(SITE_COPY.version, SITE_COPY.buildNumber)}`
+        )};
         document.getElementById('footer-author-link').textContent = ${JSON.stringify(SITE_COPY.urls.authorHandle)};
         document.getElementById('popup-shortcut-region').textContent = 'Custom shortcut';
         document.getElementById('popup-shortcut-visible').textContent = 'Custom shortcut';
@@ -669,7 +671,9 @@ function stageRealExtensionFiles(stageDir, fontBridgeCss) {
       for (const img of document.querySelectorAll('img[src*="icons/icon"]')) {
         img.src = '../icons/icon128.png';
       }
-      document.getElementById('ext-version').textContent = ${JSON.stringify(`v${SITE_COPY.version}`)};
+      document.getElementById('ext-version').textContent = ${JSON.stringify(
+        `v${formatVersionName(SITE_COPY.version, SITE_COPY.buildNumber)}`
+      )};
       document.getElementById('pin-nudge-card').hidden = false;
       document.getElementById('account-dot').classList.add('connected');
       document.getElementById('account-heading').textContent = 'Connected as alex@workspace.io';

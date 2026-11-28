@@ -1,6 +1,7 @@
 import {
   DEFAULT_CWS_SUPPORT_URL,
   formatVersionInfoLine,
+  formatVersionTooltip,
   getEnvironmentSummary,
 } from '../lib/feedback.js';
 import {
@@ -69,6 +70,7 @@ function updateVersionStrip() {
 async function loadStatus() {
   const env = getEnvironmentSummary();
   els.extVersion.textContent = `v${env.extensionVersion}`;
+  els.extVersion.title = formatVersionTooltip(env);
   els.cwsSupportLink.href = safeHttpsUrl(
     els.cwsSupportLink.getAttribute('href'),
     DEFAULT_CWS_SUPPORT_URL

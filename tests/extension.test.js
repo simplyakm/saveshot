@@ -76,7 +76,9 @@ import {
 import {
   DEFAULT_CWS_SUPPORT_URL,
   formatVersionInfoLine,
+  formatVersionTooltip,
   getEnvironmentSummary,
+  parseBuildNumberFromVersionName,
 } from '../lib/feedback.js';
 import {
   addCaptionBarToCanvas,
@@ -119,6 +121,8 @@ const TINY_PNG_DATA_URL =
 
 function installChromeMock({
   clientId = '1234567890-realclient.apps.googleusercontent.com',
+  version = '1.3.0',
+  versionName = '1.3.0 (b1)',
   initialStore = {},
   onGetAuthToken = null,
   failStorageSetOnce = false,
@@ -156,7 +160,8 @@ function installChromeMock({
     runtime: {
       lastError: null,
       getManifest: () => ({
-        version: '1.3.0',
+        version,
+        ...(versionName ? { version_name: versionName } : {}),
         oauth2: { client_id: clientId },
       }),
       getURL: (rel) => `chrome-extension://testext/${rel.replace(/^\/+/, '')}`,
@@ -355,6 +360,17 @@ test('manifest.json is valid MV3 with incognito spanning mode, narrow scopes, ic
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
   assert.equal(manifest.manifest_version, 3);
+  assert.match(manifest.version, /^\d+(?:\.\d+){1,3}$/, 'manifest.version must stay strictly numeric for Chrome/CWS');
+  assert.equal(typeof manifest.version_name, 'string', 'manifest.version_name must be present for visible build verification');
+  assert.ok(
+    manifest.version_name.length > 0 && manifest.version_name.length <= 64,
+    'manifest.version_name must be 1..64 characters'
+  );
+  assert.match(
+    manifest.version_name,
+    new RegExp(`^${manifest.version.replace(/\./g, '\\.')} \\(b[1-9]\\d*\\)$`),
+    'manifest.version_name must match "<version> (b<buildNumber>)"'
+  );
   assert.equal(manifest.incognito, 'spanning');
   assert.equal(
     manifest.homepage_url,
@@ -887,20 +903,34 @@ test('feedback helper builds compact version info lines across OS/UA variants an
   const env = getEnvironmentSummary(
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/156.0.0.0 Safari/537.36'
   );
+  assert.equal(env.extensionVersion, '1.3.0 (b1)');
+  assert.equal(env.manifestVersion, '1.3.0');
+  assert.equal(env.buildNumber, 1);
   assert.equal(env.browser, 'Chrome 156.0.0.0');
   assert.equal(env.os, 'macOS');
+  assert.equal(formatVersionTooltip(env), 'SaveShot v1.3.0 \u00b7 Build 1');
+  assert.equal(parseBuildNumberFromVersionName('1.3.0 (b42)'), 42);
+  assert.equal(parseBuildNumberFromVersionName('1.3.0 (b0)'), null);
+  assert.equal(parseBuildNumberFromVersionName('1.3.0'), null);
   assert.equal(
     formatVersionInfoLine({ env }),
-    `SaveShot v${env.extensionVersion} \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: None`
+    'SaveShot v1.3.0 (b1) \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: None'
   );
   assert.equal(
     formatVersionInfoLine({ env, lastErrorCode: 'DRIVE_QUOTA_EXCEEDED' }),
-    `SaveShot v${env.extensionVersion} \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: DRIVE_QUOTA_EXCEEDED`
+    'SaveShot v1.3.0 (b1) \u00b7 Chrome 156.0.0.0 (macOS) \u00b7 Last error: DRIVE_QUOTA_EXCEEDED'
   );
   assert.ok(DEFAULT_CWS_SUPPORT_URL.endsWith('/eilmbilnlihhddjdmdpppalfnbnieppf/support'));
 
   const prevChrome = globalThis.chrome;
   try {
+    installChromeMock({ version: '1.3.0', versionName: '' });
+    const noBuildEnv = getEnvironmentSummary('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/156.0.0.0');
+    assert.equal(noBuildEnv.extensionVersion, '1.3.0');
+    assert.equal(noBuildEnv.manifestVersion, '1.3.0');
+    assert.equal(noBuildEnv.buildNumber, null);
+    assert.equal(formatVersionTooltip(noBuildEnv), 'SaveShot v1.3.0');
+
     globalThis.chrome = undefined;
     assert.equal(
       getEnvironmentSummary('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/157.0.1.2').os,
@@ -916,6 +946,8 @@ test('feedback helper builds compact version info lines across OS/UA variants an
     );
     const fallbackEnv = getEnvironmentSummary('CustomBrowser/1.0');
     assert.equal(fallbackEnv.extensionVersion, '1.3.0');
+    assert.equal(fallbackEnv.manifestVersion, '1.3.0');
+    assert.equal(fallbackEnv.buildNumber, null);
     assert.equal(fallbackEnv.browser, 'Chromium');
     assert.equal(fallbackEnv.os, 'Unknown OS');
   } finally {
@@ -2783,7 +2815,11 @@ test('all repository source, UI, and documentation files contain no em dashes or
   );
 
   // Verify centralized content source of truth stays 100% synced across Markdown, HTML, and metadata
-  const { SITE_COPY } = await import('../content-source/site-copy.mjs');
+  const {
+    SITE_COPY,
+    formatVersionName,
+    formatVersionTooltip: formatSiteVersionTooltip,
+  } = await import('../content-source/site-copy.mjs');
   const {
     buildGeneratedFiles,
     inlineMarkdownToHtml,
@@ -2813,11 +2849,16 @@ test('all repository source, UI, and documentation files contain no em dashes or
     );
   }
 
+  const expectedVersionName = formatVersionName(SITE_COPY.version, SITE_COPY.buildNumber);
+  const expectedTooltip = formatSiteVersionTooltip(SITE_COPY.brandName, SITE_COPY.version, SITE_COPY.buildNumber);
+  assert.equal(Number.isInteger(SITE_COPY.buildNumber) && SITE_COPY.buildNumber >= 1, true);
+
   const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
   assert.equal(manifest.name, SITE_COPY.extensionTitle);
   assert.equal(manifest.short_name, SITE_COPY.brandName);
   assert.equal(manifest.version, SITE_COPY.version);
+  assert.equal(manifest.version_name, expectedVersionName);
   assert.equal(manifest.description, SITE_COPY.shortDescription);
   assert.equal(pkg.version, SITE_COPY.version);
   assert.equal(pkg.description, SITE_COPY.shortDescription);
@@ -2832,6 +2873,14 @@ test('all repository source, UI, and documentation files contain no em dashes or
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.thanksHtml}"`), 'welcome.html must link to centralized Say thanks URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.privacyHtml}"`), 'welcome.html must link to centralized Privacy URL');
   assert.ok(welcomeHtml.includes(`href="${SITE_COPY.urls.termsHtml}"`), 'welcome.html must link to centralized Terms URL');
+  assert.ok(
+    welcomeHtml.includes(`id="ext-version" title="${expectedTooltip}">v${expectedVersionName}<`),
+    'welcome.html #ext-version must be synced with version_name and build tooltip'
+  );
+  assert.ok(
+    welcomeHtml.includes(`id="version-info-text">${SITE_COPY.brandName} v${expectedVersionName}<`),
+    'welcome.html #version-info-text must be synced with version_name'
+  );
 
   const popupHtml = fs.readFileSync(path.join(rootDir, 'popup/popup.html'), 'utf8');
   assert.equal(
@@ -2840,6 +2889,10 @@ test('all repository source, UI, and documentation files contain no em dashes or
     'popup.html links drifted from content-source/site-copy.mjs (run npm run sync:docs)'
   );
   assert.ok(popupHtml.includes(`href="${SITE_COPY.urls.thanksHtml}"`), 'popup.html footer must link to centralized Say thanks URL');
+  assert.ok(
+    popupHtml.includes(`id="popup-version" title="${expectedTooltip}">v${expectedVersionName}<`),
+    'popup.html #popup-version must be synced with version_name and build tooltip'
+  );
 
   // Lock canonical SaveShot icons and verified store assets by SHA-256 so they are never regenerated or altered by mistake
   const { createHash } = await import('node:crypto');
@@ -6615,6 +6668,7 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
     sanitizeApiErrorBody,
     VALID_MODES,
     validateItemId,
+    validateManifestForCwsUpload,
     validatePublisherId,
   } = await import('../scripts/publish-cws.mjs');
   const { buildCwsZipBuffer } = await import('../scripts/pack-cws.mjs');
@@ -6640,6 +6694,39 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
   assert.equal(compareVersions('1.2.1', '1.3.0'), -1);
   assert.throws(() => compareVersions('1.3.0-rc1', '1.2.1'), /Invalid dotted numeric version/);
 
+  // Strict manifest.version_name validation (type, trimming, length <= 64, printable ASCII)
+  assert.deepEqual(
+    validateManifestForCwsUpload({ version: '1.3.0', version_name: '1.3.0 (b1)' }),
+    { version: '1.3.0', versionName: '1.3.0 (b1)' }
+  );
+  assert.deepEqual(
+    validateManifestForCwsUpload({ version: '1.3.0' }),
+    { version: '1.3.0', versionName: '1.3.0' }
+  );
+  for (const badVersionName of [null, 123, true, {}, '', '   ', ' 1.3.0 (b1)', '1.3.0 (b1)\n', 'a'.repeat(65), '1.3.0 \u2014 b1']) {
+    assert.throws(
+      () => validateManifestForCwsUpload({ version: '1.3.0', version_name: badVersionName }),
+      /version_name/,
+      `Must reject invalid manifest.version_name: ${JSON.stringify(badVersionName)}`
+    );
+  }
+
+  // Adversarial Markdown summary escaping: backticks, newlines, and whitespace-only fallbacks
+  const advSummary = formatStepSummary({
+    mode: 'status',
+    itemId: ITEM_ID,
+    version: '1.3.0',
+    versionName: '1.3.0 (`b1`)\nINJECT',
+    publishedVersion: '1.2.1',
+    publishedState: '   ',
+    warnings: [{ reason: '   ', description: 'ok' }],
+    dashboardUrl: 'https://chrome.google.com/webstore/devconsole',
+  });
+  assert.equal(advSummary.includes('``'), false, 'Step summary must never emit empty code spans');
+  assert.ok(advSummary.includes("`v1.3.0 ('b1') INJECT`"));
+  assert.ok(advSummary.includes('(`UNKNOWN`)'));
+  assert.ok(advSummary.includes('- `WARNING`: ok'));
+
   const redacted = sanitizeApiErrorBody(
     'Err {"access_token":"ya29.sec\\"ret","private_key":"k"} assertion=eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig123456789 GOCSPX-abc123 1//refreshtok Bearer ya29.abc123 -----BEGIN PRIVATE KEY-----\ntruncated'
   );
@@ -6654,6 +6741,7 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
   const builtZip = buildCwsZipBuffer(rootDir);
   const extractedManifest = extractManifestFromZipBuffer(builtZip.buffer);
   assert.equal(extractedManifest.version, builtZip.version);
+  assert.equal(extractedManifest.version_name, builtZip.versionName);
   assert.equal('key' in extractedManifest, false);
 
   // 2. Real RSA-2048 Service Account JWT signing + kid header + cryptographic verification + SSRF guard
@@ -6905,6 +6993,7 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
     assert.equal(draftRes.published, false);
     assert.equal(draftRes.uploadState, 'SUCCEEDED');
     assert.equal(draftRes.version, builtZip.version);
+    assert.equal(draftRes.versionName, builtZip.versionName);
     assert.deepEqual(callSequence, [
       `GET /v2/publishers/${PUB_ID}/items/${ITEM_ID}:fetchStatus`,
       `POST /v2/publishers/${PUB_ID}/items/${ITEM_ID}:cancelSubmission`,
@@ -6971,8 +7060,13 @@ test('Chrome Web Store API V2 publisher (Service Account RS256 JWT, SSRF/path va
   });
   assert.equal(pubRes.published, true);
   assert.equal(pubRes.publishState, 'PENDING_REVIEW');
+  assert.equal(pubRes.versionName, builtZip.versionName);
   const summaryMd = formatStepSummary(pubRes);
   assert.match(summaryMd, /Chrome Web Store API V2 \(staged\)/);
+  assert.ok(
+    summaryMd.includes(`\`v${builtZip.versionName}\``),
+    'Step summary must render backticked versionName without escaping parentheses'
+  );
   assert.equal(summaryMd.includes('<script>'), false, 'Step summary must escape raw HTML tags');
 
   // 7. CLI parser & GitHub Actions workflow security hygiene (per-run-block secret check, pinned SHAs, persist-credentials: false)
@@ -7058,11 +7152,14 @@ test('local unpacked dev build (build-dev.mjs) injects SAVESHOT_DEV_KEY into dis
 
     // Builds full unpacked copy with injected key while tracked manifest.json stays untouched
     const trackedBefore = fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8');
+    const trackedParsed = JSON.parse(trackedBefore);
     const built = buildDevUnpacked({ baseDir: rootDir, outDir: tmpOut, key: sampleB64 });
     assert.equal(built.fileCount, EXTENSION_FILES.length);
     assert.equal(built.hasKey, true);
+    assert.equal(built.versionName, trackedParsed.version_name);
     const devManifest = JSON.parse(fs.readFileSync(path.join(tmpOut, 'manifest.json'), 'utf8'));
     assert.equal(devManifest.key, sampleB64);
+    assert.equal(devManifest.version_name, trackedParsed.version_name);
     assert.equal(fs.readFileSync(path.join(rootDir, 'manifest.json'), 'utf8'), trackedBefore);
     assert.equal(fs.existsSync(path.join(tmpOut, 'background/service-worker.js')), true);
   } finally {

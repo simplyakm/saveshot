@@ -99,6 +99,7 @@ export function buildDevUnpacked({
   return {
     outDir: resolvedOut,
     version: String(devManifest.version || ''),
+    versionName: String(devManifest.version_name || devManifest.version || ''),
     fileCount: EXTENSION_FILES.length,
     hasKey: Boolean(normalizedKey),
   };
@@ -108,7 +109,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const res = buildDevUnpacked();
     console.log(
-      `Built unpacked dev extension v${res.version} (${res.fileCount} files) at ${path.relative(rootDir, res.outDir) || res.outDir}`
+      `Built unpacked dev extension v${res.versionName} (${res.fileCount} files) at ${path.relative(rootDir, res.outDir) || res.outDir}`
     );
     if (res.hasKey) {
       console.log('Injected SAVESHOT_DEV_KEY into dist-dev/manifest.json (tracked manifest.json untouched).');

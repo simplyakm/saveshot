@@ -655,32 +655,58 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     }
     const welcomeCheck = await evalIn(
       welcomeSession,
-      `(() => ({
-        title: document.querySelector('h1')?.textContent,
-        subtitle: document.querySelector('.hero .subtitle')?.textContent?.trim() || '',
-        pinNudgeVisible: !document.getElementById('pin-nudge-card')?.hidden,
-        pinDoneHidden: Boolean(document.getElementById('pin-done-card')?.hidden),
-        statusUnconnected: document.getElementById('status-card')?.classList.contains('unconnected'),
-        statusBg: getComputedStyle(document.getElementById('status-card')).backgroundColor,
-        accountHeading: document.getElementById('account-heading')?.textContent?.trim() || '',
-        stepTitles: Array.from(document.querySelectorAll('.step-card h3'), (el) => el.textContent.trim()),
-        shortcutRegionText: document.getElementById('shortcut-region')?.textContent?.trim() || '',
-        shortcutVisibleText: document.getElementById('shortcut-visible')?.textContent?.trim() || '',
-        unsetHintHidden: document.getElementById('shortcut-unset-hint')?.hidden,
-        faqCount: document.querySelectorAll('#faq-list .faq-item').length,
-        hasFeedbackSection: Boolean(document.getElementById('feedback')),
-        versionStripText: document.getElementById('version-info-text')?.textContent?.trim() || '',
-        cwsHref: document.getElementById('cws-support-link')?.href || '',
-        hasRepoIssuesLink: Boolean(document.getElementById('repo-issues-link')),
-        feedbackActionCount: document.querySelectorAll('#feedback .feedback-actions a').length,
-        hasGithubAnywhere: document.documentElement.outerHTML.toLowerCase().includes('github.com'),
-        footerLeft: document.getElementById('welcome-footer-left')?.textContent?.trim() || '',
-        footerLinksCount: document.querySelectorAll('.welcome-footer-links a').length,
-      }))()`
+      `(() => {
+        const extVerEl = document.getElementById('ext-version');
+        const versionStripEl = document.querySelector('.version-strip');
+        return {
+          title: document.querySelector('h1')?.textContent,
+          subtitle: document.querySelector('.hero .subtitle')?.textContent?.trim() || '',
+          extVersionText: extVerEl?.textContent?.trim() || '',
+          extVersionTitle: extVerEl?.title || '',
+          extVersionHeight: Math.round(extVerEl?.getBoundingClientRect().height || 0),
+          versionStripHeight: Math.round(versionStripEl?.getBoundingClientRect().height || 0),
+          versionStripOverflow: Boolean(
+            versionStripEl && versionStripEl.scrollWidth > versionStripEl.clientWidth + 1
+          ),
+          pinNudgeVisible: !document.getElementById('pin-nudge-card')?.hidden,
+          pinDoneHidden: Boolean(document.getElementById('pin-done-card')?.hidden),
+          statusUnconnected: document.getElementById('status-card')?.classList.contains('unconnected'),
+          statusBg: getComputedStyle(document.getElementById('status-card')).backgroundColor,
+          accountHeading: document.getElementById('account-heading')?.textContent?.trim() || '',
+          stepTitles: Array.from(document.querySelectorAll('.step-card h3'), (el) => el.textContent.trim()),
+          shortcutRegionText: document.getElementById('shortcut-region')?.textContent?.trim() || '',
+          shortcutVisibleText: document.getElementById('shortcut-visible')?.textContent?.trim() || '',
+          unsetHintHidden: document.getElementById('shortcut-unset-hint')?.hidden,
+          faqCount: document.querySelectorAll('#faq-list .faq-item').length,
+          hasFeedbackSection: Boolean(document.getElementById('feedback')),
+          versionStripText: document.getElementById('version-info-text')?.textContent?.trim() || '',
+          cwsHref: document.getElementById('cws-support-link')?.href || '',
+          hasRepoIssuesLink: Boolean(document.getElementById('repo-issues-link')),
+          feedbackActionCount: document.querySelectorAll('#feedback .feedback-actions a').length,
+          hasGithubAnywhere: document.documentElement.outerHTML.toLowerCase().includes('github.com'),
+          footerLeft: document.getElementById('welcome-footer-left')?.textContent?.trim() || '',
+          footerLinksCount: document.querySelectorAll('.welcome-footer-links a').length,
+        };
+      })()`
     );
     assert.equal(welcomeCheck.title, 'SaveShot');
     assert.match(welcomeCheck.subtitle, /download locally/i);
     assert.match(welcomeCheck.subtitle, /no external servers or tracking/i);
+    assert.match(welcomeCheck.extVersionText, /^v1\.3\.0 \(b\d+\)$/);
+    assert.match(welcomeCheck.extVersionTitle, /^SaveShot v1\.3\.0 \u00b7 Build \d+$/);
+    assert.ok(
+      welcomeCheck.extVersionHeight > 0 && welcomeCheck.extVersionHeight <= 24,
+      `Welcome #ext-version badge must stay single-line (got ${welcomeCheck.extVersionHeight}px)`
+    );
+    assert.equal(
+      welcomeCheck.versionStripOverflow,
+      false,
+      'Welcome .version-strip must not overflow horizontally'
+    );
+    assert.ok(
+      welcomeCheck.versionStripHeight > 0 && welcomeCheck.versionStripHeight <= 76,
+      `Welcome .version-strip must remain compact (got ${welcomeCheck.versionStripHeight}px)`
+    );
     assert.equal(welcomeCheck.pinNudgeVisible, true, 'Fresh unpinned install must show Pin SaveShot card');
     assert.equal(welcomeCheck.pinDoneHidden, true, 'Pin celebration card must be hidden while unpinned');
     assert.equal(welcomeCheck.statusUnconnected, true, 'Signed-out Welcome status card must have .unconnected');
@@ -700,7 +726,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.equal(welcomeCheck.hasFeedbackSection, true);
     assert.match(
       welcomeCheck.versionStripText,
-      /^SaveShot v1\.3\.0 \u00b7 Chrome .* \u00b7 Last error: None$/
+      /^SaveShot v1\.3\.0 \(b\d+\) \u00b7 Chrome .* \u00b7 Last error: None$/
     );
     assert.equal(
       welcomeCheck.cwsHref,
@@ -748,7 +774,7 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       })()`
     );
     assert.equal(livePinAndCopyCheck.btnLabelAfterCopy, 'Copied!');
-    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.3\.0 \u00b7 Chrome .* \u00b7 Last error: None$/);
+    assert.match(livePinAndCopyCheck.copiedText, /^SaveShot v1\.3\.0 \(b\d+\) \u00b7 Chrome .* \u00b7 Last error: None$/);
     assert.equal(livePinAndCopyCheck.pinNudgeHiddenAfterPin, true, 'Pin nudge must hide once pinned');
     assert.equal(livePinAndCopyCheck.pinDoneVisibleAfterPin, true, 'Pin celebration must appear when pinned live');
     assert.match(livePinAndCopyCheck.pinDoneText, /Pinned to your Chrome toolbar!/);
@@ -1406,7 +1432,10 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       `(async () => {
         const saveBtn = document.getElementById('save-drive-btn');
         const unsavedPill = document.getElementById('unsaved-pill');
-        const brandText = document.getElementById('editor-brand')?.textContent?.replace(/\\s+/g, ' ')?.trim() || '';
+        const brandEl = document.getElementById('editor-brand');
+        const brandText = brandEl?.textContent?.replace(/\\s+/g, ' ')?.trim() || '';
+        const brandTitle = brandEl?.title || '';
+        const helpBtnTitle = document.getElementById('editor-help-btn')?.title || '';
         const initialSaveDisabled = saveBtn.disabled;
         const initialUnsavedHidden = unsavedPill.hidden;
         const initialSaveLabel = saveBtn.textContent.trim();
@@ -1469,6 +1498,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
         }
         return {
           brandText,
+          brandTitle,
+          helpBtnTitle,
           initialSaveDisabled,
           initialUnsavedHidden,
           initialSaveLabel,
@@ -1484,6 +1515,8 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
       })()`
     );
     assert.equal(redactCheck.brandText, 'SaveShot / Editor');
+    assert.match(redactCheck.brandTitle, /^SaveShot v1\.3\.0 \u00b7 Build \d+$/);
+    assert.match(redactCheck.helpBtnTitle, /^Help and shortcuts \(SaveShot v1\.3\.0 \u00b7 Build \d+\)$/);
     assert.equal(redactCheck.initialSaveDisabled, true, 'Save must be disabled before any edits on existing file');
     assert.equal(redactCheck.initialUnsavedHidden, true, 'Unsaved notification must be hidden initially');
     assert.equal(redactCheck.initialSaveLabel, 'Save');
@@ -2056,7 +2089,9 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
 
         const footer = document.querySelector('.popup-footer');
         const footerRect = footer.getBoundingClientRect();
-        const verRect = document.getElementById('popup-version').getBoundingClientRect();
+        const footerLeftRect = document.querySelector('.footer-left').getBoundingClientRect();
+        const verEl = document.getElementById('popup-version');
+        const verRect = verEl.getBoundingClientRect();
         const bugRect = document.getElementById('footer-bug-btn').getBoundingClientRect();
         const authorEl = document.getElementById('footer-author-link');
         const authorRect = authorEl.getBoundingClientRect();
@@ -2079,7 +2114,11 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
           tileTopDiff: Math.abs(regionTile.top - visibleTile.top),
           tileHeightDiff: Math.abs(regionTile.height - visibleTile.height),
           footerHeight: Math.round(footerRect.height),
-          versionText: document.getElementById('popup-version').textContent.trim(),
+          versionText: verEl.textContent.trim(),
+          versionTitle: verEl.title || '',
+          versionHeight: Math.round(verRect.height),
+          versionClipped: verEl.scrollWidth > verEl.clientWidth + 1,
+          footerCenterGap: Math.round(authorRect.left - footerLeftRect.right),
           versionBeforeBug: verRect.right < bugRect.left,
           authorLeftOfRightEdge: Math.round(footerRect.right - authorRect.right),
           authorText: authorEl.textContent.trim(),
@@ -2109,7 +2148,17 @@ test('E2E Chromium battle-test: zoom (50%-300%), pinch-zoom, hostile DOM/CSS/mod
     assert.ok(popupPixelAudit.tileTopDiff <= 0.5, 'Capture tiles must align horizontally');
     assert.ok(popupPixelAudit.tileHeightDiff <= 0.5, 'Capture tiles must have identical height');
     assert.equal(popupPixelAudit.footerHeight, 25, 'Slim split footer must be 25px tall');
-    assert.match(popupPixelAudit.versionText, /^v\d+\.\d+\.\d+$/);
+    assert.match(popupPixelAudit.versionText, /^v\d+\.\d+\.\d+ \(b\d+\)$/);
+    assert.match(popupPixelAudit.versionTitle, /^SaveShot v\d+\.\d+\.\d+ \u00b7 Build \d+$/);
+    assert.ok(
+      popupPixelAudit.versionHeight > 0 && popupPixelAudit.versionHeight <= 16,
+      `Popup #popup-version must stay single-line (got ${popupPixelAudit.versionHeight}px)`
+    );
+    assert.equal(popupPixelAudit.versionClipped, false, 'Popup #popup-version must not clip horizontally');
+    assert.ok(
+      popupPixelAudit.footerCenterGap >= 20,
+      `Popup footer must keep generous center gap between left links and author link (got ${popupPixelAudit.footerCenterGap}px)`
+    );
     assert.equal(popupPixelAudit.versionBeforeBug, true, 'Version must appear before Report bug');
     assert.equal(popupPixelAudit.authorText, '@_simplyakm');
     assert.equal(popupPixelAudit.authorHref, 'https://x.com/_simplyakm');

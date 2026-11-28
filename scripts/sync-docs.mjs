@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SITE_COPY } from '../content-source/site-copy.mjs';
+import {
+  formatVersionName,
+  formatVersionTooltip,
+  SITE_COPY,
+} from '../content-source/site-copy.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -962,37 +966,42 @@ export function syncWelcomeHtmlLinks(welcomeHtml, copy = SITE_COPY) {
     ['welcome-author-link', copy.urls.authorUrl],
   ]);
 
+  const displayVersion = formatVersionName(copy.version, copy.buildNumber);
+  const versionTooltip = formatVersionTooltip(copy.brandName, copy.version, copy.buildNumber);
+
   updated = updated.replace(
-    /(<span class="ss-kbd" id="ext-version">)[\s\S]*?(<\/span>)/,
-    `$1v${escapeHtml(copy.version)}$2`
+    /(<span class="ss-kbd" id="ext-version")(?:\s+title="[^"]*")?(>)[\s\S]*?(<\/span>)/,
+    (_, open, gt, close) => `${open} title="${escapeHtml(versionTooltip)}"${gt}v${escapeHtml(displayVersion)}${close}`
   );
 
   updated = updated.replace(
     /(<span class="version-info-text" id="version-info-text">)[\s\S]*?(<\/span>)/,
-    `$1${escapeHtml(copy.brandName)} v${escapeHtml(copy.version)}$2`
+    (_, open, close) => `${open}${escapeHtml(copy.brandName)} v${escapeHtml(displayVersion)}${close}`
   );
 
   updated = updated.replace(
     /(<span id="welcome-footer-left">)[\s\S]*?(<\/span>)/,
-    `$1${escapeHtml(copy.footerLeft)}$2`
+    (_, open, close) => `${open}${escapeHtml(copy.footerLeft)}${close}`
   );
 
   updated = updated.replace(
     /(<div class="welcome-card faq-list" id="faq-list">)[\s\S]*?(\n        <\/div>\n      <\/section>)/,
-    `$1\n${renderWelcomeFaqItemsHtml(copy)}$2`
+    (_, open, close) => `${open}\n${renderWelcomeFaqItemsHtml(copy)}${close}`
   );
 
   return updated;
 }
 
 export function syncPopupHtmlLinks(popupHtml, copy = SITE_COPY) {
+  const displayVersion = formatVersionName(copy.version, copy.buildNumber);
+  const versionTooltip = formatVersionTooltip(copy.brandName, copy.version, copy.buildNumber);
   const updated = syncAnchorHrefs(popupHtml, [
     ['footer-thanks-link', copy.urls.thanksHtml],
     ['footer-author-link', copy.urls.authorUrl],
   ]);
   return updated.replace(
-    /(<span class="tabular" id="popup-version">)[\s\S]*?(<\/span>)/,
-    `$1v${escapeHtml(copy.version)}$2`
+    /(<span class="tabular" id="popup-version")(?:\s+title="[^"]*")?(>)[\s\S]*?(<\/span>)/,
+    (_, open, gt, close) => `${open} title="${escapeHtml(versionTooltip)}"${gt}v${escapeHtml(displayVersion)}${close}`
   );
 }
 
@@ -1111,12 +1120,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   );
 
   // Also sync manifest.json and package.json shared metadata
+  if (!Number.isInteger(SITE_COPY.buildNumber) || SITE_COPY.buildNumber < 1) {
+    throw new Error(`SITE_COPY.buildNumber must be a positive integer (got ${SITE_COPY.buildNumber})`);
+  }
+  const displayVersion = formatVersionName(SITE_COPY.version, SITE_COPY.buildNumber);
   const manifestPath = path.join(rootDir, 'manifest.json');
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const manifest = {};
+  for (const [key, value] of Object.entries(rawManifest)) {
+    if (key === 'version_name' || key === 'homepage_url') continue;
+    manifest[key] = value;
+    if (key === 'version') {
+      manifest.version = SITE_COPY.version;
+      manifest.version_name = displayVersion;
+    }
+  }
   manifest.name = SITE_COPY.extensionTitle;
   manifest.short_name = SITE_COPY.brandName;
   manifest.version = SITE_COPY.version;
-  delete manifest.homepage_url;
+  manifest.version_name = displayVersion;
   manifest.description = SITE_COPY.shortDescription;
   manifest.action.default_title = SITE_COPY.extensionTitle;
   manifest.commands['capture-region'].suggested_key.default = SITE_COPY.shortcuts.region.key;
@@ -1133,5 +1155,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   pkg.description = SITE_COPY.shortDescription;
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
 
-  console.log(`Synced ${Object.keys(generated).length} documentation/web files + welcome.html, manifest.json & package.json from content-source/site-copy.mjs`);
+  console.log(`Synced ${Object.keys(generated).length} documentation/web files + welcome.html, popup.html, manifest.json & package.json from content-source/site-copy.mjs`);
 }

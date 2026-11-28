@@ -5,10 +5,28 @@
  * After editing this file, run:
  *   npm run sync:docs
  */
+export function formatVersionName(version, buildNumber) {
+  const cleanVer = String(version || '').trim();
+  if (typeof buildNumber === 'number' && Number.isSafeInteger(buildNumber) && buildNumber >= 1) {
+    return `${cleanVer} (b${buildNumber})`;
+  }
+  return cleanVer;
+}
+
+export function formatVersionTooltip(brandName, version, buildNumber) {
+  const cleanBrand = String(brandName || 'SaveShot').trim();
+  const cleanVer = String(version || '').trim();
+  if (typeof buildNumber === 'number' && Number.isSafeInteger(buildNumber) && buildNumber >= 1) {
+    return `${cleanBrand} v${cleanVer} \u00b7 Build ${buildNumber}`;
+  }
+  return `${cleanBrand} v${cleanVer}`;
+}
+
 export const SITE_COPY = {
   brandName: 'SaveShot',
   extensionTitle: 'SaveShot: Screenshot to Google Drive',
   version: '1.3.0',
+  buildNumber: 1,
   lastUpdated: 'November 26, 2026',
 
   // Must stay <= 132 characters for Chrome Web Store manifest.json validation
